@@ -169,7 +169,9 @@ class Orchestrator:
                 imp = self._improvement(headline)
                 run.baseline_delta = imp
                 thresh = max(1e-4, abs(self.baseline or 1) * 0.02)
-                if imp > thresh:
+                if headline > max(50.0, (self.baseline or 1.0) * 5):
+                    idea.status, run.status = "failed", "crashed"
+                elif imp > thresh:
                     idea.status, run.status = "success", "kept"
                 elif imp < -thresh:
                     idea.status, run.status = "failed", "discarded"
@@ -229,17 +231,17 @@ class Orchestrator:
     # ── the loop ───────────────────────────────────────────────────────────
     async def run(self) -> None:
         self.running = True
-        self.bootstrap()
+        ordered = self.bootstrap()          # ideas in ideas.md (exploration) order
         db = SessionLocal()
         proj = db.query(Project).filter(Project.id == self.project_id).first()
         proj.status = "running"
-        ideas = db.query(Idea).filter(
-            Idea.project_id == self.project_id).all()
-        baseline_id = next((i.id for i in ideas if i.idea_id == "baseline"),
-                           None)
-        rest = sorted([i for i in ideas if i.idea_id != "baseline"],
-                      key=lambda i: -i.ev)
-        rest_ids = [i.id for i in rest]
+        rows = {i.idea_id: i.id for i in db.query(Idea).filter(
+            Idea.project_id == self.project_id).all()}
+        baseline_id = rows.get("baseline")
+        # run in the agent's exploration order so the progress curve is
+        # gradual and readable (x = experiment number)
+        rest_ids = [rows[o["idea_id"]] for o in ordered
+                    if o["idea_id"] != "baseline" and o["idea_id"] in rows]
         db.commit()
         db.close()
 
@@ -296,16 +298,28 @@ class Orchestrator:
         self.running = False
 
 
-# module-level handle so the API can start/inspect one orchestrator
+# module-level handle so the API can start/inspect/stop one orchestrator
 _active: Orchestrator | None = None
+_task = None
 
 
 def start(project_dir: str, **kw) -> Orchestrator:
-    global _active
+    global _active, _task
     _active = Orchestrator(project_dir, **kw)
-    asyncio.create_task(_active.run())
+    _task = asyncio.create_task(_active.run())
     return _active
 
 
 def active() -> Orchestrator | None:
     return _active
+
+
+def stop() -> None:
+    """Cancel any in-flight research loop (used by /api/reset)."""
+    global _active, _task
+    if _task is not None and not _task.done():
+        _task.cancel()
+    _task = None
+    if _active is not None:
+        _active.running = False
+    _active = None

@@ -166,7 +166,8 @@ def seed_all() -> None:
                 headline_metric=acc if status != "running" else None,
                 baseline_delta=delta if status != "running" else None,
                 peak_vram_mb=vram,
-                started_at=_iso(age - 0.1),
+                started_at=(_iso(0.03 + 0.012 * n) if status == "running"
+                            else _iso(age - 0.1)),
                 ended_at=_iso(age - 0.35) if status != "running" else "",
                 created_at=_iso(age)))
             if status == "running":

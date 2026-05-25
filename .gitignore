@@ -22,3 +22,9 @@ frontend/.vite/
 *.swp
 .idea/
 .vscode/
+
+# never commit ssh keys / local deploy secrets
+*id_ed25519*
+*.pem
+.deploy/
+onboarding.env

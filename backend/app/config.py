@@ -19,9 +19,10 @@ ARTIFACTS_DIR = DATA_DIR / "artifacts"
 HOST = os.environ.get("ARUI_HOST", "0.0.0.0")
 PORT = int(os.environ.get("ARUI_PORT", "8000"))
 
-# Scaffold demo mode: seed realistic data and run the live simulator so the
-# dashboard is populated and animated before the research engine exists.
-DEMO_MODE = os.environ.get("ARUI_DEMO", "1") == "1"
+# Auto-run the bundled example project on startup. Default OFF — a fresh
+# instance shows the onboarding screen until the user completes it. The e2e
+# integration test sets ARUI_AUTORUN=1 to run headlessly.
+AUTORUN = os.environ.get("ARUI_AUTORUN", "0") == "1"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)

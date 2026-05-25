@@ -26,6 +26,7 @@ import atexit
 import json
 import os
 import queue
+import sys
 import threading
 import time
 import urllib.request
@@ -39,6 +40,37 @@ _BATCH_MAX = 200            # points
 
 summary: dict = {}          # wandb-compatible summary dict
 _active: "Run | None" = None
+_orig_stdout = None         # set while a run is capturing console output
+_orig_stderr = None
+
+
+class _Tee:
+    """Wrap a stream so every write is mirrored to a sink — used to capture
+    the training script's console output for the dashboard's run logs."""
+
+    def __init__(self, orig, sink):
+        self._orig = orig
+        self._sink = sink
+
+    def write(self, s):
+        try:
+            self._orig.write(s)
+        except Exception:
+            pass
+        try:
+            self._sink(s)
+        except Exception:
+            pass
+        return len(s) if s else 0
+
+    def flush(self):
+        try:
+            self._orig.flush()
+        except Exception:
+            pass
+
+    def __getattr__(self, name):
+        return getattr(self._orig, name)
 
 
 def _post(path: str, payload: dict) -> dict:
@@ -64,6 +96,8 @@ class Run:
         self.id = run_id
         self._q: "queue.Queue" = queue.Queue()
         self._stop = threading.Event()
+        self._logbuf: list = []
+        self._loglock = threading.Lock()
         self._t = threading.Thread(target=self._worker, daemon=True)
         self._t.start()
 
@@ -76,10 +110,31 @@ class Run:
             except Exception:
                 pass
 
+    def add_log(self, s: str) -> None:
+        """Buffer a chunk of console output to ship to the backend."""
+        if not s:
+            return
+        with self._loglock:
+            self._logbuf.append(s)
+            if len(self._logbuf) > 6000:          # cap a runaway log
+                self._logbuf = self._logbuf[-3000:]
+
+    def _flush_logs(self) -> None:
+        with self._loglock:
+            if not self._logbuf:
+                return
+            text = "".join(self._logbuf)
+            self._logbuf = []
+        try:
+            _post("/api/track/logs", {"run_id": self.id, "text": text})
+        except Exception:
+            pass
+
     def _worker(self) -> None:
         buf: list = []
-        last = time.time()
-        while not self._stop.is_set() or not self._q.empty() or buf:
+        last = last_log = time.time()
+        while (not self._stop.is_set() or not self._q.empty() or buf
+               or self._logbuf):
             try:
                 buf.append(self._q.get(timeout=_FLUSH_EVERY))
             except queue.Empty:
@@ -88,6 +143,9 @@ class Run:
                         or time.time() - last >= _FLUSH_EVERY):
                 self._send(buf)
                 buf, last = [], time.time()
+            if time.time() - last_log >= 1.5:
+                self._flush_logs()
+                last_log = time.time()
 
     def _send(self, points: list) -> None:
         try:
@@ -103,8 +161,16 @@ class Run:
             pass
 
     def finish(self) -> None:
+        global _orig_stdout, _orig_stderr
+        if _orig_stdout is not None:                # stop capturing console
+            sys.stdout = _orig_stdout
+        if _orig_stderr is not None:
+            sys.stderr = _orig_stderr
+        _orig_stdout = _orig_stderr = None
+        self._flush_logs()
         self._stop.set()
-        self._t.join(timeout=5)
+        self._t.join(timeout=6)
+        self._flush_logs()
         try:
             _post("/api/track/finish",
                   {"run_id": self.id, "summary": dict(summary)})
@@ -127,6 +193,12 @@ def init(project: str | None = None, name: str | None = None,
     except Exception:
         pass
     _active = Run(project, name, config, run_id)
+    # capture the training script's console output for the dashboard's logs
+    global _orig_stdout, _orig_stderr
+    if _orig_stdout is None:
+        _orig_stdout, _orig_stderr = sys.stdout, sys.stderr
+        sys.stdout = _Tee(_orig_stdout, _active.add_log)
+        sys.stderr = _Tee(_orig_stderr, _active.add_log)
     atexit.register(lambda: _active and _active.finish())
     return _active
 

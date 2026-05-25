@@ -133,3 +133,14 @@ class JournalEntry(Base):
 
     def dict(self) -> dict:
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
+
+class Setting(Base):
+    """Key/value store for non-secret runtime config, incl. the onboarding form."""
+    __tablename__ = "setting"
+    key = Column(String, primary_key=True)
+    value = Column(JSON, default=dict)
+    updated_at = Column(String, default=lambda: _now().isoformat())
+
+    def dict(self) -> dict:
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}

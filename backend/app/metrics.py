@@ -7,6 +7,7 @@ a single DuckDB file is used - the data flow and query API are identical.
 """
 from __future__ import annotations
 
+import shutil
 import threading
 
 import duckdb
@@ -86,6 +87,47 @@ def latest(run_id: str, key: str) -> float | None:
     return float(row[0]) if row else None
 
 
+def all_keys() -> list[str]:
+    """Every distinct metric key across all runs (drives the Analysis view)."""
+    with _lock:
+        rows = _con.execute(
+            "SELECT DISTINCT key FROM metrics ORDER BY key").fetchall()
+    return [r[0] for r in rows]
+
+
+def last_activity(run_id: str) -> float | None:
+    """Wall-clock (epoch) time of the most recent metric point for a run, or
+    None if it has logged nothing. Used to tell a live run from a dead one."""
+    with _lock:
+        row = _con.execute(
+            "SELECT max(wall_time) FROM metrics WHERE run_id=?",
+            [run_id]).fetchone()
+    return float(row[0]) if row and row[0] else None
+
+
 def reset() -> None:
     with _lock:
         _con.execute("DELETE FROM metrics")
+
+
+def snapshot(dest: str) -> None:
+    """Write a consistent copy of the metric DB to dest (used by Archive)."""
+    with _lock:
+        try:
+            _con.execute("CHECKPOINT")
+        except Exception:
+            pass
+        shutil.copy(str(METRICS_DB), dest)
+
+
+def swap(new_db_path: str) -> None:
+    """Replace the live metric DB with new_db_path and reconnect. Used by
+    Restore; lock-held so in-flight queries resume on the new connection."""
+    global _con
+    with _lock:
+        try:
+            _con.close()
+        except Exception:
+            pass
+        shutil.copy(new_db_path, str(METRICS_DB))
+        _con = duckdb.connect(str(METRICS_DB))

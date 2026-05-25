@@ -14,6 +14,8 @@ be exercised without an LLM or GPUs:
 from __future__ import annotations
 
 import os
+import shlex
+import subprocess
 
 from . import repo
 
@@ -54,29 +56,80 @@ class FakeAgent:
 
 
 class RealAgent:
-    """Drives the real Claude Code CLI (docs 04–05). Not exercised by the e2e
-    test. Implementing these methods is the M3 real-mode milestone:
+    """Launches an autonomous research agent in a tmux session and lets it run
+    its own research loop (docs 04 §4.6, doc 05).
 
-      bootstrap() — launch `claude --dangerously-skip-permissions` in a tmux
-        session, feed it prompts/setup_prompt.md.j2, and let it create the
-        GitHub repo and write program.md / train.py / prepare.py / ideas.md.
-      implement(idea) — instruct the agent to edit train.py for the idea and
-        commit; return the resulting config.
+    In production the agent is the real Claude Code CLI
+    (`claude --dangerously-skip-permissions`), fed the setup prompt; for the
+    e2e test it is a deterministic mock agent. Either way the agent's
+    experiments log through the arui SDK, and that is what populates the
+    dashboard — so the same launch path serves both.
     """
 
-    def __init__(self, project_dir: str, tmux_session: str = "agent"):
-        self.project_dir = project_dir
-        self.tmux_session = tmux_session
+    def __init__(self, workspace: str, project_name: str, ingest_url: str,
+                 repo_root: str, agent_cmd: list[str] | None = None,
+                 anthropic_key: str = "", setup_prompt: str = "",
+                 session: str = "agent"):
+        self.workspace = os.path.abspath(workspace)
+        self.project_name = project_name
+        self.ingest_url = ingest_url
+        self.repo_root = repo_root
+        self.agent_cmd = agent_cmd       # set -> custom/mock agent; None -> real claude
+        self.anthropic_key = anthropic_key
+        self.setup_prompt = setup_prompt
+        self.session = session
 
-    def bootstrap(self) -> list[dict]:
-        raise NotImplementedError(
-            "RealAgent.bootstrap is the M3 milestone — see "
-            "docs/04-onboarding-and-agent-bootstrap.md §4.6.")
+    def start(self) -> str:
+        """Prepare the workspace and launch the agent in a tmux session.
 
-    def implement(self, idea: dict) -> dict:
-        raise NotImplementedError(
-            "RealAgent.implement is the M3 milestone — see "
-            "docs/05-autoresearch-engine.md §5.2.")
+        The agent runs live IN the pane (no stdout redirect) so the dashboard's
+        Live tab can follow the session and the user can type into it. The real
+        agent is launched interactively (not `-p`) so it stays attachable and
+        chattable; the setup prompt is handed to it once it has booted.
+        """
+        os.makedirs(self.workspace, exist_ok=True)
+        env = {
+            "ARUI_INGEST_URL": self.ingest_url,
+            "ARUI_PROJECT": self.project_name,
+            "ARUI_REPO": self.repo_root,
+            "PYTHONPATH": self.repo_root,
+            # rented GPU containers run as root; this lets Claude Code accept
+            # --dangerously-skip-permissions in that sandboxed environment.
+            "IS_SANDBOX": "1",
+        }
+        if self.anthropic_key:
+            env["ANTHROPIC_API_KEY"] = self.anthropic_key
+        exports = " ".join(f"{k}={shlex.quote(v)}" for k, v in env.items())
+        log = os.path.join(self.workspace, "agent.log")
 
-    def analyze(self, idea: dict, result: dict) -> str:
-        return ""
+        if self.agent_cmd:                       # mock / custom agent
+            inner = " ".join(shlex.quote(c) for c in self.agent_cmd)
+        else:                                    # real Claude Code — interactive
+            pf = os.path.join(self.workspace, "_setup_prompt.txt")
+            with open(pf, "w") as f:
+                f.write(self.setup_prompt)
+            inner = "claude --dangerously-skip-permissions"
+
+        full = f"cd {shlex.quote(self.workspace)} && {exports} {inner}"
+        subprocess.run(["tmux", "kill-session", "-t", self.session],
+                       capture_output=True)
+        subprocess.run(["tmux", "new-session", "-d", "-s", self.session,
+                        "-x", "210", "-y", "52", full], check=True)
+        # mirror the live pane into agent.log for a persistent record
+        subprocess.run(["tmux", "pipe-pane", "-t", self.session, "-o",
+                        f"cat >> {shlex.quote(log)}"], capture_output=True)
+        # once Claude Code has booted, hand it the research brief
+        if not self.agent_cmd:
+            msg = ("Read the file _setup_prompt.txt in this directory and "
+                   "carry out the research it describes. Do not stop.")
+            subprocess.Popen(
+                ["sh", "-c",
+                 f"sleep 9 && tmux send-keys -t {shlex.quote(self.session)} "
+                 f"-l {shlex.quote(msg)} && sleep 1 && "
+                 f"tmux send-keys -t {shlex.quote(self.session)} Enter"])
+        return self.session
+
+    def alive(self) -> bool:
+        return subprocess.run(
+            ["tmux", "has-session", "-t", self.session],
+            capture_output=True).returncode == 0

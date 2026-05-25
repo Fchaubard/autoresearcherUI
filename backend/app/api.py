@@ -3,17 +3,25 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import glob
+import math
+import os
 import random
+import re
+import subprocess
+import threading
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from . import metrics, orchestrator
+from . import (archive, authkeys, metrics, monitor, notify, orchestrator,
+               realrun)
 from .bus import bus
-from .config import ROOT
-from .db import SessionLocal, get_session
-from .models import ChatMessage, Event, Gpu, Idea, JournalEntry, Project, Run
+from .config import DATA_DIR, ROOT
+from .db import Base, SessionLocal, engine, get_session
+from .models import (ChatMessage, Event, Gpu, Idea, JournalEntry, Project,
+                     Run, Setting)
 
 router = APIRouter(prefix="/api")
 _rng = random.Random()
@@ -21,6 +29,62 @@ _rng = random.Random()
 
 def _iso() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat()
+
+
+# ─────────────────────────── headline metric ───────────────────────────────
+# Keys that are configuration/bookkeeping, never a run's headline result.
+_NON_METRIC = {
+    "params", "n_params", "nparams", "num_params", "param_count",
+    "seed", "step", "steps", "epoch", "epochs", "iter", "iters", "max_iters",
+    "batch_size", "global_batch_size", "ensemble_size", "n_eval", "n",
+    "size", "hidden_size", "h_cycles", "gpu", "gpu_index", "lr",
+}
+# Metric names worth using as a headline when the validation metric is absent.
+_COMMON_METRICS = ["gsm8k_test_acc", "test_acc", "val_acc", "accuracy",
+                   "score", "f1", "val_loss", "val_mse", "loss"]
+
+
+def _looks_baseline(name: str) -> bool:
+    return "baseline" in (name or "").lower()
+
+
+def _as_number(v):
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return float(v)
+
+
+def _resolve_headline(run_id: str, summary: dict, metric_key: str):
+    """A run's headline number: the project's validation metric if the agent
+    reported it, else a logged value of it, else a sane numeric fallback.
+    Never picks an obvious non-metric like a parameter count."""
+    keys = ([metric_key] if metric_key else []) + \
+           [k for k in _COMMON_METRICS if k != metric_key]
+    for k in keys:                          # 1. summary value for a metric key
+        n = _as_number((summary or {}).get(k))
+        if n is not None:
+            return n
+    for k in keys:                          # 2. last logged point of a metric
+        v = metrics.latest(run_id, k)
+        if v is not None:
+            return float(v)
+    for k, v in (summary or {}).items():    # 3. any non-config numeric value
+        if str(k).lower() not in _NON_METRIC:
+            n = _as_number(v)
+            if n is not None:
+                return n
+    return None
+
+
+def _is_crashed(headline, direction: str) -> bool:
+    """A run crashed if it has no metric or training diverged. For loss-style
+    (minimize) metrics a huge value signals divergence; an accuracy-style
+    (maximize) metric simply being low is a poor result, not a crash."""
+    if headline is None or not math.isfinite(headline):
+        return True
+    if direction != "maximize" and headline >= 5e4:
+        return True
+    return False
 
 
 # ───────────────────────────── REST: read ──────────────────────────────────
@@ -36,12 +100,14 @@ def get_project(db: Session = Depends(get_session)):
     kept = [r for r in done if r.status == "kept"]
     best = None
     for r in done:
-        if r.headline_metric is None:
+        if (r.status == "crashed" or r.headline_metric is None
+                or not math.isfinite(r.headline_metric)):
             continue
         if best is None or (r.headline_metric > best
                             if p.metric_direction == "maximize"
                             else r.headline_metric < best):
             best = r.headline_metric
+    base_run = next((r for r in runs if r.is_baseline), None)
     return {
         **p.dict(),
         "experiments_done": len(done),
@@ -49,7 +115,7 @@ def get_project(db: Session = Depends(get_session)):
         "experiments_total": len(ideas),
         "success_rate": round(len(kept) / len(done), 2) if done else 0,
         "best_metric": best,
-        "baseline_metric": 0.412,
+        "baseline_metric": base_run.headline_metric if base_run else None,
     }
 
 
@@ -59,6 +125,70 @@ def list_ideas(db: Session = Depends(get_session)):
     # upcoming sorted by manual priority then EV desc (doc 05 5.7)
     return sorted([i.dict() for i in ideas],
                   key=lambda i: (-i["manual_priority"], -i["ev"]))
+
+
+@router.post("/ideas/reorder")
+async def ideas_reorder(request: Request):
+    """Re-rank queued ideas (top of the list runs first) and tell the agent."""
+    body = await request.json()
+    order = body.get("order", [])
+    db = SessionLocal()
+    names = []
+    for i, iid in enumerate(order):
+        idea = db.query(Idea).filter(Idea.id == iid).first()
+        if idea:
+            idea.manual_priority = len(order) - i
+            names.append(idea.idea_id)
+    db.commit()
+    db.close()
+    if names:
+        try:
+            monitor.message_agent(
+                "The researcher reprioritised the idea queue — run the "
+                "queued ideas in THIS order next: " + ", ".join(names)
+                + ". Update ideas.md to match this ordering.")
+        except Exception:                            # noqa: BLE001
+            pass
+    bus.publish("events", "runs_changed", {})
+    return {"status": "ok", "order": names}
+
+
+@router.post("/ideas/delete")
+async def ideas_delete(request: Request):
+    """Remove a queued idea; feed the reason back to the agent."""
+    body = await request.json()
+    iid = body.get("idea_id", "")
+    reason = (body.get("reason") or "").strip()
+    db = SessionLocal()
+    idea = db.query(Idea).filter(Idea.id == iid).first()
+    name = idea.idea_id if idea else iid
+    if idea:
+        db.delete(idea)
+    row = db.query(Setting).filter(Setting.key == "dismissed_ideas").first()
+    dismissed = list(row.value) if row and isinstance(row.value, list) else []
+    if name and name not in dismissed:
+        dismissed.append(name)
+    if row:
+        row.value = dismissed
+    else:
+        db.add(Setting(key="dismissed_ideas", value=dismissed))
+    db.add(Event(id=f"ev-{_rng.randrange(16**8):08x}", type="idea_added",
+                 severity="info", actor="human",
+                 message=f"Researcher removed queued idea '{name}'"
+                         + (f" — {reason}" if reason else ""),
+                 created_at=_iso()))
+    db.commit()
+    db.close()
+    try:
+        monitor.message_agent(
+            f"The researcher REMOVED the queued idea '{name}' from the plan."
+            + (f" Their reason: {reason}." if reason else "")
+            + " Do not run it — remove it from ideas.md and take this "
+              "preference into account when choosing future ideas.")
+    except Exception:                                # noqa: BLE001
+        pass
+    bus.publish("events", "runs_changed", {})
+    return {"status": "ok"}
 
 
 @router.get("/runs")
@@ -165,11 +295,12 @@ async def track_run(request: Request):
     pid = project.id if project else "proj-default"
     if not db.query(Run).filter(Run.id == name).first():
         idea = Idea(id=f"idea-{name}", project_id=pid, idea_id=name,
-                    description="(logged via the arui SDK)", status="running",
+                    description="", status="running",
                     source="agent", created_at=_iso(), started_at=_iso())
         db.add(idea)
         db.add(Run(id=name, project_id=pid, idea_id=idea.id, run_name=name,
-                   status="running", config=body.get("config", {}),
+                   status="running", is_baseline=_looks_baseline(name),
+                   config=body.get("config", {}),
                    started_at=_iso(), created_at=_iso()))
         db.commit()
         bus.publish("events", "runs_changed", {})
@@ -187,6 +318,24 @@ async def track_log(request: Request):
     return {"ok": True}
 
 
+@router.post("/track/logs")
+async def track_logs(request: Request):
+    """Append a run's captured console output (sent by the arui SDK). This is
+    how run logs are collected — independent of tmux."""
+    body = await request.json()
+    run_id = body.get("run_id", "")
+    text = body.get("text", "")
+    if run_id and re.match(r"^[A-Za-z0-9_.\-=]+$", run_id) and text:
+        try:
+            d = DATA_DIR / "run_logs"
+            d.mkdir(parents=True, exist_ok=True)
+            with open(d / f"{run_id}.log", "a", errors="ignore") as f:
+                f.write(text)
+        except OSError:
+            pass
+    return {"ok": True}
+
+
 @router.post("/track/artifact")
 async def track_artifact(request: Request):
     await request.json()
@@ -201,18 +350,34 @@ async def track_finish(request: Request):
     db = SessionLocal()
     run = db.query(Run).filter(Run.id == run_id).first()
     if run:
-        run.status = "kept"
+        proj = db.query(Project).first()
+        metric_key = (proj.validation_metric if proj else "") or ""
+        direction = (proj.metric_direction if proj else "minimize") \
+            or "minimize"
+        headline = _resolve_headline(run_id, summary, metric_key)
+        run.headline_metric = headline
         run.ended_at = _iso()
-        for v in summary.values():
-            if isinstance(v, (int, float)):
-                run.headline_metric = float(v)
-                break
+        crashed = _is_crashed(headline, direction)
+        run.status = "crashed" if crashed else "kept"
         idea = db.query(Idea).filter(Idea.id == run.idea_id).first()
         if idea:
-            idea.status = "success"
+            idea.status = "failed" if crashed else "success"
             idea.ended_at = _iso()
+        ev = Event(id=f"ev-{_rng.randrange(16**8):08x}", type="run_finished",
+                   severity="warning" if crashed else "info", actor="agent",
+                   message=(f"{run_id} diverged" if crashed
+                            else f"{run_id} finished — {headline:.4f}"),
+                   run_id=run_id, created_at=_iso())
+        db.add(ev)
         db.commit()
-    db.close()
+        payload = ev.dict()
+        db.close()
+        bus.publish("events", "event", payload)
+        # immediate email if this run set a new best (notify decides)
+        threading.Thread(target=notify.on_run_finished, args=(run_id,),
+                         daemon=True).start()
+    else:
+        db.close()
     bus.publish("events", "runs_changed", {})
     return {"ok": True}
 
@@ -267,3 +432,328 @@ def dev_status():
     o = orchestrator.active()
     return {"running": bool(o and o.running),
             "project_id": o.project_id if o else None}
+
+
+# ──────────── agent terminal: live view + chat into the session ─────────────
+
+def _tmux_alive(session: str = "agent") -> bool:
+    return subprocess.run(["tmux", "has-session", "-t", session],
+                          capture_output=True).returncode == 0
+
+
+@router.get("/agent/terminal")
+def agent_terminal():
+    """Live contents of the agent's tmux session — drives the rail Live tab."""
+    r = subprocess.run(
+        ["tmux", "capture-pane", "-t", "agent", "-p", "-S", "-3000"],
+        capture_output=True, text=True)
+    text = r.stdout if r.returncode == 0 else ""
+    if not text.strip():                       # no live pane — fall back to log
+        logs = [p for p in glob.glob(
+                str(DATA_DIR / "workspace" / "*" / "agent.log"))
+                if os.path.exists(p) and os.path.getsize(p) > 0]
+        logs.sort(key=os.path.getmtime)
+        if logs:
+            try:
+                text = open(logs[-1], errors="ignore").read()[-16000:]
+            except OSError:
+                pass
+    return {"text": text or "(no agent session yet)",
+            "alive": _tmux_alive("agent")}
+
+
+@router.post("/agent/send")
+async def agent_send(request: Request):
+    """Type a message into the agent's Claude Code tmux session."""
+    body = await request.json()
+    text = (body.get("text") or "").strip()
+    if not text:
+        return {"ok": False, "error": "empty"}
+    if not _tmux_alive("agent"):
+        return {"ok": False, "error": "no agent session is running"}
+    subprocess.run(["tmux", "send-keys", "-t", "agent", "-l", text],
+                   capture_output=True)
+    subprocess.run(["tmux", "send-keys", "-t", "agent", "Enter"],
+                   capture_output=True)
+    db = SessionLocal()
+    msg = ChatMessage(id=f"cm-{_rng.randrange(16**8):08x}", role="researcher",
+                      content=text, created_at=_iso())
+    db.add(msg)
+    db.commit()
+    payload = msg.dict()
+    db.close()
+    bus.publish("chat", "chat", payload)
+    return {"ok": True}
+
+
+# ──────────── reset + onboarding ─────────────────────────────────────────────
+
+@router.post("/reset")
+async def reset_all():
+    """Wipe everything and return the instance to the onboarding state."""
+    orchestrator.stop()
+    realrun.stop()
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    metrics.reset()
+    return {"status": "reset"}
+
+
+@router.get("/onboarding")
+def get_onboarding(db: Session = Depends(get_session)):
+    row = db.query(Setting).filter(Setting.key == "onboarding").first()
+    return row.value if row else {}
+
+
+@router.post("/onboarding")
+async def post_onboarding(request: Request):
+    """Save the onboarding config and register the project.
+
+    This does NOT run anything and shows NO demo data. The engine that
+    actually researches the configured project — a real Claude Code agent on
+    the GPUs (RealAgent) — is not built yet, so the dashboard stays honestly
+    empty until a real agent produces real experiments.
+    """
+    cfg = await request.json()
+    db = SessionLocal()
+    row = db.query(Setting).filter(Setting.key == "onboarding").first()
+    if row:
+        row.value = cfg
+    else:
+        db.add(Setting(key="onboarding", value=cfg))
+    db.commit()
+    db.close()
+
+    # a Claude token (or the test hook) -> launch the real autonomous agent
+    token = (cfg.get("claude_token") or "").strip()
+    if token or os.environ.get("ARUI_CLAUDE_BIN"):
+        realrun.start_real(cfg)
+        return {"status": "started"}
+
+    # otherwise just register the project; dashboard stays honestly empty
+    db = SessionLocal()
+    if not db.query(Project).first():
+        metric = (cfg.get("metric") or "metric").strip()
+        direction = "maximize" if metric in (
+            "accuracy", "f1", "arc_score", "reward") else "minimize"
+        db.add(Project(
+            id="proj-" + (cfg.get("repo_name") or "project"),
+            name=cfg.get("repo_name") or "project",
+            purpose=cfg.get("purpose", ""),
+            validation_metric=metric, metric_direction=direction,
+            status="awaiting agent", gpu_count=0, created_at=_iso()))
+        db.commit()
+    db.close()
+    return {"status": "configured"}
+
+
+# ──────────── tmux run sessions (the Sessions tab) ───────────────────────────
+
+_INFRA_SESSIONS = {"arui", "cf", "agent"}
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9_.\-]+$")
+
+
+@router.get("/sessions")
+def list_sessions():
+    """Every tmux session that is a research run (infra sessions excluded)."""
+    out = subprocess.run(["tmux", "list-sessions", "-F", "#{session_name}"],
+                         capture_output=True, text=True)
+    names = [n.strip() for n in out.stdout.splitlines() if n.strip()]
+    return {"sessions": [n for n in names if n not in _INFRA_SESSIONS]}
+
+
+@router.get("/sessions/{name}")
+def session_output(name: str):
+    """The captured stdout/stderr of one run's tmux session."""
+    if not _SAFE_NAME.match(name or ""):
+        return {"text": "", "alive": False}
+    alive = subprocess.run(["tmux", "has-session", "-t", name],
+                           capture_output=True).returncode == 0
+    if not alive:
+        return {"text": "", "alive": False}
+    out = subprocess.run(
+        ["tmux", "capture-pane", "-t", name, "-p", "-S", "-4000"],
+        capture_output=True, text=True)
+    return {"text": out.stdout, "alive": True}
+
+
+# ──────────── run logs, kill, system stats, metric names ─────────────────────
+
+@router.get("/runs/{run_id}/logs")
+def run_logs(run_id: str, tail: int = 800):
+    """A run's captured stdout/stderr — persists after the run finishes."""
+    return monitor.run_log(run_id, tail)
+
+
+@router.post("/runs/{run_id}/kill")
+def run_kill(run_id: str):
+    """Kill a run's tmux session (the monitor then marks it crashed)."""
+    if not _SAFE_NAME.match(run_id or ""):
+        return {"ok": False, "error": "bad run id"}
+    subprocess.run(["tmux", "kill-session", "-t", run_id],
+                   capture_output=True)
+    return {"ok": True}
+
+
+@router.get("/system")
+def system():
+    """Cached host telemetry — GPUs, CPU, RAM, disk, uptime."""
+    return monitor.system_stats()
+
+
+@router.post("/clientlog")
+async def clientlog(request: Request):
+    """Receive a browser-side JS error so frontend crashes are debuggable."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    line = (f"{_iso()} {body.get('msg', '')} | {body.get('src', '')}:"
+            f"{body.get('line', '')} | {str(body.get('stack', ''))[:700]}")
+    print("[clientlog]", line, flush=True)
+    try:
+        with open(DATA_DIR / "clientlog.txt", "a") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+    return {"ok": True}
+
+
+@router.get("/metrics/names")
+def metric_names():
+    return {"metrics": metrics.all_keys()}
+
+
+# ──────────── authorized_keys management ─────────────────────────────────────
+
+@router.get("/authkeys")
+def authkeys_list():
+    return {"keys": authkeys.list_keys(),
+            "ssh": "ssh root@<node-ip> -p <ssh-port>"}
+
+
+@router.post("/authkeys")
+async def authkeys_add(request: Request):
+    body = await request.json()
+    return authkeys.add_key(body.get("key", ""))
+
+
+@router.post("/authkeys/delete")
+async def authkeys_delete(request: Request):
+    body = await request.json()
+    return authkeys.delete_key(body.get("fingerprint", ""))
+
+
+# ──────────── notifications: config + test ───────────────────────────────────
+
+_NOTIFY_KEYS = ("email", "cadence", "email_recipients", "gmail_app_pw",
+                "dashboard_url", "resend_api_key", "notify_from",
+                "smtp_host", "smtp_port", "smtp_user", "smtp_pass")
+
+
+@router.post("/notify/config")
+async def notify_config(request: Request):
+    """Merge email / cadence / transport settings into the onboarding config
+    without re-running onboarding (so live runs can enable email)."""
+    body = await request.json()
+    db = SessionLocal()
+    row = db.query(Setting).filter(Setting.key == "onboarding").first()
+    cfg = dict(row.value) if row and isinstance(row.value, dict) else {}
+    for k in _NOTIFY_KEYS:
+        if k in body:
+            cfg[k] = body[k]
+    if row:
+        row.value = cfg
+    else:
+        db.add(Setting(key="onboarding", value=cfg))
+    db.commit()
+    db.close()
+    return {"status": "ok", "cadence": cfg.get("cadence", "off")}
+
+
+@router.post("/notify/test")
+async def notify_test(request: Request):
+    """Send a one-off email (or a full digest) to confirm delivery works."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if body.get("digest"):
+        ok = notify.send_digest_now()
+    else:
+        ok = notify.send(
+            "autoresearcherUI - test email",
+            "This is a test from autoresearcherUI. If you can read this, "
+            "email notifications are working.\n\n- autoresearcherUI")
+    return {"sent": ok}
+
+
+# ──────────── archive & restore ──────────────────────────────────────────────
+
+@router.get("/archive/info")
+def archive_info():
+    """Sizes of the research state — drives the Archive modal."""
+    return archive.info()
+
+
+@router.get("/archive")
+def archive_download(profile: str = "full"):
+    """Stream the whole research state as a .tar.gz (full or slim)."""
+    fname = archive.archive_filename(profile)
+    return StreamingResponse(
+        archive.stream(profile), media_type="application/gzip",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@router.post("/archive/email")
+async def archive_email():
+    """Email the user how to grab their archive (the tarball itself is far too
+    big to attach — email carries the instructions, not the gigabytes)."""
+    info = archive.info()
+    body = (
+        "Your autoresearcherUI research archive is ready to pull off this "
+        "server.\n\n"
+        f"Full state:  {info['full_bytes'] / 1e6:.0f} MB\n"
+        f"Slim state:  {info['slim_bytes'] / 1e6:.0f} MB "
+        f"(no checkpoints / datasets)\n\n"
+        "Two ways to get it:\n\n"
+        "1. Dashboard — click Archive, then Download (full or slim).\n\n"
+        "2. Server-to-server (best for large state) — run this on the NEW "
+        "server:\n"
+        f"   {info['rsync']}\n\n"
+        "On the new server: install autoresearcherUI and, on the onboarding "
+        "screen, choose 'Resume from archive' — upload the tarball (or point "
+        "it at the rsync'd data/ folder). The agent picks the research back "
+        "up where it left off.\n\n- autoresearcherUI")
+    ok = notify.send("autoresearcherUI — your research archive is ready", body)
+    return {"sent": ok}
+
+
+@router.post("/restore")
+async def restore(file: UploadFile = File(...)):
+    """Onboarding: upload a research archive, restore it, resume the agent."""
+    tmp = DATA_DIR / "_upload.tar.gz"
+    with open(tmp, "wb") as fh:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            fh.write(chunk)
+    try:
+        result = archive.restore(str(tmp))
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+    db = SessionLocal()
+    row = db.query(Setting).filter(Setting.key == "onboarding").first()
+    cfg = dict(row.value) if row and isinstance(row.value, dict) else {}
+    db.close()
+    if cfg.get("claude_token") or os.environ.get("ARUI_CLAUDE_BIN"):
+        try:
+            realrun.start_real(cfg, resume=True)
+            result["agent"] = "resumed"
+        except Exception as e:                       # noqa: BLE001
+            result["agent"] = f"not resumed: {e}"
+    return result

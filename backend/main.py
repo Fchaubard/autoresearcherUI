@@ -14,19 +14,28 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .app import monitor, notify, orchestrator
 from .app.api import router
-from .app.config import DEMO_MODE, HOST, PORT, STATIC_DIR
-from .app.db import init_db
-from .app.seed import seed_all
-from .app.sim import simulator
+from .app.config import AUTORUN, HOST, PORT, ROOT, STATIC_DIR
+from .app.db import SessionLocal, init_db
+from .app.models import Project
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    if DEMO_MODE:
-        seed_all()
-        asyncio.create_task(simulator())
+    notify.start_scheduler()          # periodic email digests (cadence-driven)
+    monitor.start()                   # gpu telemetry + run reconciliation
+    if AUTORUN:
+        db = SessionLocal()
+        has_project = db.query(Project).first() is not None
+        db.close()
+        if not has_project:
+            # auto-run the example research project through the REAL
+            # orchestrator — genuine experiments, no fake seed/simulator.
+            orchestrator.start(str(ROOT / "tests" / "example_project"),
+                               name="tiny-sgd", n_slots=10,
+                               metric_key="val_mse", direction="minimize")
     yield
 
 
