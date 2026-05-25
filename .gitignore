@@ -1,0 +1,24 @@
+# data & secrets (created at runtime)
+data/
+*.duckdb
+*.parquet
+.env
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.uv/
+
+# node / frontend build
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# os / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

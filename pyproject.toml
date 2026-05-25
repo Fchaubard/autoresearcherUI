@@ -1,0 +1,24 @@
+[project]
+name = "autoresearcherui"
+version = "0.2.0"
+description = "A self-hosted web cockpit for autonomous AI research."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "sqlalchemy>=2.0",
+    "duckdb>=0.10",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
+]
+
+[project.scripts]
+autoresearcherui = "backend.main:run"
+
+[tool.setuptools]
+packages = ["backend", "backend.app", "arui"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

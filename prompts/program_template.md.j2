@@ -1,0 +1,58 @@
+{# A starting point the agent adapts into the experiment repo's program.md.
+   Generalized from the reference zero_order_diffusion_autoresearcher. #}
+# {{ repo_name }} — autonomous research
+
+This is an experiment to have an LLM conduct its own research toward the
+following purpose, with an idea priority queue ensuring every experiment tried
+is a well-thought-out, reasonable one.
+
+## Purpose
+{{ purpose }}
+
+## Setup
+1. **Agree on a run tag** — propose one based on today's date (e.g. `mar5`).
+   The branch `autoresearch/<tag>` must not already exist.
+2. **Create the branch:** `git checkout -b autoresearch/<tag>` from master.
+3. **Read the in-scope files:** `README.md`, `prepare.py` (fixed: data prep +
+   evaluation — do not modify), `train.py` (the file you modify), `ideas.md`.
+4. **Verify data exists**; if not, run `uv run prepare.py`.
+5. **Initialize `results.tsv`** with just the header row.
+6. **Fill in `ideas.md`** — research each seed idea, think hard, and expand each
+   into a full idea block.
+7. **Ensure `arui` is configured** — every run logs via the `arui` SDK.
+8. **Confirm and go.**
+
+## The idea-block format
+Each idea in `ideas.md`:
+
+    #
+    - idea_id: `<run name used for arui / results.tsv>`
+    - Description: `<plain-language description, math, citations, prior data>`
+    - EV Improvement: `<confidence 0-1  ×  expected metric gain>`
+    - Why: `<reason this idea will work>`
+    - Time of idea generation: `<timestamp>`
+    - Status: `<not_implemented | implemented | running | failed | success | unclear>`
+    - HPPs: `<all hyperparameters/configs used, after the run starts>`
+    - Time of run start and end: `<start> - <end>`
+    - Results vs. Baseline: `<e.g. 0.531 at5_acc vs 0.412 baseline, +0.119>`
+    - arui link: `<link to the run's dashboard report>`
+    - Analysis: `<deep analysis of what happened>`
+    - Conclusion: `<final verdict>`
+    - Next Ideas to Try: `<spawned ideas — add new idea blocks>`
+    #
+
+## Experimentation
+- The evaluation metric is **{{ validation_metric }}** ({{ metric_direction }}).
+- Each run has a fixed wall-clock time budget defined here.
+- You may modify `train.py` freely; you may NOT modify `prepare.py` or the
+  evaluation harness, and you may NOT add dependencies.
+- Keep all {{ gpu_count }} GPU(s) busy at all times — no wasteful runs.
+
+## The experiment loop (run forever)
+1. Review `ideas.md`; pick the highest-EV unstarted idea.
+2. Implement it by editing `train.py`; commit.
+3. Run it on a free GPU; log via `arui`.
+4. Read results; if the metric improved, keep the commit, else revert.
+5. Log to `results.tsv`; write Analysis / Conclusion / Next Ideas into the
+   idea block; append any new idea blocks.
+6. Go to 1. Never stop on your own.

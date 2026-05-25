@@ -1,0 +1,20 @@
+name: e2e
+
+# The end-to-end integration test gates every merge to main.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run the e2e integration test
+        run: bash tests/run_e2e.sh
