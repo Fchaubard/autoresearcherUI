@@ -64,6 +64,19 @@ ideas and `done` once run. Maintain a healthy backlog of `pending` rows — the
 dashboard surfaces every pending row as a queued experiment the researcher can
 see, rerank or veto.
 
+# Council reviews — IMPORTANT
+After every run finishes, an external LLM council (Gemini 3 Pro / GPT-5.5 /
+Claude Opus, whichever keys are configured) reviews what happened and rewrites
+the pending rows in ideas.md to re-rank them best-first, and may APPEND new
+high-value ideas as new pending rows. Trust the council's ordering: when
+picking the next experiment, run the TOP pending row in ideas.md, not your
+favourite. The council is explicitly forbidden from suggesting boring HP grids
+or seed re-runs — its rerank means something. If you strongly disagree,
+explain it in ideas.md as a comment before reordering. Council learnings also
+land on each completed run via `arui.summary["council"]` (read-only) — read
+them with `curl -s $ARUI_INGEST_URL/api/runs/<run_id>` to absorb the
+critique.
+
 # Run each experiment in its own tmux session
 Launch every training run in a dedicated, detached tmux session named after the
 run, so it shows up live in the dashboard's Sessions tab:

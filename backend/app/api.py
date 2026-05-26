@@ -382,6 +382,10 @@ async def track_finish(request: Request):
         # immediate email if this run set a new best (notify decides)
         threading.Thread(target=notify.on_run_finished, args=(run_id,),
                          daemon=True).start()
+        # council deliberation: one external LLM reviews this run, reranks
+        # the queue and proposes new ideas (only if API keys are configured).
+        from . import council
+        council.review_async(run_id)
     else:
         db.close()
     bus.publish("events", "runs_changed", {})

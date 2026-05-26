@@ -657,8 +657,13 @@ function paintRail() {
     if (!c.querySelector('.sess-wrap')) { stopTermPoll(); renderSessions(c); }
   } else {
     stopTermPoll();
-    if (document.getElementById('feed')) updateBrief();    // live-append
-    else renderSummary(c);
+    if (document.getElementById('icards')) {
+      // live-update: cards + brief without rebuilding the activity feed
+      updateBrief();
+      paintCompletedCards();
+    } else {
+      renderSummary(c);
+    }
   }
 }
 
@@ -817,23 +822,143 @@ async function loadOlderEvents() {
   S._feedLoading = false;
 }
 
+/* ── completed-ideas card view ─────────────────────────────────────────────
+   Replaces the old "feed of checkmarks". One card per completed experiment,
+   newest first. Each card shows: status icon · run name · what/why · result
+   chip · the council's learning (color-coded by reviewer). Clicking the card
+   opens the run drawer. The activity feed is still available below in a
+   compact, collapsed-by-default panel. */
+
+const STATUS_META = {
+  kept:        { ic: '✓', cls: 's-kept',      lbl: 'kept' },
+  success:     { ic: '✓', cls: 's-kept',      lbl: 'kept' },
+  discarded:   { ic: '◯', cls: 's-discarded', lbl: 'discarded' },
+  failed:      { ic: '◯', cls: 's-discarded', lbl: 'discarded' },
+  crashed:     { ic: '✕', cls: 's-crashed',   lbl: 'crashed' },
+  running:     { ic: '▶', cls: 's-running',   lbl: 'running' },
+  queued:      { ic: '·', cls: 's-running',   lbl: 'queued' },
+};
+
+const REVIEWER_META = {
+  gemini: { lbl: 'Gemini',  color: '#4285F4' },
+  openai: { lbl: 'GPT-5.5', color: '#10A37F' },
+  claude: { lbl: 'Claude',  color: '#D97757' },
+};
+
+function ideaCard(run) {
+  const sm = STATUS_META[run.status] || STATUS_META.queued;
+  const cfg = run.config || {};
+  const what = (cfg.what || cfg.description || cfg.hypothesis || '').toString().trim();
+  const why = (cfg.why || '').toString().trim();
+  const review = (cfg.review && typeof cfg.review === 'object') ? cfg.review : null;
+  const metric = run.headline_metric;
+  const delta = run.baseline_delta;
+  const isBaseline = run.is_baseline;
+  const card = el('div', 'icard');
+  // header row: icon + title + chips
+  const hd = el('div', 'icard-hd');
+  hd.innerHTML =
+    `<div class="icard-ic ${sm.cls}">${sm.ic}</div>` +
+    `<div class="icard-ti">` +
+      `<div class="icard-name">${esc(run.run_name || run.id)}</div>` +
+      `<div class="icard-sub">${esc(ago(run.ended_at || run.created_at))}` +
+        (isBaseline ? ' · <b>baseline</b>' : '') + `</div>` +
+    `</div>` +
+    `<div class="icard-mt">` +
+      (run.status === 'crashed'
+        ? `<span class="chip s-crashed">diverged</span>`
+        : (metric == null ? ''
+          : `<span class="chip ${sm.cls}">${fmt(metric)}</span>` +
+            (delta == null ? ''
+              : `<div class="icard-delta">${
+                  delta >= 0 ? '−' + fmt(Math.abs(delta), 3)
+                             : '+' + fmt(Math.abs(delta), 3)
+                } vs base</div>`))) +
+    `</div>`;
+  card.append(hd);
+  // what / why
+  if (what || why) {
+    const bd = el('div', 'icard-bd');
+    if (what) bd.append(el('div', 'icard-what', esc(what)));
+    if (why)  bd.append(el('div', 'icard-why',  '<i>why:</i> ' + esc(why)));
+    card.append(bd);
+  }
+  // council learning, if any
+  if (review && (review.learning || '').trim()) {
+    const rm = REVIEWER_META[review.reviewer] || { lbl: review.reviewer || '?', color: '#9CA3AF' };
+    const rv = el('div', 'icard-review');
+    rv.innerHTML =
+      `<div class="icard-rv-tag" style="color:${rm.color}">` +
+        `★ Council · ${esc(rm.lbl)}</div>` +
+      `<div class="icard-rv-bd">${esc(review.learning.trim())}</div>` +
+      (Array.isArray(review.new_ideas) && review.new_ideas.length
+        ? `<div class="icard-rv-new">Proposed: ` +
+          review.new_ideas.slice(0, 3).map(ni =>
+            `<code>${esc(ni.idea_id || '?')}</code>`).join(' ') + `</div>`
+        : '');
+    card.append(rv);
+  } else if (run.status !== 'running') {
+    // placeholder while we wait for the council (only if council is on)
+    const rv = el('div', 'icard-review pending');
+    rv.innerHTML = `<div class="icard-rv-tag" style="color:#94A3B8">` +
+      `★ Council · pending…</div>`;
+    card.append(rv);
+  }
+  card.onclick = () => openDrawer(run.id);
+  return card;
+}
+
 function renderSummary(c) {
   c.innerHTML = '';
   const brief = el('div', 'brief'); brief.id = 'brief';
   c.append(brief);
-  const feed = el('div', 'feed'); feed.id = 'feed';
-  c.append(feed);
   updateBrief();
+
+  // Completed experiments — newest first
+  const wrap = el('div', 'icards'); wrap.id = 'icards';
+  c.append(el('div', 'rail-h', 'Completed experiments'));
+  c.append(wrap);
+
+  const compact = el('details', 'feed-compact');
+  compact.innerHTML = '<summary>Activity feed</summary>';
+  const feed = el('div', 'feed'); feed.id = 'feed';
+  compact.append(feed);
+  c.append(compact);
+
+  paintCompletedCards();
+
+  // activity feed (kept for chronological events + chat)
   const items = [
     ...S.events.map(e => ({ t: e.created_at, kind: 'event', d: e })),
     ...S.chat.map(m => ({ t: m.created_at, kind: 'chat', d: m })),
   ].sort((a, b) => (a.t || '').localeCompare(b.t || ''));
   items.forEach(it => feed.append(feedItemEl(it)));
-  feed.scrollTop = feed.scrollHeight;           // jump to NOW
+  feed.scrollTop = feed.scrollHeight;
   S._feedLoading = false;
   feed.onscroll = () => {
     if (feed.scrollTop < 60) loadOlderEvents();
   };
+}
+
+function paintCompletedCards() {
+  const wrap = document.getElementById('icards');
+  if (!wrap) return;
+  // include both finished runs (kept/discarded/crashed) and currently-running
+  // so the user sees the queue's progress live; running runs sort to the top.
+  const ranked = (S.runs || []).slice().sort((a, b) => {
+    const sa = a.status === 'running' ? 0 : 1;
+    const sb = b.status === 'running' ? 0 : 1;
+    if (sa !== sb) return sa - sb;
+    return (b.ended_at || b.created_at || '')
+      .localeCompare(a.ended_at || a.created_at || '');
+  });
+  wrap.innerHTML = '';
+  if (!ranked.length) {
+    wrap.append(el('div', 'icards-empty',
+      'No experiments yet — the agent will start running ideas from the queue soon.'));
+    return;
+  }
+  ranked.forEach(r => wrap.append(ideaCard(r)));
 }
 
 function paintGpus() {
@@ -965,6 +1090,26 @@ async function openDrawer(runId) {
   if (idea.analysis) {
     bd.append(el('div', 'dr-h2', 'Agent analysis'));
     bd.append(el('div', 'prose', esc(idea.analysis)));
+  }
+  // Council review (if any) — what the external LLM panel made of this run
+  const _review = (run.config && run.config.review) || null;
+  if (_review && (_review.learning || '').trim()) {
+    const rm = REVIEWER_META[_review.reviewer] || { lbl: _review.reviewer || '?', color: '#9CA3AF' };
+    bd.append(el('div', 'dr-h2', `Council review · ${rm.lbl}`));
+    const wrap = el('div', 'icard-review');
+    wrap.style.borderLeftColor = rm.color;
+    wrap.innerHTML =
+      `<div class="icard-rv-bd">${esc(_review.learning.trim())}</div>` +
+      (Array.isArray(_review.new_ideas) && _review.new_ideas.length
+        ? `<div class="icard-rv-new" style="margin-top:8px"><b>Proposed next:</b> ` +
+          _review.new_ideas.slice(0, 3).map(ni =>
+            `<code>${esc(ni.idea_id || '?')}</code> ${esc(ni.what || '')}`)
+            .join('<br>') + `</div>` : '') +
+      (Array.isArray(_review.veto) && _review.veto.length
+        ? `<div class="icard-rv-new" style="margin-top:6px;color:var(--bad)">` +
+          `<b>Vetoed:</b> ` + _review.veto.slice(0, 5).map(v =>
+            `<code>${esc(v)}</code>`).join(' ') + `</div>` : '');
+    bd.append(wrap);
   }
   // run logs — captured to disk, so they persist after the run finishes
   bd.append(el('div', 'dr-h2', 'Logs'));

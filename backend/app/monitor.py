@@ -297,6 +297,13 @@ def _reconcile_runs(sessions: set[str]) -> bool:
                         f"activity",
                 run_id=run.id, created_at=_iso()))
             changed = True
+            # ask the council to review this crashed run too — failures often
+            # carry the most signal about what to try next.
+            try:
+                from . import council
+                council.review_async(run.id)
+            except Exception as e:                      # noqa: BLE001
+                print(f"[monitor] council review_async failed: {e}", flush=True)
         if changed:
             db.commit()
     finally:
