@@ -218,8 +218,14 @@ def list_gpus(db: Session = Depends(get_session)):
 
 
 @router.get("/events")
-def list_events(limit: int = 60, db: Session = Depends(get_session)):
-    rows = db.query(Event).order_by(Event.created_at.desc()).limit(limit).all()
+def list_events(limit: int = 60, before: str = "",
+                db: Session = Depends(get_session)):
+    """Recent events. Pass `before=<iso>` for the page older than that — used
+    by the Summary feed's lazy scroll-up loader."""
+    q = db.query(Event)
+    if before:
+        q = q.filter(Event.created_at < before)
+    rows = q.order_by(Event.created_at.desc()).limit(limit).all()
     return [e.dict() for e in rows]
 
 
@@ -505,6 +511,13 @@ def get_onboarding(db: Session = Depends(get_session)):
     return row.value if row else {}
 
 
+@router.get("/onboarding/defaults")
+def onboarding_defaults():
+    """Defaults for editable onboarding fields. The frontend pre-fills these
+    so the user sees how the agent is configured by default and can override."""
+    return {"agent_instructions": realrun.DEFAULT_AGENT_INSTRUCTIONS}
+
+
 @router.post("/onboarding")
 async def post_onboarding(request: Request):
     """Save the onboarding config and register the project.
@@ -550,7 +563,7 @@ async def post_onboarding(request: Request):
 # ──────────── tmux run sessions (the Sessions tab) ───────────────────────────
 
 _INFRA_SESSIONS = {"arui", "cf", "agent"}
-_SAFE_NAME = re.compile(r"^[A-Za-z0-9_.\-]+$")
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9_.\-=]+$")   # run ids contain '='
 
 
 @router.get("/sessions")

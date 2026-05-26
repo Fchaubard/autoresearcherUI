@@ -30,24 +30,7 @@ def _direction(metric: str) -> str:
     return "maximize" if any(t in m for t in up) else "minimize"
 
 
-def _setup_prompt(cfg: dict) -> str:
-    metric = cfg.get('metric', 'val_loss')
-    return f"""You are the Principal Researcher for an autonomous ML research project.
-
-# Purpose
-{cfg.get('purpose', '')}
-
-# Baseline method
-{cfg.get('baseline', '')}
-
-# Evaluation
-{cfg.get('eval', '')}
-Validation metric: {metric}.
-
-# Seed ideas
-{cfg.get('seed_ideas', '')}
-
-# Your task
+DEFAULT_AGENT_INSTRUCTIONS = """# Your task
 Conduct this research autonomously in this directory. Create program.md,
 train.py, prepare.py and ideas.md. Run the baseline first, then explore one
 idea per experiment, keeping every idle GPU busy. Do not stop — keep
@@ -56,17 +39,23 @@ researching.
 # Logging — REQUIRED for every experiment
 Every experiment MUST log via the `arui` SDK:
   import arui
-  arui.init(project=..., name=<run_id>, config={{
+  arui.init(project=..., name=<run_id>, config={
       "what": "<one line: what this run changes vs the baseline>",
       "why":  "<one line: the hypothesis — why it might help>",
-      ...your hyperparameters...}})
-  arui.log({{...}}, step=...)
-  arui.summary["{metric}"] = <final value>     # <-- REQUIRED, exact key
+      ...your hyperparameters...})
+  arui.log({...}, step=...)
+  arui.summary["__METRIC__"] = <final value>     # <-- REQUIRED, exact key
   arui.finish()
-The dashboard resolves each run's headline score from arui.summary["{metric}"].
+The dashboard resolves each run's headline score from arui.summary["__METRIC__"].
 If you do not set that exact key the run cannot be scored. ALWAYS include the
 "what" and "why" keys in config — the dashboard shows them in the run drawer so
 the research stays readable. ARUI_INGEST_URL and ARUI_PROJECT are in your env.
+
+For EVAL-only runs (no training loop — e.g. evaluating an ensemble), STILL
+call arui.log per example or per ensemble member with the running cumulative
+metric, e.g. `arui.log({"__METRIC__": cumulative_acc}, step=i)` after each
+example. That way every run has a curve in the dashboard, not just a single
+final point — the user can see eval progress live.
 
 # The ideas.md queue
 Keep ideas.md as markdown tables with the columns
@@ -104,6 +93,33 @@ All your research code lives in this directory; you have full read/write access
 to it. The autoresearcherUI tracking system and the `arui` SDK source live at
 $ARUI_REPO — read $ARUI_REPO/arui/__init__.py for SDK details.
 """
+
+
+def _setup_prompt(cfg: dict) -> str:
+    """Build the agent's brief. The 'meta' instructions (logging rules, GPU
+    saturation, ideas.md format, …) come from cfg['agent_instructions'] if the
+    user customised them in onboarding, otherwise DEFAULT_AGENT_INSTRUCTIONS.
+    The project-specific fields (purpose, baseline, eval, seed ideas) always
+    come from the user's onboarding answers."""
+    metric = cfg.get('metric', 'val_loss')
+    instructions = (cfg.get('agent_instructions')
+                    or DEFAULT_AGENT_INSTRUCTIONS).replace("__METRIC__", metric)
+    return f"""You are the Principal Researcher for an autonomous ML research project.
+
+# Purpose
+{cfg.get('purpose', '')}
+
+# Baseline method
+{cfg.get('baseline', '')}
+
+# Evaluation
+{cfg.get('eval', '')}
+Validation metric: {metric}.
+
+# Seed ideas
+{cfg.get('seed_ideas', '')}
+
+{instructions}"""
 
 
 def _resume_prompt(cfg: dict) -> str:

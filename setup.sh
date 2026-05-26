@@ -1,70 +1,146 @@
 #!/usr/bin/env bash
-# autoresearcherUI — GPU node installer (doc 03).
-# Usage:  ./setup.sh            interactive
-#         TS_AUTHKEY=tskey-... ./setup.sh --yes     scripted / bulk
+# autoresearcherUI — one-command installer for a fresh GPU node.
+#
+#   git clone <repo> autoresearcherui
+#   cd autoresearcherui
+#   ./setup.sh
+#
+# What it does:
+#   1. installs system deps (python3, tmux, curl)
+#   2. installs uv + the autoresearcherUI package (and its python deps)
+#   3. starts the backend in tmux session 'arui'
+#   4. opens a cloudflared quick-tunnel in tmux 'arui-cf' and prints the URL
+#      so you can hit the dashboard from anywhere — no Tailscale needed
+#
+# Flags:
+#   --no-tunnel    skip cloudflared (localhost only)
+#   --yes          non-interactive
+#
+# Re-running setup.sh is safe; it restarts everything.
 set -e
 cd "$(dirname "$0")"
-YES=0; [ "$1" = "--yes" ] && YES=1
+ROOT="$(pwd)"
 
-echo "┌────────────────────────────────────────────┐"
-echo "│  autoresearcherUI setup                     │"
-echo "└────────────────────────────────────────────┘"
+YES=0; NO_TUNNEL=0
+for a in "$@"; do
+  case "$a" in
+    --yes) YES=1 ;;
+    --no-tunnel) NO_TUNNEL=1 ;;
+  esac
+done
 
-# ── 1. preflight ─────────────────────────────────────────────────────────
+bold() { printf "\033[1m%s\033[0m\n" "$*"; }
+step() { printf "  \033[1;36m→\033[0m %s\n" "$*"; }
+ok()   { printf "  \033[1;32m✓\033[0m %s\n" "$*"; }
+warn() { printf "  \033[1;33m!\033[0m %s\n" "$*"; }
+
+SUDO=""
+[ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1 && SUDO="sudo"
+
+bold "┌────────────────────────────────────────────┐"
+bold "│  autoresearcherUI — fresh node setup        │"
+bold "└────────────────────────────────────────────┘"
+
+# ── 1. preflight ────────────────────────────────────────────────────────
 if command -v nvidia-smi >/dev/null 2>&1; then
   GPUS=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l | tr -d ' ')
-  echo "→ detected $GPUS GPU(s)"
+  ok "detected $GPUS GPU(s)"
 else
-  echo "!  no NVIDIA GPU detected — running in demo mode (UI only)"
+  warn "no NVIDIA GPU detected — UI will still work, agent will run on CPU"
 fi
 
-# ── 2. system deps ───────────────────────────────────────────────────────
-echo "→ installing system packages (tmux, ttyd, git)…"
+# ── 2. system packages ──────────────────────────────────────────────────
+step "installing system packages (python3, tmux, curl)…"
 if command -v apt-get >/dev/null 2>&1; then
-  sudo apt-get update -qq && sudo apt-get install -y -qq tmux git ttyd \
-    >/dev/null 2>&1 || echo "!  some packages skipped (no sudo?)"
+  $SUDO apt-get update -qq >/dev/null 2>&1 || true
+  $SUDO apt-get install -y -qq python3 python3-venv python3-pip tmux curl \
+    ca-certificates >/dev/null 2>&1 || warn "some apt packages may have failed"
 fi
 
-# ── 3. uv + python deps ──────────────────────────────────────────────────
+# ── 3. python deps via uv (fast) with pip fallback ──────────────────────
 if ! command -v uv >/dev/null 2>&1; then
-  echo "→ installing uv…"
-  curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1
+  step "installing uv (fast python package manager)…"
+  curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 || true
   export PATH="$HOME/.local/bin:$PATH"
 fi
-echo "→ installing autoresearcherUI…"
-uv venv .venv >/dev/null 2>&1 || true
-uv pip install --python .venv -e . -q
 
-# ── 4. Tailscale (optional, the only secret setup needs) ─────────────────
-if command -v tailscale >/dev/null 2>&1 || [ -n "$TS_AUTHKEY" ]; then
-  if [ -z "$TS_AUTHKEY" ] && [ "$YES" -eq 0 ]; then
-    echo
-    echo "Paste a Tailscale auth key to reach the dashboard remotely,"
-    echo "or press Enter to skip (dashboard will be localhost-only)."
-    read -rp "Tailscale auth key: " TS_AUTHKEY
-  fi
-  if [ -n "$TS_AUTHKEY" ]; then
-    command -v tailscale >/dev/null 2>&1 || \
-      curl -fsSL https://tailscale.com/install.sh | sh >/dev/null 2>&1
-    sudo tailscale up --authkey="$TS_AUTHKEY" \
-      --hostname="autoresearcher-$(hostname | cut -c1-6)" >/dev/null 2>&1 \
-      && echo "→ joined tailnet"
+step "installing autoresearcherUI python deps…"
+if command -v uv >/dev/null 2>&1; then
+  uv venv .venv >/dev/null 2>&1 || true
+  uv pip install --python .venv -e . -q
+else
+  python3 -m venv .venv
+  .venv/bin/pip install -q --upgrade pip
+  .venv/bin/pip install -q -e .
+fi
+ok "deps installed"
+
+# ── 4. cloudflared (for the public URL) ─────────────────────────────────
+if [ "$NO_TUNNEL" -eq 0 ] && ! command -v cloudflared >/dev/null 2>&1; then
+  step "installing cloudflared (gives you a public https URL)…"
+  ARCH=$(uname -m)
+  case "$ARCH" in
+    x86_64)  CF=cloudflared-linux-amd64 ;;
+    aarch64) CF=cloudflared-linux-arm64 ;;
+    *) CF="" ;;
+  esac
+  if [ -n "$CF" ]; then
+    $SUDO curl -fsSL -o /usr/local/bin/cloudflared \
+      "https://github.com/cloudflare/cloudflared/releases/latest/download/$CF" \
+      && $SUDO chmod +x /usr/local/bin/cloudflared && ok "cloudflared installed" \
+      || warn "cloudflared install failed — will fall back to localhost"
+  else
+    warn "unknown arch $ARCH — skipping cloudflared"
   fi
 fi
 
-# ── 5. launch ────────────────────────────────────────────────────────────
-echo "→ starting backend in tmux session 'autoresearcherui'…"
-tmux kill-session -t autoresearcherui 2>/dev/null || true
-tmux new-session -d -s autoresearcherui ".venv/bin/python -m backend.main"
+# ── 5. start backend in tmux 'arui' ─────────────────────────────────────
+step "starting backend in tmux session 'arui'…"
+tmux kill-session -t arui 2>/dev/null || true
+LOG="$ROOT/data/arui.log"
+mkdir -p "$ROOT/data"
+: > "$LOG"
+tmux new-session -d -s arui \
+  "cd $ROOT && .venv/bin/python -m backend.main 2>&1 | tee -a $LOG"
 
-URL="http://localhost:8000"
-command -v tailscale >/dev/null 2>&1 && {
-  TS=$(tailscale status --json 2>/dev/null | grep -o '"DNSName":"[^"]*"' \
-       | head -1 | cut -d'"' -f4 | sed 's/\.$//')
-  [ -n "$TS" ] && URL="http://$TS:8000"
-}
+# wait for /healthz
+PORT="${PORT:-8000}"
+for i in $(seq 1 40); do
+  if curl -fsS "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; then
+    ok "backend is up on http://127.0.0.1:$PORT"
+    break
+  fi
+  sleep 0.5
+done
+
+# ── 6. cloudflared tunnel ───────────────────────────────────────────────
+URL="http://localhost:$PORT"
+if [ "$NO_TUNNEL" -eq 0 ] && command -v cloudflared >/dev/null 2>&1; then
+  step "opening cloudflared tunnel in tmux 'arui-cf'…"
+  CFLOG="$ROOT/data/cloudflared.log"
+  : > "$CFLOG"
+  tmux kill-session -t arui-cf 2>/dev/null || true
+  tmux new-session -d -s arui-cf \
+    "cloudflared tunnel --url http://localhost:$PORT 2>&1 | tee -a $CFLOG"
+  # parse the public URL out of cloudflared's log
+  for i in $(seq 1 40); do
+    PUB=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$CFLOG" \
+          | head -1 || true)
+    [ -n "$PUB" ] && { URL="$PUB"; break; }
+    sleep 0.5
+  done
+  [ -n "$PUB" ] && ok "tunnel up: $URL" \
+    || warn "tunnel didn't print a URL — check tmux attach -t arui-cf"
+fi
+
+# ── 7. done ─────────────────────────────────────────────────────────────
 echo
-echo "✅  autoresearcherUI is running."
-echo "    Dashboard:  $URL"
-echo "    Logs:       tmux attach -t autoresearcherui"
+bold "✅  autoresearcherUI is running."
+echo "    Dashboard:    $URL"
+echo "    Backend logs: tmux attach -t arui      (Ctrl-b d to detach)"
+[ "$NO_TUNNEL" -eq 0 ] && \
+  echo "    Tunnel logs:  tmux attach -t arui-cf"
+echo
+echo "    Next: open $URL in your browser and complete onboarding."
+echo "    (paste a Claude API key + your purpose, and the agent starts.)"
 echo

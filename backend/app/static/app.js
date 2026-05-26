@@ -622,6 +622,8 @@ function paintTable() {
 
 /* ── idea queue: drag-to-rerank + delete ──────────────────────────────── */
 let _dragIdea = null;
+let _drawerCharts = {};      // {metric_key: LineChart} — live-refreshed by SSE
+let _drawerRunId = null;     // run id of the currently-open drawer, if any
 function queuedOrder() {
   return tableRows().filter(r => r.status === 'queued').map(r => r.id);
 }
@@ -655,7 +657,8 @@ function paintRail() {
     if (!c.querySelector('.sess-wrap')) { stopTermPoll(); renderSessions(c); }
   } else {
     stopTermPoll();
-    renderSummary(c);
+    if (document.getElementById('feed')) updateBrief();    // live-append
+    else renderSummary(c);
   }
 }
 
@@ -726,14 +729,36 @@ function renderSessions(c) {
   _termTimer = setInterval(poll, 2500);
 }
 
-function renderSummary(c) {
+/* Summary feed — incrementally appended, smart-scrolled, lazy-loaded.
+   The feed is built ONCE on tab open; SSE events APPEND new rows (no
+   re-render, no scroll yank), and scrolling near the top fetches older
+   events from the backend and prepends them. */
+
+function feedItemEl(it) {
+  if (it.kind === 'chat') {
+    return el('div', 'bub ' + it.d.role, esc(it.d.content));
+  }
+  const e = it.d;
+  const ic = e.type === 'breakthrough' ? ['win', '★']
+    : e.type === 'run_finished' && e.severity === 'warning' ? ['fail', '✕']
+    : e.type === 'run_finished' ? ['', '✓']
+    : e.type === 'run_started' ? ['', '▶']
+    : e.type === 'idea_added' ? ['', '✎'] : ['', '•'];
+  const row = el('div', 'ev');
+  row.innerHTML = `<div class="ev-ic ${ic[0]}">${ic[1]}</div>` +
+    `<div class="ev-bd"><div class="ev-msg">${esc(e.message)}</div>` +
+    `<div class="ev-tm">${esc(e.actor)} · ${ago(e.created_at)}</div></div>`;
+  return row;
+}
+
+function updateBrief() {
+  const brief = document.getElementById('brief');
+  if (!brief) return;
   const p = S.project || {};
   const runs = frontier(expRuns());
   const kept = runs.filter(r => r._frontier);
   const fail = S.runs.filter(r => r.status === 'crashed').length;
   const top = kept[kept.length - 1];
-  c.innerHTML = '';
-  const brief = el('div', 'brief');
   if (!runs.length) {
     brief.innerHTML = `<h3><span class="dot" style="color:#6366F1"></span>` +
       `Research brief</h3>` +
@@ -752,31 +777,63 @@ function renderSummary(c) {
           ? ` (−${fmt(p.baseline_metric - top.headline_metric, 3)} vs ` +
             `baseline)` : '') + '.' : '') + `</p>`;
   }
+}
+
+function appendFeedItem(it) {
+  const feed = document.getElementById('feed');
+  if (!feed) return;
+  const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
+  feed.append(feedItemEl(it));
+  if (atBottom) feed.scrollTop = feed.scrollHeight;
+}
+
+async function loadOlderEvents() {
+  const feed = document.getElementById('feed');
+  if (!feed || S._feedLoading) return;
+  const oldest = S.events.reduce(
+    (a, b) => (a && a.created_at < b.created_at) ? a : b, null);
+  if (!oldest) return;
+  S._feedLoading = true;
+  try {
+    const older = await api('/events?limit=60&before='
+      + encodeURIComponent(oldest.created_at));
+    if (older && older.length) {
+      const seen = new Set(S.events.map(e => e.id));
+      const fresh = older.filter(e => e.id && !seen.has(e.id));
+      if (fresh.length) {
+        S.events = fresh.concat(S.events);
+        if (S.events.length > 2000) S.events = S.events.slice(-2000);
+        const distFromBottom = feed.scrollHeight - feed.scrollTop;
+        const frag = document.createDocumentFragment();
+        fresh.sort((a, b) => (a.created_at || '').localeCompare(
+            b.created_at || ''))
+          .forEach(e => frag.append(feedItemEl(
+            { t: e.created_at, kind: 'event', d: e })));
+        feed.prepend(frag);
+        feed.scrollTop = feed.scrollHeight - distFromBottom;
+      }
+    }
+  } catch (e) { /* ignore */ }
+  S._feedLoading = false;
+}
+
+function renderSummary(c) {
+  c.innerHTML = '';
+  const brief = el('div', 'brief'); brief.id = 'brief';
   c.append(brief);
-  const feed = el('div', 'feed');
+  const feed = el('div', 'feed'); feed.id = 'feed';
+  c.append(feed);
+  updateBrief();
   const items = [
     ...S.events.map(e => ({ t: e.created_at, kind: 'event', d: e })),
     ...S.chat.map(m => ({ t: m.created_at, kind: 'chat', d: m })),
   ].sort((a, b) => (a.t || '').localeCompare(b.t || ''));
-  items.slice(-60).forEach(it => {
-    if (it.kind === 'chat') {
-      feed.append(el('div', 'bub ' + it.d.role, esc(it.d.content)));
-    } else {
-      const e = it.d;
-      const ic = e.type === 'breakthrough' ? ['win', '★']
-        : e.type === 'run_finished' && e.severity === 'warning' ? ['fail', '✕']
-        : e.type === 'run_finished' ? ['', '✓']
-        : e.type === 'run_started' ? ['', '▶']
-        : e.type === 'idea_added' ? ['', '✎'] : ['', '•'];
-      const row = el('div', 'ev');
-      row.innerHTML = `<div class="ev-ic ${ic[0]}">${ic[1]}</div>` +
-        `<div class="ev-bd"><div class="ev-msg">${esc(e.message)}</div>` +
-        `<div class="ev-tm">${esc(e.actor)} · ${ago(e.created_at)}</div></div>`;
-      feed.append(row);
-    }
-  });
-  c.append(feed);
-  c.scrollTop = c.scrollHeight;
+  items.forEach(it => feed.append(feedItemEl(it)));
+  feed.scrollTop = feed.scrollHeight;           // jump to NOW
+  S._feedLoading = false;
+  feed.onscroll = () => {
+    if (feed.scrollTop < 60) loadOlderEvents();
+  };
 }
 
 function paintGpus() {
@@ -863,14 +920,21 @@ async function openDrawer(runId) {
   const have = Object.keys(m).filter(k => (m[k] || []).length);
   const curveKeys = have.filter(k => m[k].length > 1);
   const pointKeys = have.filter(k => m[k].length === 1);
+  // live charts: SSE pushes new metric points into m[k] (same reference),
+  // and the SSE handler calls .draw() on each chart whose run is open
+  _drawerCharts = {};
+  _drawerRunId = runId;
   if (curveKeys.length) {
-    bd.append(el('div', 'dr-h2', 'Training curves'));
+    bd.append(el('div', 'dr-h2',
+      'Training curves' + (run.status === 'running' ? ' · live' : '')));
     curveKeys.forEach(k => {
       bd.append(el('div', '', `<div style="font-size:10.5px;color:#5C636B;` +
         `font-family:${MONO}">${esc(k)}</div>`));
       const box = el('div', 'mini'); bd.append(box);
-      new LineChart(box, k.includes('loss') ? '#FBBF24' : '#34D399')
-        .setData(m[k]);
+      const chart = new LineChart(box,
+        k.includes('loss') ? '#FBBF24' : '#34D399');
+      chart.setData(m[k]);
+      _drawerCharts[k] = chart;
     });
   }
   if (pointKeys.length) {
@@ -922,6 +986,7 @@ async function openDrawer(runId) {
 }
 function closeDrawer() {
   S.sel = null;
+  _drawerCharts = {}; _drawerRunId = null;
   document.querySelector('.scrim')?.classList.remove('open');
   document.querySelector('.drawer')?.classList.remove('open');
   paintTable();
@@ -946,23 +1011,44 @@ function streams() {
     const { run_id, points } = JSON.parse(e.data);
     const md = S.metrics[run_id] || (S.metrics[run_id] = {});
     points.forEach(p => (md[p.key] || (md[p.key] = [])).push([p.step, p.value]));
+    if (run_id === _drawerRunId) {
+      const fresh = new Set(points.map(p => p.key));
+      fresh.forEach(k => _drawerCharts[k] && _drawerCharts[k].draw());
+    }
   });
   const ev = new EventSource('/api/stream/events');
   ev.addEventListener('event', e => {
-    S.events.push(JSON.parse(e.data)); S.events = S.events.slice(-80);
-    paintRail();
+    const evt = JSON.parse(e.data);
+    if (!evt.id || S.events.find(x => x.id === evt.id)) return;
+    S.events.push(evt);
+    if (S.events.length > 2000) S.events = S.events.slice(-2000);
+    appendFeedItem({ t: evt.created_at, kind: 'event', d: evt });
   });
-  ev.addEventListener('runs_changed', async () => {
-    [S.project, S.runs, S.ideas] = await Promise.all(
-      [api('/project'), api('/runs'), api('/ideas')]);
-    if (S.view !== 'dashboard') return;
-    paintHero(); paintStats(); paintTable(); paintRail();
-    document.querySelector('.hdr')?.replaceWith(header()); paintGpus();
+  // The agent can fire runs_changed several times per second (every run
+  // start/finish), and each one triggers 3 fetches + a full repaint, which
+  // wedges the browser. Coalesce a burst into one update.
+  let _rcTimer = null, _rcPending = false;
+  ev.addEventListener('runs_changed', () => {
+    _rcPending = true;
+    if (_rcTimer) return;
+    _rcTimer = setTimeout(async () => {
+      _rcTimer = null;
+      if (!_rcPending) return;
+      _rcPending = false;
+      try {
+        [S.project, S.runs, S.ideas] = await Promise.all(
+          [api('/project'), api('/runs'), api('/ideas')]);
+      } catch (e) { return; }                // network blip: try again later
+      if (S.view !== 'dashboard') return;
+      paintHero(); paintStats(); paintTable(); paintRail();
+      document.querySelector('.hdr')?.replaceWith(header()); paintGpus();
+    }, 800);
   });
   const ch = new EventSource('/api/stream/chat');
   ch.addEventListener('chat', e => {
-    S.chat.push(JSON.parse(e.data));
-    if (S.railTab === 'summary') paintRail();
+    const msg = JSON.parse(e.data);
+    S.chat.push(msg);
+    appendFeedItem({ t: msg.created_at, kind: 'chat', d: msg });
   });
 }
 
@@ -991,6 +1077,10 @@ const OB_FIELDS = [
     'val_loss|perplexity|accuracy|f1|rmse|mse|fid|bpb|arc_score|custom'],
   ['baseline', 'Baseline method(s) to run first', 'area',
     'e.g. TRM (Tiny Recursive Model)'],
+  ['sec', 'Agent (advanced — leave the textarea alone for sensible defaults)'],
+  ['agent_instructions',
+    'How the agent should work (logging rules, GPU saturation, ideas.md '
+    + 'format, …). Edit to customise; blank uses the default.', 'area', ''],
   ['sec', 'Email alerts — optional (leave the app password blank for none)'],
   ['cadence', 'Cadence', 'select', 'off|immediate|1h|4h|12h|24h'],
   ['email_recipients', 'Recipients (comma-separated)', 'text',
@@ -1088,7 +1178,8 @@ PASSCODE=`;
     } else {
       row.append(el('label', 'onb-lbl', label));
       let x;
-      if (type === 'area') { x = el('textarea', 'onb-in'); x.rows = 3; }
+      if (type === 'area') { x = el('textarea', 'onb-in');
+        x.rows = (k === 'agent_instructions' ? 14 : 3); }
       else if (type === 'select') {
         x = el('select', 'onb-in');
         extra.split('|').forEach(o => {
@@ -1111,6 +1202,13 @@ PASSCODE=`;
   const start = el('button', 'btn pri onb-start', 'Start research →');
   foot.append(start); wrap.append(foot);
   app.append(wrap);
+
+  // pre-fill editable defaults (agent_instructions etc.) from the backend
+  api('/onboarding/defaults').then(defs => {
+    Object.entries(defs || {}).forEach(([k, v]) => {
+      if (inp[k] && !inp[k].value) inp[k].value = v;
+    });
+  }).catch(() => { /* keep the blank textarea */ });
 
   bpb.onclick = () => {
     const keymap = {};                       // case-insensitive lookup
