@@ -2645,6 +2645,9 @@ const AnaState = {
 
 async function renderAnalysis(c) {
   AnaState.baseline = getBaseline();
+  // Add fallback class so the layout works even if the browser doesn't
+  // support :has() (CSS rule .viewpane:has(.anav2){padding:0}).
+  c.classList.add('full-bleed');
   c.innerHTML = `
     <div class="anav2">
       <div class="anav2-side">

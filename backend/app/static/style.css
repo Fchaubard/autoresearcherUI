@@ -220,9 +220,11 @@ body.resizing{user-select:none}
 /* Analysis tab needs to fill its container edge-to-edge. The .viewpane
    parent has padding; we cancel it on this view via .viewpane:has(.anav2)
    and stretch the grid to 100% of the available width/height. */
-.viewpane:has(.anav2){padding:0}
-.anav2{display:grid;grid-template-columns:440px minmax(0,1fr);gap:0;
-  width:100%;height:100%;min-height:calc(100vh - 80px);background:var(--bg)}
+.viewpane:has(.anav2){padding:0 !important}
+.viewpane.full-bleed{padding:0 !important}            /* fallback if :has() unsupported */
+.anav2{display:grid !important;grid-template-columns:440px minmax(0,1fr);
+  gap:0;width:100% !important;height:100%;
+  min-height:calc(100vh - 80px);background:var(--bg)}
 .anav2-side{border-right:1px solid var(--border);display:flex;flex-direction:column;
   background:var(--panel);min-width:0}
 .anav2-side-hd{padding:10px 12px;display:flex;gap:8px;align-items:center;
@@ -308,8 +310,8 @@ body.resizing{user-select:none}
   color:var(--text-2);border-radius:5px;padding:4px 10px;font-size:11px;cursor:pointer}
 .anav2-clear:hover{border-color:var(--bad);color:var(--bad)}
 
-.anav2-main{display:flex;flex-direction:column;min-width:0;width:100%;
-  overflow:hidden}
+.anav2-main{display:flex !important;flex-direction:column;min-width:0;
+  width:100% !important;overflow:hidden}
 .anav2-bar{display:flex;align-items:center;justify-content:space-between;
   padding:10px 16px;border-bottom:1px solid var(--border);background:var(--panel)}
 .anav2-bar-l{display:flex;gap:10px;align-items:center}
@@ -324,9 +326,9 @@ body.resizing{user-select:none}
 .anav2-base-clear{background:none;border:0;color:var(--muted);cursor:pointer;
   font-size:11px;padding:0 0 0 4px}
 .anav2-hint{font-size:11px;color:var(--muted)}
-.anav2-grid{flex:1;overflow:auto;padding:14px;display:grid;
-  grid-template-columns:repeat(2,1fr);gap:12px;align-content:start;min-height:0;
-  align-items:stretch}
+.anav2-grid{flex:1;overflow:auto;padding:14px;display:grid !important;
+  grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-content:start;
+  min-height:0;align-items:stretch;width:100% !important;box-sizing:border-box}
 @media (max-width: 1100px) { .anav2-grid{grid-template-columns:1fr} }
 .anav2-grid-empty{grid-column:1/-1;display:flex;flex-direction:column;
   align-items:center;justify-content:center;text-align:center;padding:60px 20px;
