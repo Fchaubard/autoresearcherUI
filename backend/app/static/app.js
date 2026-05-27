@@ -2822,23 +2822,31 @@ function renderAnaPanels(c) {
 function buildPanel(c, p) {
   const card = el('div', 'anav2-panel' + (p.width === 'full' ? ' full' : ''));
   card.dataset.pid = p.id;
-  // Header
-  const hd = el('div', 'anav2-panel-hd');
-  hd.innerHTML =
+  // Two-row header: title on its own row (so it's never squeezed), then
+  // a control row below it.
+  const titleRow = el('div', 'anav2-panel-titlerow');
+  titleRow.innerHTML =
     `<div class="anav2-panel-title">${esc(p.title)}</div>` +
-    `<div class="anav2-panel-ctrls">` +
-      `<label class="anav2-ctrl"><span>smoothing</span>` +
-      `<input type="range" min="0" max="0.99" step="0.01" value="${p.smoothing||0}" class="anav2-smooth"/>` +
-      `<span class="anav2-smooth-val">${(+(p.smoothing||0)).toFixed(2)}</span></label>` +
-      `<button class="anav2-ctrl-btn anav2-logy${p.y_log?' on':''}" title="log y">log y</button>` +
-      `<button class="anav2-ctrl-btn anav2-baseinc${p.include_baseline?' on':''}" title="include baseline">★</button>` +
+    `<div class="anav2-panel-keys mono">${esc((p.y_keys||[]).join(' · '))}</div>` +
+    `<div class="anav2-panel-ctrls-r">` +
       `<button class="anav2-ctrl-btn anav2-edit" title="edit panel">✎</button>` +
       `<button class="anav2-ctrl-btn anav2-rm" title="remove panel">✕</button>` +
     `</div>`;
+  card.append(titleRow);
+  const hd = el('div', 'anav2-panel-hd');
+  hd.innerHTML =
+    `<label class="anav2-ctrl"><span>smoothing</span>` +
+      `<input type="range" min="0" max="0.99" step="0.01" value="${p.smoothing||0}" class="anav2-smooth"/>` +
+      `<span class="anav2-smooth-val">${(+(p.smoothing||0)).toFixed(2)}</span></label>` +
+    `<button class="anav2-ctrl-btn anav2-logy${p.y_log?' on':''}" title="log y">log y</button>` +
+    `<button class="anav2-ctrl-btn anav2-baseinc${p.include_baseline?' on':''}" title="include baseline">★</button>`;
   card.append(hd);
   // Body host
   const body = el('div', 'anav2-panel-body');
   card.append(body);
+  // Legend strip (color dot + run name) — populated by refreshPanel
+  const legend = el('div', 'anav2-panel-legend');
+  card.append(legend);
   // Chart
   const chart = new BucketChart(body);
   chart.setLog(!!p.y_log);
@@ -2880,13 +2888,25 @@ function buildPanel(c, p) {
 async function refreshPanel(p) {
   const chart = AnaState.charts.get(p.id);
   if (!chart) return;
+  const card = document.querySelector(`.anav2-panel[data-pid="${p.id}"]`);
+  const legend = card && card.querySelector('.anav2-panel-legend');
+  const body = card && card.querySelector('.anav2-panel-body');
   const runIds = Array.from(AnaState.selected);
   if (AnaState.baseline && p.include_baseline
       && !runIds.includes(AnaState.baseline)) {
     runIds.push(AnaState.baseline);
   }
-  if (!runIds.length || !(p.y_keys || []).length) {
-    chart.setData([]); return;
+  if (!runIds.length) {
+    chart.setData([]);
+    if (legend) legend.innerHTML =
+      '<span class="anav2-legend-empty">Tick runs on the left to plot.</span>';
+    return;
+  }
+  if (!(p.y_keys || []).length) {
+    chart.setData([]);
+    if (legend) legend.innerHTML =
+      '<span class="anav2-legend-empty">Click ✎ to pick metrics for this panel.</span>';
+    return;
   }
   const opts = { x_key: p.x_key || 'step', bucket_count: 500 };
   if (p.zoom) { opts.x_min = p.zoom.x_min; opts.x_max = p.zoom.x_max; }
@@ -2897,18 +2917,45 @@ async function refreshPanel(p) {
   Array.from(AnaState.selected).forEach(rid => {
     colorOf.set(rid, PALETTE_BIG[idx++ % PALETTE_BIG.length]);
   });
-  const rendered = series.map(s => {
+  // Series with any non-null y are 'real'; others got filtered server-side.
+  const rendered = series.filter(s =>
+    s.y && s.y.some(v => v != null)).map(s => {
     const isBase = (s.run_id === AnaState.baseline);
     const run = (S.runs || []).find(r => r.id === s.run_id);
     return {
       run_id: s.run_id, key: s.key,
-      name: ((run && run.run_name) || s.run_id) + (s.key && p.y_keys.length > 1 ? ' · ' + s.key : ''),
-      color: isBase ? BASELINE_COLOR : (colorOf.get(s.run_id) || PALETTE_BIG[0]),
+      name: ((run && run.run_name) || s.run_id)
+        + (s.key && p.y_keys.length > 1 ? ' · ' + s.key : ''),
+      color: isBase ? BASELINE_COLOR
+        : (colorOf.get(s.run_id) || PALETTE_BIG[0]),
       dashed: isBase,
       x: s.x, y: s.y,
     };
   });
   chart.setData(rendered);
+  // Legend
+  if (legend) {
+    if (!rendered.length) {
+      // Show which runs were selected but didn't log this metric
+      const missing = runIds.map(rid => {
+        const r = (S.runs || []).find(r => r.id === rid);
+        return (r && r.run_name) || rid;
+      });
+      legend.innerHTML =
+        `<span class="anav2-legend-empty">None of the selected run(s) ` +
+        `logged <code>${esc((p.y_keys||[]).join(', '))}</code>.</span>`;
+    } else {
+      legend.innerHTML = rendered.slice(0, 10).map(s =>
+        `<span class="anav2-legend-item" title="${esc(s.name)}">` +
+        `<span class="anav2-legend-dot" style="background:${s.color}` +
+        `${s.dashed?';outline:1px dashed #fff3':''}"></span>` +
+        `<span class="anav2-legend-name mono">${esc(s.name)}</span>` +
+        `</span>`).join('') +
+        (rendered.length > 10
+          ? `<span class="anav2-legend-empty">+${rendered.length-10} more</span>`
+          : '');
+    }
+  }
 }
 
 function refreshAllPanels() {
