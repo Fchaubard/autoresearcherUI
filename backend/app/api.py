@@ -382,10 +382,14 @@ async def track_finish(request: Request):
         # immediate email if this run set a new best (notify decides)
         threading.Thread(target=notify.on_run_finished, args=(run_id,),
                          daemon=True).start()
-        # council deliberation: one external LLM reviews this run, reranks
-        # the queue and proposes new ideas (only if API keys are configured).
+        # Council reviews. Two paths:
+        #  1) Per-run review (default OFF — was noisy and pushed the agent
+        #     off working tracks). Settings.council_per_run_enabled enables.
+        #  2) Strategic batch review every N=GPU-count finished runs — one
+        #     reflection per parallel-run wave. This is the default.
         from . import council
-        council.review_async(run_id)
+        council.review_async(run_id)             # gated inside on settings
+        council.note_run_finished(run_id)        # batch trigger
     else:
         db.close()
     bus.publish("events", "runs_changed", {})
@@ -479,6 +483,32 @@ async def pi_run_now(request: Request):
     from . import pi as _pi
     out = _pi.cycle(force=True)
     return out or {"status": "skipped"}
+
+
+@router.post("/council/strategic")
+async def council_strategic_now(request: Request):
+    """Trigger an immediate strategic review on the N most-recent finished
+    runs (or a caller-supplied list). Test endpoint."""
+    from . import council as _c
+    body = await request.json()
+    ids = body.get("run_ids") or []
+    if not ids:
+        n = int(body.get("n") or _c._strategic_threshold(_c._settings()))
+        db = SessionLocal()
+        try:
+            runs = (db.query(Run)
+                    .filter(Run.status.in_(["kept", "discarded", "crashed",
+                                            "failed", "success"]))
+                    .order_by(Run.ended_at.desc())
+                    .limit(n).all())
+            ids = [r.id for r in runs]
+        finally:
+            db.close()
+    out = _c.strategic_review(ids)
+    if out:
+        _c._persist_strategic(ids, out)
+        _c._apply_to_ideas_md(out)
+    return out or {"status": "no_review"}
 
 
 @router.post("/council/review")
@@ -759,6 +789,57 @@ async def extra_nodes_check(request: Request):
         except Exception as e:                          # noqa: BLE001
             out.append({"target": host, "ok": False, "error": str(e)[:200]})
     return {"results": out}
+
+
+@router.get("/lessons")
+def lessons():
+    """Parse workspace/<repo>/lessons.md (auto-written by the council) into a
+    structured list: each entry has ts, reviewer, supporting_run, text, and
+    any other run-ids the council mentioned in the body (evidence)."""
+    from . import council as _c
+    p = _c._lessons_path()
+    if not p or not p.exists():
+        return {"lessons": [], "path": str(p) if p else ""}
+    try:
+        text = p.read_text(errors="ignore")
+    except OSError:
+        return {"lessons": [], "path": str(p)}
+    # Line format we write:
+    #   - [YYYY-MM-DD HH:MM · <reviewer> on <run_name>] <text>
+    pat = re.compile(
+        r"^-\s*\[(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2})\s*·\s*"
+        r"(?P<rev>[^·\]]+?)\s*on\s+(?P<run>[^\]]+?)\]\s*(?P<text>.*)$")
+    # Build the set of known run_ids so we can pull "evidence" mentions out
+    # of the lesson body.
+    db = SessionLocal()
+    try:
+        known = {r.id for r in db.query(Run).all()}
+        run_names = {r.run_name for r in db.query(Run).all() if r.run_name}
+    finally:
+        db.close()
+    known_all = known | run_names
+    out = []
+    for ln in text.splitlines():
+        m = pat.match(ln.strip())
+        if not m:
+            continue
+        body = m.group("text").strip()
+        # find any other run ids mentioned in the body (evidence beyond the
+        # primary supporting run)
+        evidence = []
+        for name in sorted(known_all, key=lambda s: -len(s)):
+            if name and name in body and name != m.group("run"):
+                evidence.append(name)
+                if len(evidence) >= 6:
+                    break
+        out.append({
+            "ts": m.group("ts"),
+            "reviewer": m.group("rev").strip(),
+            "supporting_run": m.group("run").strip(),
+            "text": body,
+            "evidence": evidence,
+        })
+    return {"lessons": out, "path": str(p), "count": len(out)}
 
 
 @router.get("/authkeys/pubkey")

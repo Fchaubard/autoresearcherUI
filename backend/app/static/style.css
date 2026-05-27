@@ -215,6 +215,26 @@ body.resizing{user-select:none}
 .runs thead th.th-sort.on{color:var(--text)}
 .runs thead th .th-arrow{display:inline-block;margin-left:3px;font-size:9px;
   color:var(--accent);min-width:10px}
+
+/* Lessons view */
+.lessons-wrap{padding:24px 36px 60px;max-width:1100px;margin:0 auto}
+.lessons-wrap h2{font-size:18px;font-weight:700}
+.lessons-list{display:flex;flex-direction:column;gap:10px}
+.lesson{background:var(--panel);border:1px solid var(--border);border-radius:10px;
+  padding:14px 16px;border-left:3px solid #6366F1}
+.lesson-hd{display:flex;align-items:center;gap:10px;margin-bottom:8px;
+  flex-wrap:wrap}
+.lesson-ts{color:var(--muted);font-size:11px}
+.lesson-rev{font-size:10.5px;color:#A78BFA;text-transform:uppercase;
+  letter-spacing:.6px;font-weight:600}
+.lesson-bd{font-size:13px;color:var(--text-2);line-height:1.55;white-space:pre-wrap}
+.lesson-ev{margin-top:9px;font-size:11px;color:var(--muted)}
+.evchip{display:inline-block;background:var(--panel-3);border:1px solid var(--border);
+  color:var(--text-2);border-radius:5px;padding:3px 9px;
+  font-family:var(--mono);font-size:11px;cursor:pointer;margin-right:4px;
+  transition:border-color .12s,color .12s}
+.evchip:hover{border-color:var(--accent);color:var(--text)}
+.evchip.primary{background:#6366F11a;border-color:#6366F140;color:#C7CCD3}
 .convo-empty{font-size:11px;color:var(--muted);padding:6px 2px;font-style:italic}
 .composer{border-top:1px solid var(--border);padding:10px 12px;background:#0e1115}
 .composer .row{display:flex;gap:7px}

@@ -336,7 +336,8 @@ function clearViewTimers() {
 
 const VIEWS = [
   ['dashboard', 'Dashboard', '▦'], ['analysis', 'Analysis', '◫'],
-  ['latex', 'Latex', '∑'], ['system', 'System stats', '▤'],
+  ['lessons', 'Lessons', '📖'], ['latex', 'Latex', '∑'],
+  ['system', 'System stats', '▤'],
   ['authkeys', 'authorized_keys', '⚿'],
 ];
 const VIEW_TITLE = Object.fromEntries(VIEWS.map(v => [v[0], v[1]]));
@@ -1566,9 +1567,18 @@ const OB_FIELDS = [
     'check', ''],
   ['council_claude_model', 'Council — Claude tiebreaker model', 'select',
     'claude-opus-4-6|claude-sonnet-4-6|claude-haiku-4-5'],
-  ['run_debate', 'Run debate between reviewers', 'check', ''],
+  ['run_debate', 'Run debate between reviewers (per-run reviews only)',
+    'check', ''],
   ['debate_max_rounds', 'Debate max rounds (before tiebreaker)', 'select',
     '3|2|1|4|5'],
+  ['council_per_run_enabled',
+    'Per-run review (NOISY — default off; the strategic review handles '
+    + 'most of the work)', 'check', ''],
+  ['strategic_review_enabled',
+    'Strategic batch review every N runs (recommended)', 'check', ''],
+  ['strategic_review_batch_n',
+    'Strategic batch size N (0 = auto = GPU count)', 'select',
+    '0|1|2|4|8|16'],
   ['sec', 'This node — SSH access (auto-detected, override if wrong)'],
   ['node_ssh_user', 'SSH user', 'text', 'root'],
   ['node_ssh_host', 'SSH host / public IP (blank = auto-detect)', 'text', ''],
@@ -1893,8 +1903,66 @@ function viewPane() {
   if (S.view === 'analysis') renderAnalysis(c);
   else if (S.view === 'system') renderSystem(c);
   else if (S.view === 'authkeys') renderAuthkeys(c);
+  else if (S.view === 'lessons') renderLessons(c);
   else renderLatex(c);
   return c;
+}
+
+/* ── Lessons (the council's running notebook, parsed from lessons.md) ─── */
+async function renderLessons(c) {
+  c.innerHTML = '<div class="lessons-wrap"><div class="empty2">loading…</div></div>';
+  let d;
+  try { d = await api('/lessons'); }
+  catch (e) { c.innerHTML = '<p>Could not load lessons.</p>'; return; }
+  const items = d.lessons || [];
+  const wrap = c.querySelector('.lessons-wrap');
+  if (!items.length) {
+    wrap.innerHTML =
+      '<h2 style="margin:0 0 8px">Lessons learned</h2>' +
+      `<p style="color:var(--muted)">No lessons yet. As the council ` +
+      `reviews completed experiments, its findings are appended to ` +
+      `<code>${esc(d.path || 'lessons.md')}</code> and shown here. Each ` +
+      `entry also gets fed back into every future review, so insights ` +
+      `compound over time.</p>`;
+    return;
+  }
+  // newest first
+  const rows = items.slice().reverse().map(L => {
+    const evidence = (L.evidence || []).map(r =>
+      `<button class="evchip" data-run="${esc(r)}">${esc(r)}</button>`
+    ).join('');
+    return `<div class="lesson">
+      <div class="lesson-hd">
+        <span class="lesson-ts mono">${esc(L.ts)}</span>
+        <span class="lesson-rev">${esc(L.reviewer)}</span>
+        <button class="evchip primary" data-run="${esc(L.supporting_run)}">
+          ${esc(L.supporting_run)}</button>
+      </div>
+      <div class="lesson-bd">${esc(L.text)}</div>
+      ${evidence ? `<div class="lesson-ev">also referenced: ${evidence}</div>` : ''}
+    </div>`;
+  }).join('');
+  wrap.innerHTML =
+    `<h2 style="margin:0 0 4px">Lessons learned <span style="color:var(--muted);font-size:12px;font-weight:500">(${items.length})</span></h2>` +
+    `<p style="color:var(--muted);margin:0 0 18px;font-size:12px">` +
+    `Auto-written by the council after each review. File: ` +
+    `<code class="mono">${esc(d.path || '')}</code>. Click a run chip to ` +
+    `open that experiment in the drawer.</p>` +
+    `<div class="lessons-list">${rows}</div>`;
+  // wire run chips → open drawer
+  wrap.querySelectorAll('.evchip').forEach(b => {
+    b.onclick = () => {
+      const target = b.dataset.run;
+      // Find the run by id OR run_name match
+      const run = (S.runs || []).find(r =>
+        r.id === target || r.run_name === target);
+      if (run) {
+        // we need to navigate back to dashboard for the drawer to render over it
+        S.view = 'dashboard'; render();
+        setTimeout(() => openDrawer(run.id), 80);
+      }
+    };
+  });
 }
 
 function renderLatex(c) {

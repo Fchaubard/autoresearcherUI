@@ -33,7 +33,7 @@ from pathlib import Path
 
 from .config import DATA_DIR, ROOT
 from .db import SessionLocal
-from .models import Event, Idea, Project, Run, Setting
+from .models import ChatMessage, Event, Gpu, Idea, Project, Run, Setting
 
 # ── env / keys ────────────────────────────────────────────────────────────
 _KEYS_PATH = ROOT / ".deploy" / "keys.env"
@@ -73,6 +73,16 @@ DEFAULTS = {
     "council_enable_gemini": True,
     "council_enable_openai": True,
     "council_enable_claude_tiebreaker": True,
+    # Per-run reviews are NOISY (they fire once per finished run and create
+    # constant queue churn). Default OFF; the strategic review (below) does
+    # the heavy lifting in batches.
+    "council_per_run_enabled": False,
+    # Strategic review: every N finished runs, take a step back and review
+    # the whole BATCH together. N=0 means 'use GPU count' (the agent
+    # typically runs one experiment per GPU in parallel, so this reviews
+    # one complete wave of parallel runs at a time).
+    "strategic_review_enabled": True,
+    "strategic_review_batch_n": 0,
 }
 
 
@@ -134,40 +144,58 @@ SYSTEM = """You are the senior scientific advisor on an autonomous ML research
 project. An autonomous agent just finished one experiment. Your job is to
 decide what the agent should do next so the next experiments are HIGH-VALUE.
 
-HARD RULES — violating these is a failure:
-- DO NOT recommend hyperparameter sweeps (lr / batch_size / weight_decay /
-  warmup grids) unless THIS run was clearly bottlenecked by an HP choice
-  (training diverged early, gradients exploded, schedule was obviously
-  miscalibrated). Boring HP grids are NOT research.
-- DO NOT recommend rerunning anything with a different random seed unless
-  the reported variance across existing runs is large enough that the result
-  is genuinely uncertain.
-- Each new idea must change ONE substantive thing — architecture, objective,
-  data regime, training procedure, evaluation, or a clearly motivated HP at
-  the edge of stability — with a one-line hypothesis WHY it might help.
-- Prefer experiments that, if they work, MOVE THE FRONTIER. Reject your own
-  safe / incremental ideas before you submit them.
-- Penalise repetition: if the recent runs already explored a direction
-  exhaustively, DROP that direction from the queue (veto it).
+GOAL: Maximize EV-per-GPU-hour. Steady measurable progress beats one
+ambitious bet that crashes. Stabilizing a working method (lr search,
+regularization tuning, careful scaling) IS valuable research — do not
+penalise it.
+
+PRINCIPLES:
+- A careful HP sweep IS the right next step when the data calls for it.
+  Specifically recommend it when:
+    * recent runs are CRASHING in correlated ways (e.g. many diverge at
+      the same lr, or all crashes share a config token),
+    * variance across nearby runs is so high the headline number is not
+      yet trustworthy,
+    * the agent is in an obviously miscalibrated regime (gradients
+      exploding, NaN, divergence in first 100 steps).
+  Be explicit about which HPs to sweep and at what values.
+- A seed re-run is fine when 1-2 noisy data points are blocking a real
+  conclusion. Don't recommend 5 seed re-runs; 2 is usually enough.
+- New ideas should still each change ONE substantive thing — architecture,
+  objective, data regime, training procedure, evaluation — with a one-line
+  hypothesis WHY it might help. Include concrete HP values where they
+  matter (lr=1e-4, bf16->fp32) so the agent doesn't fill in bad defaults.
+- Penalise repetition: if the prior-runs list already explored a direction
+  exhaustively, DROP that direction (veto pending entries on the same
+  theme).
+- PIVOT WHEN STUCK: If the project has been stagnant for >100 runs (no
+  new frontier improvement) and the current best is well short of the
+  project's purpose, say so explicitly in `learning` and propose a
+  fundamentally different approach in `new_ideas` — or recommend
+  revisiting the project's hypothesis itself.
 
 You return JSON ONLY, no prose around it, no markdown fence, matching:
 {
   "verdict": "kept" | "discarded" | "crashed" | "inconclusive",
-  "learning": "<2-4 sentences in plain English: what this run taught us>",
+  "learning": "<2-4 sentences: what this run taught us and what the data
+    suggests next. If recommending a pivot, say so clearly.>",
   "rerank_pending": ["<idea_id_best_next>", "<idea_id_2nd>", ...],
   "new_ideas": [
-    {"idea_id": "<snake_case_id>", "what": "<one line, concrete>",
+    {"idea_id": "<snake_case_id>", "what": "<one line, concrete — include
+       specific HP values if relevant, e.g. 'lr=1e-4, fp32, bs=64'>",
      "why": "<one line: a falsifiable hypothesis>"}
   ],
   "veto": ["<idea_id_to_drop>", ...]
 }
 
 - rerank_pending: ONLY existing pending idea_ids from the input, in the
-  order you want them tried (best first). Omit ones you'd skip — put them in
-  veto.
-- new_ideas: 0-3 entries. Quality over quantity. snake_case ids only.
-- learning: explain what the data shows, not what the agent did. Be specific
-  about the metric and direction."""
+  order you want them tried (best first). Omit ones you'd skip — put them
+  in veto.
+- new_ideas: 0-3 entries. Quality > quantity. snake_case ids only. Concrete
+  HP values where they matter; vague rewrappings of existing ideas are NOT
+  acceptable.
+- learning: explain what the data shows, not what the agent did. Be
+  specific about the metric and direction."""
 
 
 DEBATE_SYSTEM = SYSTEM + """
@@ -187,6 +215,58 @@ rounds of debate. Read both of their final positions and the run context,
 then make the final call. Return the same JSON schema as the reviewers
 (verdict, learning, rerank_pending, new_ideas, veto). In "learning", briefly
 explain which reviewer you sided with and why. Be decisive — no hedging."""
+
+
+STRATEGIC_SYSTEM = """You are the senior scientific advisor on an autonomous
+ML research project. The agent has just finished a BATCH of N parallel
+experiments (one per GPU). Your job is not to micro-review each one but
+to step back and decide what the AGENT SHOULD DO NEXT — a strategic call
+on the whole project trajectory, based on this batch + all prior history.
+
+GOAL: Maximize EV-per-GPU-hour. Boring is fine if it consolidates a
+result. Stabilizing a working method (lr search, regularization,
+careful scaling) is real research. Spicy ideas that crash are not.
+
+WHAT TO LOOK FOR IN THIS BATCH:
+- Is the project's frontier moving, or has the best metric been flat for
+  a long time? Look at the all-prior-runs list.
+- Are crashes clustering on the same config token (lr=5e-4, bf16,
+  ensemble_n=k..)? If yes, the next move is to FIX that token, not to
+  abandon the direction.
+- Is the agent following the council's prior recommendations, or doing
+  its own thing? If the council's last N proposals all crashed, OWN that
+  — admit the council steered into a dead end and recalibrate.
+- Are there ideas in the queue that are already strictly subsumed by
+  finished runs? Veto them.
+
+YOU CAN AND SHOULD RECOMMEND:
+- A focused HP sweep (e.g. lr in {1e-5, 3e-5, 1e-4, 3e-4}, fp32) when
+  crashes are clearly HP-driven.
+- Stopping a dead direction. If after 100+ runs in some direction nothing
+  has moved, say so.
+- A pivot to a different research direction or a re-examination of the
+  project's hypothesis if the data strongly suggests the hypothesis is
+  not supported.
+
+JSON ONLY, no markdown, schema:
+{
+  "verdict": "progress" | "stagnant" | "regressing",
+  "learning": "<3-6 sentences: state of the project, what this batch
+    showed, and what you recommend next (concrete HPs / direction).
+    If recommending a pivot or abandoning a direction, say so.>",
+  "rerank_pending": ["<idea_id_best_next>", ...],
+  "new_ideas": [
+    {"idea_id": "<snake_case>", "what": "<concrete with HP values>",
+     "why": "<falsifiable hypothesis>"}
+  ],
+  "veto": ["<idea_id_to_drop>", ...],
+  "pivot": {"recommend": true|false, "to_what": "<one-line direction>"}
+}
+
+- rerank_pending: ONLY existing pending idea_ids, best first.
+- new_ideas: 0-5 entries. Concrete HP values where relevant.
+- pivot: only set recommend=true if the data strongly supports it (>100
+  flat runs, or this project's hypothesis is materially contradicted)."""
 
 
 # ── context bundle ────────────────────────────────────────────────────────
@@ -679,11 +759,243 @@ def deliberate(run_id: str) -> dict | None:
 
 
 # ── persistence + ideas.md surgery (unchanged interface) ─────────────────
-def review_async(run_id: str) -> bool:
-    """Fire-and-forget background debate. Idempotent per run, rate-limited
-    per idea_id, and globally capped to _GLOBAL_MAX_CONCURRENT in-flight."""
+# ── strategic review (batch) ─────────────────────────────────────────────
+# Counter of runs finished since the last strategic review. The api layer
+# bumps this on every track/finish; when it crosses the threshold we trigger
+# one strategic review on the WHOLE BATCH.
+_BATCH_LOCK = threading.Lock()
+_BATCH_FINISHED_RUN_IDS: list[str] = []
+_BATCH_INFLIGHT = False
+
+
+def _gpu_count() -> int:
+    db = SessionLocal()
+    try:
+        return db.query(Gpu).count() or 1
+    finally:
+        db.close()
+
+
+def _strategic_threshold(cfg: dict) -> int:
+    n = int(cfg.get("strategic_review_batch_n") or 0)
+    return n if n > 0 else max(_gpu_count(), 1)
+
+
+def note_run_finished(run_id: str) -> bool:
+    """Called by api.track_finish for every run that lands. Adds the run to
+    the strategic-review batch and, if the batch is full, kicks off the
+    strategic review. Returns True if a strategic review was triggered.
+    Per-run reviews can be enabled separately in Settings."""
     cfg = _settings()
     if not _available_reviewers(cfg):
+        return False
+    if not cfg.get("strategic_review_enabled", True):
+        return False
+    global _BATCH_INFLIGHT
+    threshold = _strategic_threshold(cfg)
+    with _BATCH_LOCK:
+        _BATCH_FINISHED_RUN_IDS.append(run_id)
+        if _BATCH_INFLIGHT or len(_BATCH_FINISHED_RUN_IDS) < threshold:
+            return False
+        batch = list(_BATCH_FINISHED_RUN_IDS)
+        _BATCH_FINISHED_RUN_IDS.clear()
+        _BATCH_INFLIGHT = True
+    threading.Thread(target=_strategic_worker, args=(batch,), daemon=True,
+                     name=f"council-strategic-{len(batch)}").start()
+    return True
+
+
+def _strategic_worker(batch_run_ids: list[str]) -> None:
+    global _BATCH_INFLIGHT
+    try:
+        # Only ONE strategic review at a time across the process (cheap
+        # protection against runaway cost).
+        if not _GLOBAL_SEMAPHORE.acquire(blocking=False):
+            print("[council/strategic] busy — skipping this batch",
+                  flush=True)
+            return
+        try:
+            review = strategic_review(batch_run_ids)
+            if not review:
+                return
+            # Persist a single Event + ChatMessage so the UI shows it,
+            # apply rerank/new ideas to ideas.md, and write learning to
+            # lessons.md.
+            _persist_strategic(batch_run_ids, review)
+            _apply_to_ideas_md(review)
+        finally:
+            _GLOBAL_SEMAPHORE.release()
+    finally:
+        with _BATCH_LOCK:
+            _BATCH_INFLIGHT = False
+
+
+def _build_strategic_context(batch_run_ids: list[str]) -> dict | None:
+    db = SessionLocal()
+    try:
+        proj = db.query(Project).first()
+        if not proj:
+            return None
+        batch = [db.query(Run).filter(Run.id == rid).first()
+                 for rid in batch_run_ids]
+        batch = [r for r in batch if r is not None]
+        if not batch:
+            return None
+        every_run = db.query(Run).all()
+        frontier = _frontier_ids(every_run)
+        ideas = db.query(Idea).filter(Idea.id.like("deck-%")).all()
+        maximize = proj.metric_direction == "maximize"
+
+        others = [r for r in every_run if r.id not in {r2.id for r2 in batch}]
+
+        def _key(r):
+            on_front = r.id in frontier
+            is_crash = (r.status == "crashed")
+            return (0 if on_front else (1 if is_crash else 2),
+                    r.created_at or "")
+        others.sort(key=_key)
+        run_lines = [_compact_one_line(r, frontier, maximize) for r in others]
+        run_lines_text = "\n".join(run_lines)[:24000]
+        stats = _aggregate_stats(every_run, proj)
+
+        return {
+            "project": {
+                "name": proj.name, "purpose": proj.purpose,
+                "metric": proj.validation_metric,
+                "direction": proj.metric_direction,
+                "baseline_metric": getattr(proj, "baseline_metric", None),
+            },
+            "batch": [
+                {
+                    "id": r.id, "name": r.run_name, "status": r.status,
+                    "headline_metric": r.headline_metric,
+                    "baseline_delta": r.baseline_delta,
+                    "config": r.config if isinstance(r.config, dict) else {},
+                }
+                for r in batch
+            ],
+            "aggregate": stats,
+            "all_prior_runs_count": len(others),
+            "all_prior_runs_oneliners": run_lines_text,
+            "pending_ideas": [
+                {"idea_id": i.idea_id, "what": i.description}
+                for i in ideas
+            ][:30],
+            "pending_total_count": len(ideas),
+            "lessons_so_far": _read_lessons(max_chars=6000),
+        }
+    finally:
+        db.close()
+
+
+def _strategic_ctx_text(ctx: dict) -> str:
+    runs_block = ctx.pop("all_prior_runs_oneliners", "") or "(none)"
+    lessons_block = ctx.pop("lessons_so_far", "").strip() or "(none yet)"
+    return (
+        "You are doing a STRATEGIC review of a BATCH of recent runs (one "
+        "wave of parallel experiments). Step back: look at the WHOLE "
+        "project trajectory, this batch's results, and recommend the next "
+        "research move. Return JSON per schema.\n\n"
+        "=== LESSONS LEARNED SO FAR (your prior reviews) ===\n"
+        + lessons_block + "\n\n"
+        f"=== ALL PRIOR RUNS ({ctx.get('all_prior_runs_count', 0)} total — "
+        "frontier-movers ★ first, then crashed) ===\n"
+        "status    metric   run_id                              what\n"
+        + runs_block + "\n\n"
+        "=== STRUCTURED CONTEXT (project / this batch / aggregate / pending)"
+        " ===\n" + json.dumps(ctx, indent=2, default=str))
+
+
+def strategic_review(batch_run_ids: list[str]) -> dict | None:
+    """Run ONE expert through the strategic-review prompt over a batch.
+    Strategic reviews don't debate — they're already a 'reflection' call
+    that asks the model to look at the whole trajectory at once. We pick
+    the highest-quality reviewer available (claude > openai > gemini)
+    since the call only fires every N runs and we want the best judgment."""
+    cfg = _settings()
+    available = _available_reviewers(cfg)
+    if not available:
+        return None
+    # Prefer claude for strategic if we have it, else openai, else gemini.
+    if "claude" in available:
+        reviewer = "claude"
+    elif "openai" in available:
+        reviewer = "openai"
+    else:
+        reviewer = available[0]
+    ctx = _build_strategic_context(batch_run_ids)
+    if not ctx:
+        return None
+    user = _strategic_ctx_text(ctx)
+    print(f"[council/strategic] running {reviewer} over batch of "
+          f"{len(batch_run_ids)} runs", flush=True)
+    out = _call_reviewer(reviewer, STRATEGIC_SYSTEM, user, cfg)
+    if not out:
+        return None
+    out["scope"] = "strategic"
+    out["batch_run_ids"] = batch_run_ids
+    out["reviewer"] = reviewer + " (strategic)"
+    return out
+
+
+def _persist_strategic(batch_run_ids: list[str], review: dict) -> None:
+    """Persist a strategic review: write a ChatMessage + Event so it's
+    visible in the Summary feed, append the learning to lessons.md, and
+    mark each batch run's config['strategic_review_id']."""
+    db = SessionLocal()
+    learning = (review.get("learning") or "").strip()
+    pivot = review.get("pivot") or {}
+    rev_id = "rv-" + os.urandom(4).hex()
+    try:
+        # tag each run with the strategic_review's id
+        for rid in batch_run_ids:
+            r = db.query(Run).filter(Run.id == rid).first()
+            if not r:
+                continue
+            cfg = dict(r.config) if isinstance(r.config, dict) else {}
+            cfg["strategic_review_id"] = rev_id
+            cfg["strategic_review"] = review
+            r.config = cfg
+        msg = (f"[Strategic review · {review.get('reviewer')}] "
+               + (learning or "(no learning)"))[:1200]
+        if pivot.get("recommend"):
+            msg = (f"[Strategic review — RECOMMENDING PIVOT to: "
+                   f"{pivot.get('to_what', '?')}]  ") + (learning or "")
+        db.add(ChatMessage(id="cm-" + os.urandom(4).hex(),
+                           role="agent", content=msg, created_at=_iso()))
+        db.add(Event(id="ev-" + os.urandom(4).hex(),
+                     type="strategic_review", severity="info",
+                     actor="council:" + (review.get("reviewer") or "?"),
+                     message=learning[:280] or "Strategic review completed",
+                     created_at=_iso()))
+        db.commit()
+    finally:
+        db.close()
+    try:
+        _append_lesson(
+            reviewer=(review.get("reviewer") or "strategic"),
+            run_name=f"batch of {len(batch_run_ids)} runs",
+            learning=learning)
+    except Exception as e:                              # noqa: BLE001
+        print(f"[council/strategic] _append_lesson failed: {e}", flush=True)
+    try:
+        from .bus import bus
+        bus.publish("events", "runs_changed", {})
+    except Exception:
+        pass
+
+
+def review_async(run_id: str) -> bool:
+    """Fire-and-forget background debate. Idempotent per run, rate-limited
+    per idea_id, and globally capped to _GLOBAL_MAX_CONCURRENT in-flight.
+
+    Per-run reviews are GATED on council_per_run_enabled (default False
+    after the strategic-review redesign); the strategic batch review does
+    the heavy lifting."""
+    cfg = _settings()
+    if not _available_reviewers(cfg):
+        return False
+    if not cfg.get("council_per_run_enabled", False):
         return False
     if not _worth_reviewing(run_id):
         return False
