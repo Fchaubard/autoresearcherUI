@@ -20,8 +20,11 @@ from . import (archive, authkeys, metrics, monitor, notify, orchestrator,
 from .bus import bus
 from .config import DATA_DIR, ROOT
 from .db import Base, SessionLocal, engine, get_session
-from .models import (ChatMessage, Event, Gpu, Idea, JournalEntry, Project,
-                     Run, Setting)
+from .models import (ChatMessage, Event, Gpu, Idea, JournalEntry,
+                     ModeHistory, PaperBaseline, PaperBudgetEvent,
+                     PaperCitation, PaperClaim, PaperDecision, PaperFigure,
+                     PaperMeta, PaperProposal, PaperReviewSim, PaperSection,
+                     PaperVersion, Project, Run, Setting)
 
 router = APIRouter(prefix="/api")
 _rng = random.Random()
@@ -936,6 +939,514 @@ async def extra_nodes_check(request: Request):
         except Exception as e:                          # noqa: BLE001
             out.append({"target": host, "ok": False, "error": str(e)[:200]})
     return {"results": out}
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Paper Mode endpoints (doc 13). Mode flip + proposal + state + decisions
+# + sections + versions + reviewer-sim + submit. Research mode is unaware
+# of any of these.
+# ════════════════════════════════════════════════════════════════════════
+
+
+@router.get("/mode")
+def get_mode(db: Session = Depends(get_session)):
+    """Current project mode plus minimal paper meta for the header pill."""
+    from . import paper as _paper
+    mode = _paper.project_mode()
+    meta_row = db.query(PaperMeta).first() if mode == "paper" else None
+    return {
+        "mode": mode,
+        "meta": meta_row.dict() if meta_row else None,
+        "days_till_deadline": _paper.days_till_deadline(),
+        "budget": _paper.budget_summary() if mode == "paper" else None,
+    }
+
+
+@router.post("/paper/proposal/start")
+async def paper_proposal_start():
+    """Create a paper_proposal row, kick off council assessments
+    asynchronously. Returns immediately with the proposal id."""
+    from . import paper as _paper, council as _c
+    pid = "pp-" + os.urandom(5).hex()
+    db = SessionLocal()
+    try:
+        db.add(PaperProposal(id=pid, status="in_progress",
+                              council_responses={}))
+        db.commit()
+    finally:
+        db.close()
+    # Spawn a background thread that runs ONE reviewer per available
+    # provider in parallel and aggregates into the proposal row.
+    threading.Thread(
+        target=_run_paper_proposal_council,
+        args=(pid,), daemon=True,
+        name=f"paper-proposal-{pid}").start()
+    return {"proposal_id": pid, "status": "in_progress"}
+
+
+def _run_paper_proposal_council(proposal_id: str) -> None:
+    from . import council as _c, paper as _paper
+    cfg = _c._settings()
+    available = _c._available_reviewers(cfg)
+    if _c._claude_available(cfg) and "claude" not in available:
+        available.append("claude")
+    if not available:
+        db = SessionLocal()
+        try:
+            p = db.query(PaperProposal).filter(
+                PaperProposal.id == proposal_id).first()
+            if p:
+                p.status = "ready"
+                p.council_responses = {"_no_reviewers":
+                    "No council reviewers configured. Add API keys in Settings."}
+                db.commit()
+        finally:
+            db.close()
+        return
+    # Build the context once
+    db = SessionLocal()
+    try:
+        proj = db.query(Project).first()
+        # lessons
+        try:
+            lessons_path = _paper.paper_folder(db)
+            lessons_path = (lessons_path.parent / "lessons.md"
+                            if lessons_path else None)
+            lessons = lessons_path.read_text(errors="ignore") \
+                if lessons_path and lessons_path.exists() else ""
+        except Exception:
+            lessons = ""
+        # frontier
+        every = db.query(Run).all()
+        frontier_ids = _c._frontier_ids(every)
+        kept = [r for r in every if r.id in frontier_ids]
+        # aggregate
+        agg = _c._aggregate_stats(every, proj) if proj else {}
+    finally:
+        db.close()
+    context = {
+        "project": {"name": proj.name if proj else "",
+                    "purpose": proj.purpose if proj else "",
+                    "metric": proj.validation_metric if proj else "",
+                    "direction": proj.metric_direction if proj else ""},
+        "lessons_md": (lessons or "")[-8000:],
+        "frontier_runs": [{"id": r.id, "name": r.run_name,
+                            "metric": r.headline_metric,
+                            "config": r.config if isinstance(r.config, dict) else {}}
+                           for r in kept[-30:]],
+        "aggregate": agg,
+    }
+    user = ("You are being asked the central question of paper-writing:\n"
+            "**Is this research ready to write up?**\n\n"
+            "Read everything below and return JSON ONLY matching:\n"
+            "{ \"claims\": [{\"title\":..., \"summary\":..., "
+            "\"evidence_strength\":\"strong|suggestive|anecdotal\"}], "
+            "\"novelty\":\"high|medium|low|unclear\","
+            "\"novelty_rationale\":\"...\","
+            "\"red_flags\": [\"...\"],"
+            "\"recommendation\":\"proceed_to_paper|keep_researching|pivot\","
+            "\"rationale_md\":\"...\" }\n\nBe honest. Reviewers will see "
+            "through hype. If novelty is unclear, say so.\n\n"
+            "=== PROJECT CONTEXT ===\n"
+            + json.dumps(context, indent=2, default=str))
+    results: dict[str, dict] = {}
+    threads = []
+    def _one(rev):
+        out = _c._call_reviewer(
+            rev,
+            "You are a senior reviewer for an ML conference (NeurIPS-tier). "
+            "Assess whether the project below is ready to write up as a paper.",
+            user, cfg)
+        if out is not None:
+            results[rev] = out
+    for rev in available:
+        t = threading.Thread(target=_one, args=(rev,), daemon=True)
+        t.start(); threads.append(t)
+    for t in threads:
+        t.join(timeout=300)
+    db = SessionLocal()
+    try:
+        p = db.query(PaperProposal).filter(
+            PaperProposal.id == proposal_id).first()
+        if p:
+            p.status = "ready"
+            p.council_responses = results
+            db.commit()
+    finally:
+        db.close()
+    try:
+        bus.publish("paper", "proposal_ready", {"id": proposal_id})
+    except Exception:
+        pass
+
+
+@router.get("/paper/proposal/{pid}")
+def paper_proposal_get(pid: str, db: Session = Depends(get_session)):
+    p = db.query(PaperProposal).filter(PaperProposal.id == pid).first()
+    return p.dict() if p else {}
+
+
+@router.get("/paper/proposal/latest")
+def paper_proposal_latest(db: Session = Depends(get_session)):
+    p = (db.query(PaperProposal).order_by(
+         PaperProposal.created_at.desc()).first())
+    return p.dict() if p else {}
+
+
+@router.post("/paper/enter")
+async def paper_enter(request: Request):
+    """Flip to paper mode. Body: {meta: {venue, deadline_iso, authors, ...},
+    proposal_id}. Spawns Author Agent + Paper Runner + writes mode_history."""
+    from . import paper as _paper
+    from . import author_agent
+    from . import paper_runner
+    body = await request.json()
+    meta = body.get("meta") or {}
+    proposal_id = body.get("proposal_id") or ""
+    if _paper.project_mode() == "paper":
+        return {"status": "already_in_paper_mode"}
+    db = SessionLocal()
+    try:
+        # write PaperMeta
+        m = db.query(PaperMeta).first()
+        if not m:
+            m = PaperMeta(id="pm-" + os.urandom(4).hex(),
+                          venue=meta.get("venue") or "NeurIPS 2026",
+                          style_id=meta.get("style_id") or "neurips_2025",
+                          deadline_iso=meta.get("deadline_iso") or "",
+                          anonymize=bool(meta.get("anonymize", True)),
+                          authors_json=meta.get("authors") or [],
+                          gpu_budget_hours=float(meta.get("gpu_budget_hours")
+                                                  or 800),
+                          llm_budget_daily_usd=float(
+                              meta.get("llm_budget_daily_usd") or 20),
+                          title_preference=meta.get("title_preference")
+                                          or "auto",
+                          phase="scaffold")
+            db.add(m)
+        else:
+            for k, v in meta.items():
+                if v is None:
+                    continue
+                if hasattr(m, k):
+                    setattr(m, k, v)
+            m.phase = "scaffold"
+        # mode_history snapshot of current state
+        db.add(ModeHistory(
+            id="mh-" + os.urandom(4).hex(),
+            from_mode="research", to_mode="paper",
+            reason_md="user accepted paper proposal",
+            snapshot_json={"proposal_id": proposal_id}))
+        db.commit()
+    finally:
+        db.close()
+    _paper.set_project_mode("paper")
+    # Spawn agent + runner. Author Agent reads the proposal.
+    ar = author_agent.start(proposal_id=proposal_id)
+    paper_runner.start()
+    return {"status": "entered_paper_mode", "author_agent": ar}
+
+
+@router.post("/paper/revert")
+async def paper_revert(request: Request):
+    """Flip back to research mode. Body: {reason}. Kills Author Agent,
+    pauses paper_runs, captures Paper Snapshot."""
+    from . import paper as _paper
+    from . import author_agent
+    body = await request.json()
+    reason = (body.get("reason") or "").strip()
+    if not reason or len(reason) < 5:
+        return {"status": "error",
+                "detail": "reason required (1+ sentence)"}
+    snap = _paper.take_snapshot()
+    db = SessionLocal()
+    try:
+        db.add(ModeHistory(
+            id="mh-" + os.urandom(4).hex(),
+            from_mode="paper", to_mode="research",
+            reason_md=reason, snapshot_json=snap))
+        # Pause running paper_runs
+        for r in db.query(Run).filter(
+                Run.context == "paper",
+                Run.status.in_(("running", "queued"))).all():
+            if r.status == "running":
+                r.status = "paused"
+        meta = db.query(PaperMeta).first()
+        if meta:
+            meta.phase = "archived"
+        db.commit()
+    finally:
+        db.close()
+    author_agent.stop()
+    _paper.set_project_mode("research")
+    bus.publish("paper", "mode_reverted", {"reason": reason})
+    return {"status": "reverted"}
+
+
+@router.get("/paper/state")
+def paper_state(db: Session = Depends(get_session)):
+    """Single payload: meta, claims, figures, paper_runs, sections,
+    decisions(pending), versions, citations, budget, build_status."""
+    from . import paper as _paper, paper_compile
+    meta = db.query(PaperMeta).first()
+    claims = [c.dict() for c in db.query(PaperClaim).order_by(
+        PaperClaim.idx).all()]
+    figures = [f.dict() for f in db.query(PaperFigure).all()]
+    paper_runs = [r.dict() for r in db.query(Run).filter(
+        Run.context == "paper").all()]
+    sections = [s.dict() for s in db.query(PaperSection).all()]
+    decisions = [d.dict() for d in db.query(PaperDecision).filter(
+        PaperDecision.status == "pending").order_by(
+        PaperDecision.priority.desc(),
+        PaperDecision.created_at.asc()).all()]
+    versions = [v.dict() for v in db.query(PaperVersion).order_by(
+        PaperVersion.created_at.desc()).all()]
+    citations = [c.dict() for c in db.query(PaperCitation).all()]
+    return {
+        "mode": _paper.project_mode(),
+        "meta": meta.dict() if meta else None,
+        "claims": claims, "figures": figures, "paper_runs": paper_runs,
+        "sections": sections, "decisions": decisions,
+        "versions": versions, "citations": citations,
+        "budget": _paper.budget_summary(),
+        "build_status": paper_compile.status(),
+        "days_till_deadline": _paper.days_till_deadline(),
+    }
+
+
+@router.get("/paper/today")
+def paper_today(db: Session = Depends(get_session)):
+    """The Today view's content (more compact than /paper/state)."""
+    from . import paper as _paper, paper_compile
+    decisions = [d.dict() for d in db.query(PaperDecision).filter(
+        PaperDecision.status == "pending").order_by(
+        PaperDecision.priority.desc(),
+        PaperDecision.created_at.asc()).limit(20).all()]
+    running = [r.dict() for r in db.query(Run).filter(
+        Run.context == "paper",
+        Run.status == "running").all()]
+    sections = [s.dict() for s in db.query(PaperSection).all()]
+    folder = _paper.paper_folder(db)
+    commits = _paper.list_commits(folder, limit=8) if folder else []
+    # last-N completed paper_runs for the "overnight" line
+    recent = (db.query(Run).filter(
+        Run.context == "paper",
+        Run.status.in_(("kept", "success", "done", "crashed", "failed")))
+        .order_by(Run.ended_at.desc()).limit(15).all())
+    return {
+        "mode": _paper.project_mode(),
+        "decisions": decisions,
+        "running_runs": running,
+        "recent_runs": [r.dict() for r in recent],
+        "sections": sections,
+        "commits": commits,
+        "budget": _paper.budget_summary(),
+        "days_till_deadline": _paper.days_till_deadline(),
+        "build_status": paper_compile.status(),
+    }
+
+
+@router.get("/paper/decisions")
+def paper_decisions(status: str = "pending",
+                    db: Session = Depends(get_session)):
+    q = db.query(PaperDecision)
+    if status and status != "all":
+        q = q.filter(PaperDecision.status == status)
+    rows = q.order_by(PaperDecision.priority.desc(),
+                      PaperDecision.created_at.asc()).all()
+    return {"decisions": [d.dict() for d in rows]}
+
+
+@router.post("/paper/decisions/{did}/resolve")
+async def paper_decision_resolve(did: str, request: Request):
+    from . import paper as _paper
+    body = await request.json()
+    action = body.get("action") or "approve"
+    note = body.get("note") or ""
+    ok = _paper.resolve_decision(did, action=action, note=note)
+    return {"ok": bool(ok)}
+
+
+@router.post("/paper/recompile")
+async def paper_recompile(request: Request):
+    from . import paper_compile
+    body = await request.json() if request.headers.get("content-length") else {}
+    force = bool(body.get("force"))
+    status = paper_compile.build(force=force)
+    return status
+
+
+@router.get("/paper/pdf")
+def paper_pdf():
+    from . import paper_compile
+    data = paper_compile.pdf_bytes()
+    if not data:
+        return {"ok": False, "detail": "no pdf yet"}
+    from fastapi.responses import Response
+    return Response(content=data, media_type="application/pdf")
+
+
+@router.get("/paper/build_log")
+def paper_build_log():
+    from . import paper_compile
+    return paper_compile.status()
+
+
+@router.get("/paper/tex")
+def paper_tex(db: Session = Depends(get_session)):
+    """Concatenated main.tex + sections/*.tex for the LaTeX viewer.
+    Marks per-file boundaries so the frontend can split them."""
+    from . import paper as _paper
+    folder = _paper.paper_folder(db)
+    if not folder or not (folder / "main.tex").exists():
+        return {"files": []}
+    files = []
+    for p in [folder / "main.tex"] + sorted(folder.glob("sections/*.tex")):
+        try:
+            text = p.read_text(errors="ignore")
+        except OSError:
+            text = ""
+        files.append({"path": str(p.relative_to(folder)), "content": text,
+                       "user_owned": p.name.endswith(".user.tex")})
+    return {"files": files}
+
+
+@router.post("/paper/section/save")
+async def paper_section_save(request: Request):
+    """Persist a *.user.tex override file (the only kind of LaTeX edit
+    we accept from the user in v1)."""
+    from . import paper as _paper
+    body = await request.json()
+    path = body.get("path") or ""
+    content = body.get("content") or ""
+    if not path.endswith(".user.tex"):
+        return {"ok": False, "detail":
+                "only *.user.tex files are user-editable in v1"}
+    folder = _paper.paper_folder()
+    if not folder:
+        return {"ok": False, "detail": "no paper folder"}
+    target = (folder / path).resolve()
+    if not str(target).startswith(str(folder.resolve())):
+        return {"ok": False, "detail": "path traversal"}
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content)
+    _paper.commit_paper_changes(folder, f"user edit: {path}",
+                                author="Researcher")
+    return {"ok": True}
+
+
+@router.post("/paper/lit/search")
+async def paper_lit_search(request: Request):
+    from . import lit_agent
+    body = await request.json()
+    q = (body.get("query") or "").strip()
+    if not q:
+        return {"results": []}
+    return {"results": lit_agent.search(q, limit=int(body.get("limit", 15)))}
+
+
+@router.post("/paper/lit/auto_discover")
+async def paper_lit_auto():
+    from . import lit_agent
+    n = lit_agent.auto_discover_for_claims(max_per_claim=5)
+    return {"filed": n}
+
+
+@router.get("/paper/versions")
+def paper_versions(db: Session = Depends(get_session)):
+    rows = db.query(PaperVersion).order_by(
+        PaperVersion.created_at.desc()).all()
+    return {"versions": [v.dict() for v in rows]}
+
+
+@router.post("/paper/versions/pin")
+async def paper_versions_pin(request: Request):
+    from . import paper as _paper
+    body = await request.json()
+    label = (body.get("label") or "").strip() or \
+        ("v-" + dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M"))
+    snap = _paper.take_snapshot()
+    folder = _paper.paper_folder()
+    sha = (_paper._run_git(folder, "rev-parse", "HEAD") if folder
+            and (folder / ".git").exists() else "")
+    vid = "pv-" + os.urandom(4).hex()
+    db = SessionLocal()
+    try:
+        db.add(PaperVersion(
+            id=vid, label=label, latex_commit_sha=sha,
+            snapshot_json=snap, claims_summary_md=""))
+        db.commit()
+    finally:
+        db.close()
+    return {"id": vid, "label": label, "sha": sha}
+
+
+@router.post("/paper/reviewer_sim/run")
+async def paper_reviewer_sim_run():
+    """Council role-plays venue reviewers on the current paper. Returns
+    immediately; results land in paper_review_sim rows asynchronously."""
+    threading.Thread(target=_run_reviewer_sim, daemon=True,
+                     name="reviewer-sim").start()
+    return {"status": "started"}
+
+
+def _run_reviewer_sim():
+    """Each council reviewer reads the current paper and emits a fake
+    review with suggested defensive ablations as decisions."""
+    from . import council as _c, paper as _paper, paper_compile
+    cfg = _c._settings()
+    available = _c._available_reviewers(cfg)
+    if not available:
+        return
+    folder = _paper.paper_folder()
+    if not folder:
+        return
+    # Read the current paper.
+    tex = ""
+    for p in [folder / "main.tex"] + sorted(folder.glob("sections/*.tex")):
+        try:
+            tex += f"\n\n% === {p.name} ===\n" + p.read_text(errors="ignore")
+        except OSError:
+            pass
+    if not tex.strip():
+        return
+    prompt = (
+        "You are a strict, skeptical NeurIPS-tier reviewer. Read the paper "
+        "below and write your honest review. Find weaknesses, missing "
+        "experiments, and unconvincing claims. Output JSON ONLY:\n"
+        "{\"strengths\":[\"...\"], \"weaknesses\":[\"...\"], "
+        "\"questions\":[\"...\"], \"score\":1-10, "
+        "\"suggested_ablations\":[{\"title\":\"\",\"why\":\"\","
+        "\"est_gpu_hours\":0,\"target_claim\":\"\"}]}\n\n=== PAPER ===\n"
+        + tex[:60000])
+    for rev in available:
+        out = _c._call_reviewer(
+            rev,
+            "You are a strict NeurIPS reviewer. Be honest, not polite.",
+            prompt, cfg)
+        if not out:
+            continue
+        sid = "rs-" + os.urandom(4).hex()
+        db = SessionLocal()
+        try:
+            db.add(PaperReviewSim(
+                id=sid, model=rev,
+                content_md=json.dumps(out, indent=2),
+                suggested_decisions_json=out.get("suggested_ablations", [])))
+            db.commit()
+        finally:
+            db.close()
+        # File a decision per suggested ablation
+        for sa in (out.get("suggested_ablations") or [])[:5]:
+            _paper.file_decision(
+                source="reviewer_sim", kind="add_ablation",
+                title=f"[{rev}] Add ablation: {sa.get('title','')[:80]}",
+                body_md=(f"**Why (reviewer):** {sa.get('why','')}\n\n"
+                         f"**Targets claim:** {sa.get('target_claim','')}\n\n"
+                         f"**Est GPU-hours:** {sa.get('est_gpu_hours','?')}"),
+                default_action="approve",
+                priority=8)
+    bus.publish("paper", "reviewer_sim_finished", {})
 
 
 @router.get("/lessons")

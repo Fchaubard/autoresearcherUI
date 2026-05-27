@@ -14,7 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .app import monitor, notify, orchestrator, pi
+from .app import monitor, notify, orchestrator, pi, paper_runner
 from .app.api import router
 from .app.config import AUTORUN, HOST, PORT, ROOT, STATIC_DIR
 from .app.db import SessionLocal, init_db
@@ -27,6 +27,7 @@ async def lifespan(app: FastAPI):
     notify.start_scheduler()          # periodic email digests (cadence-driven)
     monitor.start()                   # gpu telemetry + run reconciliation
     pi.start()                        # hourly PI oversight cycle
+    paper_runner.start()              # paper-mode ablation scheduler
     if AUTORUN:
         db = SessionLocal()
         has_project = db.query(Project).first() is not None
