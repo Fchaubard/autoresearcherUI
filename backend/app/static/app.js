@@ -340,13 +340,16 @@ function toggleMenu() {
     m.append(it);
   });
   m.append(el('div', 'menu-spacer'));
+  const set = el('button', 'menu-item',
+    `<span class="menu-ic">⚙</span><span>Settings</span>`);
+  set.onclick = () => { closeMenu(); openSettings(); };
   const arc = el('button', 'menu-item',
     `<span class="menu-ic">⤓</span><span>Archive</span>`);
   arc.onclick = () => { closeMenu(); openArchive(); };
   const rst = el('button', 'menu-item danger',
     `<span class="menu-ic">⟲</span><span>Reset</span>`);
   rst.onclick = () => { closeMenu(); resetAll(); };
-  m.append(arc, rst);
+  m.append(set, arc, rst);
   document.body.append(scrim, m);
   requestAnimationFrame(() => {
     scrim.classList.add('open'); m.classList.add('open');
@@ -448,7 +451,7 @@ function rail() {
   mountRailResize(grip);
   r.append(grip);
   const tabs = el('div', 'rail-tabs');
-  [['summary', 'Summary'], ['live', 'Live'],
+  [['summary', 'Summary'], ['live', 'Research agent'],
    ['sessions', 'Sessions']].forEach(([k, lbl]) => {
     const b = el('button', 'rail-tab' + (S.railTab === k ? ' on' : ''), lbl);
     b.dataset.tab = k;
@@ -845,23 +848,40 @@ const REVIEWER_META = {
   claude: { lbl: 'Claude',  color: '#D97757' },
 };
 
+function _runTime(r) {
+  // Best-effort 'when did this experiment finish/start' for sort + display.
+  return r.ended_at || r.started_at || r.created_at || '';
+}
+
+function _reviewerLabel(rev) {
+  if (!rev) return { lbl: '?', color: '#9CA3AF' };
+  for (const k of Object.keys(REVIEWER_META)) {
+    if (String(rev).toLowerCase().includes(k)) return REVIEWER_META[k];
+  }
+  return { lbl: rev, color: '#A78BFA' };
+}
+
 function ideaCard(run) {
   const sm = STATUS_META[run.status] || STATUS_META.queued;
   const cfg = run.config || {};
   const what = (cfg.what || cfg.description || cfg.hypothesis || '').toString().trim();
   const why = (cfg.why || '').toString().trim();
   const review = (cfg.review && typeof cfg.review === 'object') ? cfg.review : null;
+  const reviews = (cfg.reviews && typeof cfg.reviews === 'object') ? cfg.reviews : null;
   const metric = run.headline_metric;
   const delta = run.baseline_delta;
   const isBaseline = run.is_baseline;
+  const t = _runTime(run);
   const card = el('div', 'icard');
+  card.dataset.runId = run.id;
   // header row: icon + title + chips
   const hd = el('div', 'icard-hd');
   hd.innerHTML =
     `<div class="icard-ic ${sm.cls}">${sm.ic}</div>` +
     `<div class="icard-ti">` +
       `<div class="icard-name">${esc(run.run_name || run.id)}</div>` +
-      `<div class="icard-sub">${esc(ago(run.ended_at || run.created_at))}` +
+      `<div class="icard-sub" title="${esc(t)}">` +
+        `${esc(t ? ago(t) : '—')}` +
         (isBaseline ? ' · <b>baseline</b>' : '') + `</div>` +
     `</div>` +
     `<div class="icard-mt">` +
@@ -883,22 +903,45 @@ function ideaCard(run) {
     if (why)  bd.append(el('div', 'icard-why',  '<i>why:</i> ' + esc(why)));
     card.append(bd);
   }
-  // council learning, if any
-  if (review && (review.learning || '').trim()) {
-    const rm = REVIEWER_META[review.reviewer] || { lbl: review.reviewer || '?', color: '#9CA3AF' };
-    const rv = el('div', 'icard-review');
-    rv.innerHTML =
-      `<div class="icard-rv-tag" style="color:${rm.color}">` +
-        `★ Council · ${esc(rm.lbl)}</div>` +
-      `<div class="icard-rv-bd">${esc(review.learning.trim())}</div>` +
-      (Array.isArray(review.new_ideas) && review.new_ideas.length
-        ? `<div class="icard-rv-new">Proposed: ` +
-          review.new_ideas.slice(0, 3).map(ni =>
-            `<code>${esc(ni.idea_id || '?')}</code>`).join(' ') + `</div>`
-        : '');
-    card.append(rv);
+  // council learning(s) — show every round-0 reviewer + tiebreaker if any
+  let panels = [];
+  if (reviews && Array.isArray(reviews.rounds) && reviews.rounds.length) {
+    const r0 = reviews.rounds[0].positions || {};
+    Object.entries(r0).forEach(([rev, pos]) => {
+      if (pos && (pos.learning || '').trim()) {
+        panels.push({ reviewer: rev, learning: pos.learning,
+                       new_ideas: pos.new_ideas, role: 'reviewer' });
+      }
+    });
+    if (reviews.agreement === false && reviews.reviewer
+        && /tiebreaker|claude/i.test(reviews.reviewer)) {
+      panels.push({ reviewer: 'claude (tiebreaker)',
+                     learning: reviews.learning, new_ideas: reviews.new_ideas,
+                     role: 'tiebreaker' });
+    }
+  } else if (review && (review.learning || '').trim()) {
+    panels.push({ reviewer: review.reviewer, learning: review.learning,
+                   new_ideas: review.new_ideas, role: 'reviewer' });
+  }
+  if (panels.length) {
+    panels.forEach(p => {
+      const rm = _reviewerLabel(p.reviewer);
+      const rv = el('div', 'icard-review' + (p.role === 'tiebreaker'
+        ? ' tiebreak' : ''));
+      rv.style.borderLeftColor = rm.color;
+      rv.innerHTML =
+        `<div class="icard-rv-tag" style="color:${rm.color}">` +
+          `★ ${p.role === 'tiebreaker' ? 'Tiebreaker' : 'Council'} · ` +
+          `${esc(rm.lbl)}</div>` +
+        `<div class="icard-rv-bd">${esc((p.learning || '').trim())}</div>` +
+        (Array.isArray(p.new_ideas) && p.new_ideas.length
+          ? `<div class="icard-rv-new">Proposed: ` +
+            p.new_ideas.slice(0, 3).map(ni =>
+              `<code>${esc(ni.idea_id || '?')}</code>`).join(' ') + `</div>`
+          : '');
+      card.append(rv);
+    });
   } else if (run.status !== 'running') {
-    // placeholder while we wait for the council (only if council is on)
     const rv = el('div', 'icard-review pending');
     rv.innerHTML = `<div class="icard-rv-tag" style="color:#94A3B8">` +
       `★ Council · pending…</div>`;
@@ -914,17 +957,38 @@ function renderSummary(c) {
   c.append(brief);
   updateBrief();
 
-  // Completed experiments — newest first
+  // Scrolling container that holds the completed-ideas cards + activity feed
+  // below. Sort is ascending (oldest top, newest at the bottom) — chat-feed
+  // style — so 'now' is always at the bottom. On first paint we scroll all
+  // the way down. A floating 'jump to latest' button appears when the user
+  // is scrolled up.
+  const scroll = el('div', 'rail-scroll'); scroll.id = 'rail-scroll';
+  c.append(scroll);
+
+  // Visible conversation panel — last 12 messages between user, agent, PI.
+  scroll.append(el('div', 'rail-h', 'Conversation with agent'));
+  const convo = el('div', 'convo'); convo.id = 'convo';
+  scroll.append(convo);
+
+  scroll.append(el('div', 'rail-h', 'Completed experiments'));
   const wrap = el('div', 'icards'); wrap.id = 'icards';
-  c.append(el('div', 'rail-h', 'Completed experiments'));
-  c.append(wrap);
+  scroll.append(wrap);
 
   const compact = el('details', 'feed-compact');
   compact.innerHTML = '<summary>Activity feed</summary>';
   const feed = el('div', 'feed'); feed.id = 'feed';
   compact.append(feed);
-  c.append(compact);
+  scroll.append(compact);
 
+  // floating 'jump to latest' button (only when user has scrolled up)
+  const jump = el('button', 'jump-latest', '↓ Latest');
+  jump.style.display = 'none';
+  jump.onclick = () => {
+    scroll.scrollTo({ top: scroll.scrollHeight, behavior: 'smooth' });
+  };
+  c.append(jump);
+
+  paintConvo();
   paintCompletedCards();
 
   // activity feed (kept for chronological events + chat)
@@ -933,25 +997,40 @@ function renderSummary(c) {
     ...S.chat.map(m => ({ t: m.created_at, kind: 'chat', d: m })),
   ].sort((a, b) => (a.t || '').localeCompare(b.t || ''));
   items.forEach(it => feed.append(feedItemEl(it)));
-  feed.scrollTop = feed.scrollHeight;
   S._feedLoading = false;
-  feed.onscroll = () => {
-    if (feed.scrollTop < 60) loadOlderEvents();
+
+  // Scroll-to-bottom on first paint; show jump button when away from bottom.
+  const stickToBottom = () => {
+    scroll.scrollTop = scroll.scrollHeight;
+  };
+  requestAnimationFrame(stickToBottom);
+  setTimeout(stickToBottom, 50);
+
+  scroll.onscroll = () => {
+    const fromBottom = scroll.scrollHeight - scroll.scrollTop
+      - scroll.clientHeight;
+    jump.style.display = fromBottom > 280 ? 'block' : 'none';
+    if (scroll.scrollTop < 60) loadOlderEvents();
   };
 }
 
 function paintCompletedCards() {
   const wrap = document.getElementById('icards');
   if (!wrap) return;
-  // include both finished runs (kept/discarded/crashed) and currently-running
-  // so the user sees the queue's progress live; running runs sort to the top.
-  const ranked = (S.runs || []).slice().sort((a, b) => {
-    const sa = a.status === 'running' ? 0 : 1;
-    const sb = b.status === 'running' ? 0 : 1;
-    if (sa !== sb) return sa - sb;
-    return (b.ended_at || b.created_at || '')
-      .localeCompare(a.ended_at || a.created_at || '');
-  });
+  const scroll = document.getElementById('rail-scroll');
+  // Stay-pinned-to-bottom behaviour: if the user is at the bottom, we keep
+  // them there after a repaint. Otherwise we preserve their scroll position.
+  let stickToBottom = true;
+  let priorScrollFromBottom = 0;
+  if (scroll) {
+    const fromBottom = scroll.scrollHeight - scroll.scrollTop
+      - scroll.clientHeight;
+    stickToBottom = fromBottom < 90;
+    priorScrollFromBottom = fromBottom;
+  }
+  // Ascending sort (oldest top, newest bottom) — chat-feed style.
+  const ranked = (S.runs || []).slice().sort((a, b) =>
+    (_runTime(a) || '').localeCompare(_runTime(b) || ''));
   wrap.innerHTML = '';
   if (!ranked.length) {
     wrap.append(el('div', 'icards-empty',
@@ -959,6 +1038,15 @@ function paintCompletedCards() {
     return;
   }
   ranked.forEach(r => wrap.append(ideaCard(r)));
+  if (scroll) {
+    if (stickToBottom) {
+      scroll.scrollTop = scroll.scrollHeight;
+    } else {
+      // restore approximate scroll position so the user doesn't get yanked
+      scroll.scrollTop = scroll.scrollHeight - scroll.clientHeight
+        - priorScrollFromBottom;
+    }
+  }
 }
 
 function paintGpus() {
@@ -1141,12 +1229,76 @@ function closeDrawer() {
 async function sendChat(text) {
   text = (text || '').trim(); if (!text) return;
   const inp = document.getElementById('chatin'); if (inp) inp.value = '';
-  const r = await post('/agent/send', { text });   // typed into the tmux session
+  // Show the user's message in the conversation panel IMMEDIATELY — don't
+  // wait for the SSE round-trip — so the user gets confirmation it went.
+  const userMsg = { id: 'tmp-' + Date.now(), role: 'researcher',
+    content: text, created_at: new Date().toISOString() };
+  S.chat.push(userMsg);
+  paintConvo();
+  const r = await post('/agent/send', { text });
   if (r && r.ok === false) {
     S.chat.push({ role: 'agent', created_at: new Date().toISOString(),
       content: '⚠ could not deliver — ' + (r.error || 'no agent session') });
-    if (S.railTab === 'summary') paintRail();
+    paintConvo();
+    return;
   }
+  // Watch the research agent's tmux output for ~30s after the send and
+  // surface the next non-trivial line(s) as a synthesised agent bubble.
+  watchAgentForReply();
+}
+
+// Capture an "agent reply" by diffing the tmux output before/after the send.
+let _agentReplyTimer = null;
+async function watchAgentForReply() {
+  if (_agentReplyTimer) return;          // already watching
+  const before = (await api('/agent/terminal').catch(() => ({}))).text || '';
+  let elapsed = 0;
+  _agentReplyTimer = setInterval(async () => {
+    elapsed += 2200;
+    let d;
+    try { d = await api('/agent/terminal'); } catch (e) { return; }
+    const after = (d && d.text) || '';
+    if (after.length > before.length) {
+      const fresh = after.slice(before.length).trim();
+      // grab the last few content lines (skip blank + box-drawing decoration)
+      const lines = fresh.split('\n').map(l => l.replace(/\s+$/, ''))
+        .filter(l => l && !/^[─━│┃┌┐└┘├┤┬┴┼ ▶▸>›·•]+$/.test(l));
+      if (lines.length) {
+        const reply = lines.slice(-6).join('\n').slice(0, 800);
+        S.chat.push({ role: 'agent', created_at: new Date().toISOString(),
+          content: reply });
+        paintConvo();
+        clearInterval(_agentReplyTimer); _agentReplyTimer = null;
+        return;
+      }
+    }
+    if (elapsed > 30000) {
+      clearInterval(_agentReplyTimer); _agentReplyTimer = null;
+    }
+  }, 2200);
+}
+
+function paintConvo() {
+  const c = document.getElementById('convo');
+  if (!c) return;
+  c.innerHTML = '';
+  const items = (S.chat || []).slice(-12);
+  if (!items.length) {
+    c.append(el('div', 'convo-empty',
+      'Send the agent a message in the box below — it answers from its ' +
+      'research-agent terminal.'));
+    return;
+  }
+  items.forEach(m => {
+    const isPI = /\[PI\b/.test(m.content || '');
+    const cls = isPI ? 'bub pi'
+      : (m.role === 'researcher' ? 'bub researcher' : 'bub agent');
+    const b = el('div', cls);
+    b.textContent = m.content || '';
+    c.append(b);
+  });
+  // auto-scroll to the bottom of the convo panel itself
+  c.scrollTop = c.scrollHeight;
 }
 
 /* ── SSE ──────────────────────────────────────────────────────────────── */
@@ -1192,7 +1344,15 @@ function streams() {
   const ch = new EventSource('/api/stream/chat');
   ch.addEventListener('chat', e => {
     const msg = JSON.parse(e.data);
-    S.chat.push(msg);
+    // Skip if we already showed this (e.g., user message echoed back via SSE
+    // after we already added it locally).
+    if (msg.id && S.chat.some(x => x.id === msg.id)) return;
+    // Replace any temp message with the canonical server copy if content matches.
+    const tmpIdx = S.chat.findIndex(x =>
+      x.id && x.id.startsWith('tmp-') && x.content === msg.content);
+    if (tmpIdx >= 0) S.chat[tmpIdx] = msg;
+    else S.chat.push(msg);
+    paintConvo();
     appendFeedItem({ t: msg.created_at, kind: 'chat', d: msg });
   });
 }
@@ -1226,6 +1386,33 @@ const OB_FIELDS = [
   ['agent_instructions',
     'How the agent should work (logging rules, GPU saturation, ideas.md '
     + 'format, …). Edit to customise; blank uses the default.', 'area', ''],
+  ['research_agent_model', 'Research agent model (Claude variant)', 'select',
+    'claude-opus-4-6|claude-sonnet-4-6|claude-haiku-4-5|claude-opus-4-1|'
+    + 'claude-sonnet-4-5'],
+  ['sec', 'Review council — runs after every experiment'],
+  ['council_enable_gemini', 'Enable Gemini in council', 'check', ''],
+  ['council_gemini_model', 'Council — Gemini model', 'select',
+    'gemini-2.5-pro|gemini-2.5-flash|gemini-2.0-flash'],
+  ['council_enable_openai', 'Enable OpenAI in council', 'check', ''],
+  ['council_openai_model', 'Council — OpenAI model', 'select',
+    'gpt-5|gpt-5-mini|gpt-5-nano|o3|o3-mini|o4-mini|o3-pro'],
+  ['council_openai_effort', 'Council — OpenAI reasoning effort', 'select',
+    'high|medium|low|minimal'],
+  ['council_enable_claude_tiebreaker',
+    'Enable Claude tiebreaker (only used when reviewers disagree)',
+    'check', ''],
+  ['council_claude_model', 'Council — Claude tiebreaker model', 'select',
+    'claude-opus-4-6|claude-sonnet-4-6|claude-haiku-4-5'],
+  ['run_debate', 'Run debate between reviewers', 'check', ''],
+  ['debate_max_rounds', 'Debate max rounds (before tiebreaker)', 'select',
+    '3|2|1|4|5'],
+  ['sec', 'PI agent — periodic oversight'],
+  ['pi_agent_enabled', 'Run the PI agent on a schedule', 'check', ''],
+  ['pi_agent_model', 'PI agent model', 'select',
+    'gemini-2.5-pro|gemini-2.5-flash|gpt-5|gpt-5-mini|claude-opus-4-6|'
+    + 'claude-sonnet-4-6'],
+  ['pi_cadence_minutes', 'PI cadence (minutes between checks)', 'select',
+    '60|15|30|120|240'],
   ['sec', 'Email alerts — optional (leave the app password blank for none)'],
   ['cadence', 'Cadence', 'select', 'off|immediate|1h|4h|12h|24h'],
   ['email_recipients', 'Recipients (comma-separated)', 'text',
@@ -1235,6 +1422,52 @@ const OB_FIELDS = [
   ['sec', 'Access'],
   ['passcode', 'Dashboard passcode (blank = open)', 'text', ''],
 ];
+
+/* Shared form-builder used by both onboarding() and openSettings(). Returns
+   {form, inp} where inp is a map of field-key -> input element. Pre-fills
+   from /api/onboarding/defaults and (optionally) overrides from `initial`. */
+function buildSettingsForm({ initial = {}, hideFields = [] } = {}) {
+  const hide = new Set(hideFields);
+  const form = el('div', 'onb-card');
+  const inp = {};
+  OB_FIELDS.forEach(f => {
+    if (f[0] === 'sec') { form.append(el('div', 'onb-sec', f[1])); return; }
+    const [k, label, type, extra] = f;
+    if (hide.has(k)) return;
+    const row = el('div', 'onb-field');
+    if (type === 'check') {
+      const cb = el('input'); cb.type = 'checkbox'; cb.checked = true;
+      inp[k] = cb;
+      const lab = el('label', 'onb-check');
+      lab.append(cb, document.createTextNode(' ' + label));
+      row.append(lab);
+    } else {
+      row.append(el('label', 'onb-lbl', label));
+      let x;
+      if (type === 'area') { x = el('textarea', 'onb-in');
+        x.rows = (k === 'agent_instructions' ? 14 : 3); }
+      else if (type === 'select') {
+        x = el('select', 'onb-in');
+        extra.split('|').forEach(o => {
+          const op = el('option'); op.value = o; op.textContent = o; x.append(op);
+        });
+      } else { x = el('input', 'onb-in'); x.type = type; }
+      if (extra && type !== 'select') x.placeholder = extra;
+      inp[k] = x; row.append(x);
+    }
+    form.append(row);
+  });
+  // Apply initial overrides immediately so checkbox defaults are correct.
+  Object.entries(initial || {}).forEach(([k, v]) => {
+    if (inp[k] == null) return;
+    if (inp[k].type === 'checkbox') {
+      inp[k].checked = !!v && v !== 'false' && v !== 'False';
+    } else if (v !== undefined && v !== null) {
+      inp[k].value = v;
+    }
+  });
+  return { form, inp };
+}
 
 function onboarding() {
   const app = document.getElementById('app');
@@ -1308,34 +1541,7 @@ PASSCODE=`;
   const bpb = el('button', 'btn', 'Parse & fill');
   bp.append(bpa, bpb); wrap.append(bp);
 
-  const form = el('div', 'onb-card');
-  const inp = {};
-  OB_FIELDS.forEach(f => {
-    if (f[0] === 'sec') { form.append(el('div', 'onb-sec', f[1])); return; }
-    const [k, label, type, extra] = f;
-    const row = el('div', 'onb-field');
-    if (type === 'check') {
-      const cb = el('input'); cb.type = 'checkbox'; cb.checked = true;
-      inp[k] = cb;
-      const lab = el('label', 'onb-check');
-      lab.append(cb, document.createTextNode(' ' + label));
-      row.append(lab);
-    } else {
-      row.append(el('label', 'onb-lbl', label));
-      let x;
-      if (type === 'area') { x = el('textarea', 'onb-in');
-        x.rows = (k === 'agent_instructions' ? 14 : 3); }
-      else if (type === 'select') {
-        x = el('select', 'onb-in');
-        extra.split('|').forEach(o => {
-          const op = el('option'); op.value = o; op.textContent = o; x.append(op);
-        });
-      } else { x = el('input', 'onb-in'); x.type = type; }
-      if (extra && type !== 'select') x.placeholder = extra;
-      inp[k] = x; row.append(x);
-    }
-    form.append(row);
-  });
+  const { form, inp } = buildSettingsForm();
   wrap.append(form);
 
   const foot = el('div', 'onb-foot');
@@ -1383,6 +1589,63 @@ PASSCODE=`;
     await post('/onboarding', cfg);
     setTimeout(() => location.reload(), 600);
   };
+}
+
+/* ── settings (post-onboarding edit of EVERY onboarding field) ────────── */
+async function openSettings() {
+  const sc = el('div', 'mscrim');
+  const m = el('div', 'modal modal-settings');
+  m.innerHTML = '<div class="skel" style="height:300px"></div>';
+  sc.append(m); document.body.append(sc);
+  sc.onclick = e => { if (e.target === sc) sc.remove(); };
+  let cur = {}, defs = {};
+  try { [cur, defs] = await Promise.all(
+    [api('/settings'), api('/onboarding/defaults')]); }
+  catch (e) { m.innerHTML = '<p>Could not load settings.</p>'; return; }
+  const initial = { ...defs, ...cur };
+  const { form, inp } = buildSettingsForm({ initial });
+  m.innerHTML = '';
+  const hd = el('div', 'modal-hd');
+  hd.append(el('h2', '', 'Settings'));
+  const xb = el('button', 'iconbtn', '✕');
+  xb.onclick = () => sc.remove();
+  hd.append(xb);
+  m.append(hd);
+  m.append(el('p', 'modal-sub',
+    'Every field from onboarding is editable here. Tokens and passwords show ' +
+    'as •••• — leave them blank to keep the saved value, or paste a new value ' +
+    'to replace it. Most changes take effect on the next council / PI cycle; ' +
+    'changes to the Research-agent model only apply on the next research run.'));
+  m.append(form);
+  const actions = el('div', 'modal-actions');
+  const status = el('div', 'set-status');
+  const save = el('button', 'btn pri', 'Save settings');
+  save.onclick = async () => {
+    save.disabled = true; save.textContent = 'Saving…';
+    const upd = {};
+    Object.entries(inp).forEach(([k, x]) => {
+      upd[k] = x.type === 'checkbox' ? x.checked : x.value;
+    });
+    try {
+      const r = await fetch('/api/settings', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(upd),
+      }).then(r => r.json());
+      if (r && r.status === 'ok') {
+        status.textContent = 'Saved ✓';
+        save.textContent = 'Saved ✓';
+        setTimeout(() => sc.remove(), 800);
+      } else {
+        status.textContent = 'Save failed: ' + ((r && r.detail) || '?');
+        save.disabled = false; save.textContent = 'Save settings';
+      }
+    } catch (e) {
+      status.textContent = 'Save failed: ' + e;
+      save.disabled = false; save.textContent = 'Save settings';
+    }
+  };
+  actions.append(save, status);
+  m.append(actions);
 }
 
 /* ── archive ──────────────────────────────────────────────────────────── */

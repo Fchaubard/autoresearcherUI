@@ -1,20 +1,21 @@
-"""LLM council — post-experiment deliberation.
+"""LLM council — post-experiment deliberation with debate.
 
-After every run finishes (kept / discarded / crashed) the monitor enqueues a
-review here. We round-robin through whichever external models the user has
-keys for (Gemini 3 Pro, GPT 5.5 high, Claude Opus 4.7) and ask one of them to:
+After every run finishes, both Gemini and GPT (whichever keys are configured)
+independently review the run. They then DEBATE up to N rounds, each round
+seeing the other's last position and either revising or holding. If they
+agree (matching verdict + same top-3 rerank set + same veto set), the debate
+ends and the consensus is applied. Otherwise Claude is asked to break the
+tie. All round outputs are persisted on the run so the UI can show the
+back-and-forth.
 
-  1. Say what this experiment taught us (in 2-4 sentences).
-  2. Rerank the pending rows in ideas.md (best-EV idea first).
-  3. Propose 0-3 NEW high-value ideas (NOT HP tuning, NOT seed variations).
-  4. Veto any pending ideas that look like a waste of GPU time.
+Cost controls (configurable via Settings):
+  - run_debate: bool (if false, just one independent review per reviewer,
+    no debate)
+  - debate_max_rounds: int (default 3)
+  - per-model selection: council_gemini_model, council_openai_model,
+    council_openai_effort ("low" / "medium" / "high"), council_claude_model
 
-The output is persisted onto the Run (config["review"]) so the Summary rail
-can render it, and the rerank/new ideas are written atomically into the
-project's ideas.md so the agent picks them up on its next planning loop.
-
-Keys come from .deploy/keys.env (gitignored). If no keys are present, the
-module is a no-op — the rest of the system still works.
+Keys come from .deploy/keys.env (gitignored).
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ import re
 import shutil
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -59,37 +61,58 @@ def _load_keys_env() -> None:
 _load_keys_env()
 
 
-# ── reviewer roster ──────────────────────────────────────────────────────
-def _available_reviewers() -> list[str]:
+# ── settings (live-read from the onboarding Setting row each invocation) ─
+DEFAULTS = {
+    "council_gemini_model": "gemini-2.5-pro",
+    "council_openai_model": "gpt-5",
+    "council_openai_effort": "high",
+    "council_claude_model": "claude-opus-4-6",
+    "run_debate": True,
+    "debate_max_rounds": 3,
+    # which providers are enabled at all in the council
+    "council_enable_gemini": True,
+    "council_enable_openai": True,
+    "council_enable_claude_tiebreaker": True,
+}
+
+
+def _settings() -> dict:
+    """Merge defaults with whatever's stored in the onboarding Setting row."""
+    out = dict(DEFAULTS)
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(Setting.key == "onboarding").first()
+        if row and isinstance(row.value, dict):
+            for k in DEFAULTS:
+                if k in row.value and row.value[k] not in ("", None):
+                    out[k] = row.value[k]
+    finally:
+        db.close()
+    return out
+
+
+# ── reviewer availability ────────────────────────────────────────────────
+def _available_reviewers(cfg: dict) -> list[str]:
     rs = []
-    if os.environ.get("GEMINI_API_KEY"):
+    if cfg.get("council_enable_gemini", True) and os.environ.get("GEMINI_API_KEY"):
         rs.append("gemini")
-    if os.environ.get("OPENAI_API_KEY"):
+    if cfg.get("council_enable_openai", True) and os.environ.get("OPENAI_API_KEY"):
         rs.append("openai")
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        rs.append("claude")
     return rs
 
 
-_RR = 0
-_RR_LOCK = threading.Lock()
-_INFLIGHT_LOCK = threading.Lock()
-_INFLIGHT: set[str] = set()
+def _claude_available(cfg: dict) -> bool:
+    return bool(cfg.get("council_enable_claude_tiebreaker", True)
+                and os.environ.get("ANTHROPIC_API_KEY"))
 
 
 def is_enabled() -> bool:
-    return bool(_available_reviewers())
+    return bool(_available_reviewers(_settings()))
 
 
-def _pick_reviewer() -> str | None:
-    global _RR
-    rs = _available_reviewers()
-    if not rs:
-        return None
-    with _RR_LOCK:
-        choice = rs[_RR % len(rs)]
-        _RR += 1
-    return choice
+_INFLIGHT_LOCK = threading.Lock()
+_INFLIGHT: set[str] = set()
+_FILE_LOCK = threading.Lock()           # serialize ideas.md edits
 
 
 # ── the prompt ────────────────────────────────────────────────────────────
@@ -133,19 +156,35 @@ You return JSON ONLY, no prose around it, no markdown fence, matching:
   about the metric and direction."""
 
 
+DEBATE_SYSTEM = SYSTEM + """
+
+DEBATE MODE: another expert reviewer also looked at this run. Their position
+will be appended to the user message. Read it carefully. If you AGREE with
+their points, adopt their framing (your output should match theirs on
+verdict + top-3 rerank + veto set). If you DISAGREE, restate your position
+but ALSO address their argument specifically in the "learning" field — say
+why their take is wrong or incomplete. The goal is to converge on the
+strongest call, not to be stubborn. Keep returning the same JSON schema."""
+
+
+TIEBREAKER_SYSTEM = """You are the tiebreaker on a senior advisory panel for
+an autonomous ML research project. Two expert reviewers disagree after 3
+rounds of debate. Read both of their final positions and the run context,
+then make the final call. Return the same JSON schema as the reviewers
+(verdict, learning, rerank_pending, new_ideas, veto). In "learning", briefly
+explain which reviewer you sided with and why. Be decisive — no hedging."""
+
+
 # ── context bundle ────────────────────────────────────────────────────────
-def _frontier(runs):
-    """Return ids of the running frontier (each run that beat all earlier
-    kept runs on the project metric). Used to give the reviewer a sense of
-    progress."""
-    out = []
+def _frontier_ids(runs) -> set[str]:
+    out: set[str] = set()
     best = None
     for r in sorted(runs, key=lambda r: r.created_at or ""):
         if r.headline_metric is None:
             continue
         if best is None or r.headline_metric < best:
             best = r.headline_metric
-            out.append(r.id)
+            out.add(r.id)
     return out
 
 
@@ -157,7 +196,7 @@ def _build_context(run_id: str) -> dict | None:
         if not (proj and run):
             return None
         all_runs = db.query(Run).order_by(Run.created_at.desc()).limit(40).all()
-        frontier = set(_frontier(db.query(Run).all()))
+        frontier = _frontier_ids(db.query(Run).all())
         ideas = db.query(Idea).filter(Idea.id.like("deck-%")).all()
 
         def _cfg(r):
@@ -188,13 +227,11 @@ def _build_context(run_id: str) -> dict | None:
                     "config": _cfg(r),
                 }
                 for r in all_runs if r.id != run.id
-            ][:18],
-            # Cap pending list sent to the model: the council should focus on
-            # the top of the queue, not deliberate over 200 stale ideas.
+            ][:8],
             "pending_ideas": [
                 {"idea_id": i.idea_id, "what": i.description}
                 for i in ideas
-            ][:30],
+            ][:20],
             "pending_total_count": len(ideas),
         }
     finally:
@@ -202,10 +239,9 @@ def _build_context(run_id: str) -> dict | None:
 
 
 # ── model adapters (stdlib only) ──────────────────────────────────────────
-# Reasoning models (gpt-5 high, o3-pro, gemini-2.5-pro) can take 30-90s, so
-# we give the council a generous timeout. It runs in a background thread so
-# this never blocks the dashboard.
+# Reasoning models (gpt-5 high, o3-pro, gemini-2.5-pro) can take 30-180s.
 _TIMEOUT = 240
+_RETRY_DELAYS = (4, 10, 25)             # backoff for 429s
 
 
 def _post_json(url: str, body: dict, headers: dict) -> dict:
@@ -216,9 +252,31 @@ def _post_json(url: str, body: dict, headers: dict) -> dict:
         return json.loads(resp.read().decode("utf-8", errors="ignore"))
 
 
-def _call_gemini(system: str, user: str) -> str:
+def _post_json_retry(url: str, body: dict, headers: dict) -> dict:
+    """POST with retry on 429 (rate limit) and 5xx (transient). Other HTTP
+    errors propagate so the caller can log and skip."""
+    last_exc: Exception | None = None
+    for i, d in enumerate((0,) + _RETRY_DELAYS):
+        if d:
+            time.sleep(d)
+        try:
+            return _post_json(url, body, headers)
+        except urllib.error.HTTPError as e:
+            last_exc = e
+            if e.code == 429 or 500 <= e.code < 600:
+                continue
+            raise
+        except Exception as e:
+            last_exc = e
+            continue
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("unreachable")
+
+
+def _call_gemini(system: str, user: str, cfg: dict) -> str:
     key = os.environ["GEMINI_API_KEY"]
-    model = os.environ.get("ARUI_COUNCIL_GEMINI_MODEL", "gemini-2.5-pro")
+    model = cfg.get("council_gemini_model") or DEFAULTS["council_gemini_model"]
     url = ("https://generativelanguage.googleapis.com/v1beta/"
            f"models/{model}:generateContent?key={key}")
     body = {
@@ -227,39 +285,40 @@ def _call_gemini(system: str, user: str) -> str:
         "generationConfig": {"responseMimeType": "application/json",
                              "temperature": 0.7},
     }
-    data = _post_json(url, body, {})
+    data = _post_json_retry(url, body, {})
     return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
-def _call_openai(system: str, user: str) -> str:
+def _call_openai(system: str, user: str, cfg: dict) -> str:
     key = os.environ["OPENAI_API_KEY"]
-    # gpt-5 on chat/completions with reasoning_effort=high is the closest
-    # match to the user's "GPT 5.5 high"; gpt-5-pro requires the Responses
-    # API and many keys don't have access to it.
-    model = os.environ.get("ARUI_COUNCIL_OPENAI_MODEL", "gpt-5")
+    model = cfg.get("council_openai_model") or DEFAULTS["council_openai_model"]
     body = {
         "model": model,
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": user}],
         "response_format": {"type": "json_object"},
-        "reasoning_effort": os.environ.get("ARUI_COUNCIL_OPENAI_EFFORT",
-                                            "high"),
     }
-    data = _post_json("https://api.openai.com/v1/chat/completions", body,
-                      {"Authorization": f"Bearer {key}"})
+    effort = cfg.get("council_openai_effort") or DEFAULTS["council_openai_effort"]
+    # gpt-5 family and o-series accept reasoning_effort
+    if "gpt-5" in model or model.startswith("o"):
+        body["reasoning_effort"] = effort
+    data = _post_json_retry("https://api.openai.com/v1/chat/completions", body,
+                            {"Authorization": f"Bearer {key}"})
     return data["choices"][0]["message"]["content"]
 
 
-def _call_claude(system: str, user: str) -> str:
+def _call_claude(system: str, user: str, cfg: dict) -> str:
     key = os.environ["ANTHROPIC_API_KEY"]
+    model = cfg.get("council_claude_model") or DEFAULTS["council_claude_model"]
     body = {
-        "model": os.environ.get("ARUI_COUNCIL_CLAUDE_MODEL", "claude-opus-4-6"),
-        "max_tokens": 1500,
+        "model": model,
+        "max_tokens": 2000,
         "system": system,
         "messages": [{"role": "user", "content": user}],
     }
-    data = _post_json("https://api.anthropic.com/v1/messages", body,
-                      {"x-api-key": key, "anthropic-version": "2023-06-01"})
+    data = _post_json_retry("https://api.anthropic.com/v1/messages", body,
+                            {"x-api-key": key,
+                             "anthropic-version": "2023-06-01"})
     return data["content"][0]["text"]
 
 
@@ -267,7 +326,7 @@ _CALLERS = {"gemini": _call_gemini, "openai": _call_openai,
             "claude": _call_claude}
 
 
-# ── parse the model's response ────────────────────────────────────────────
+# ── parsing ──────────────────────────────────────────────────────────────
 def _strip_fences(s: str) -> str:
     s = s.strip()
     if s.startswith("```"):
@@ -301,30 +360,11 @@ def _safe_parse(text: str) -> dict | None:
     return out
 
 
-# ── entry points ──────────────────────────────────────────────────────────
-def deliberate(run_id: str) -> dict | None:
-    """Call one council member and return its parsed review."""
-    reviewer = _pick_reviewer()
-    if not reviewer:
-        return None
-    ctx = _build_context(run_id)
-    if not ctx:
-        return None
-    total_pending = ctx.get("pending_total_count", 0)
-    queue_note = ""
-    if total_pending > 40:
-        queue_note = (f"\n\nNOTE: the project's pending queue already has "
-                      f"{total_pending} ideas (you're only shown the top 30). "
-                      f"Focus your effort on RERANK / VETO — only propose "
-                      f"new_ideas if they would CLEARLY replace several of "
-                      f"the existing ones. Quality > quantity. It is fine to "
-                      f"return new_ideas: [].")
-    user = ("Here is the current state of an autonomous ML research project. "
-            "Review the most recent run and return JSON per the schema in the "
-            "system prompt." + queue_note + "\n\n"
-            + json.dumps(ctx, indent=2, default=str))
+# ── one reviewer turn ────────────────────────────────────────────────────
+def _call_reviewer(reviewer: str, system: str, user: str, cfg: dict
+                   ) -> dict | None:
     try:
-        text = _CALLERS[reviewer](SYSTEM, user)
+        text = _CALLERS[reviewer](system, user, cfg)
     except urllib.error.HTTPError as e:
         body = ""
         try:
@@ -338,7 +378,7 @@ def deliberate(run_id: str) -> dict | None:
         return None
     out = _safe_parse(text)
     if not out:
-        print(f"[council] {reviewer} returned non-JSON; first 200 chars: "
+        print(f"[council] {reviewer} returned non-JSON; first 200: "
               f"{text[:200]!r}", flush=True)
         return None
     out["reviewer"] = reviewer
@@ -346,9 +386,154 @@ def deliberate(run_id: str) -> dict | None:
     return out
 
 
+def _agreement(a: dict, b: dict) -> bool:
+    """Two reviews agree if verdict matches AND top-3 of rerank match AS A
+    SET AND veto sets are equal."""
+    if (a.get("verdict") or "") != (b.get("verdict") or ""):
+        return False
+    aa = set((a.get("rerank_pending") or [])[:3])
+    bb = set((b.get("rerank_pending") or [])[:3])
+    if aa != bb:
+        return False
+    return set(a.get("veto") or []) == set(b.get("veto") or [])
+
+
+# ── the debate orchestrator ──────────────────────────────────────────────
+def _ctx_text(ctx: dict) -> str:
+    total = ctx.get("pending_total_count", 0)
+    note = ""
+    if total > 40:
+        note = (f"\n\nNOTE: queue has {total} pending ideas (you only see "
+                f"top 20). Focus on RERANK / VETO. Only propose new_ideas if "
+                f"they would CLEARLY replace existing ones.")
+    return ("Here is the current state of an autonomous ML research project. "
+            "Review the most recent run and return JSON per the schema in the "
+            "system prompt." + note + "\n\n"
+            + json.dumps(ctx, indent=2, default=str))
+
+
+def deliberate(run_id: str) -> dict | None:
+    """Full debate orchestrator. Returns the final aggregate review (with
+    rounds embedded under 'rounds') or None if nothing could be produced."""
+    cfg = _settings()
+    reviewers = _available_reviewers(cfg)
+    if not reviewers:
+        return None
+    ctx = _build_context(run_id)
+    if not ctx:
+        return None
+    user_initial = _ctx_text(ctx)
+
+    # Round 0 — independent reviews
+    rounds: list[dict] = []
+    positions: dict[str, dict] = {}
+    threads, results = [], {}
+
+    def _worker(rev):
+        results[rev] = _call_reviewer(rev, SYSTEM, user_initial, cfg)
+
+    for rev in reviewers:
+        t = threading.Thread(target=_worker, args=(rev,),
+                             daemon=True, name=f"council-r0-{rev}")
+        t.start()
+        threads.append(t)
+    for t in threads:
+        t.join()
+    for rev in reviewers:
+        if results.get(rev):
+            positions[rev] = results[rev]
+    if not positions:
+        return None
+    rounds.append({"round": 0, "positions": dict(positions)})
+
+    # Debate rounds — only if >1 reviewer succeeded AND user enabled it
+    final = None
+    debate_on = bool(cfg.get("run_debate", True)) and len(positions) > 1
+    max_rounds = max(0, int(cfg.get("debate_max_rounds", 3)))
+    n_round = 0
+    if debate_on:
+        while n_round < max_rounds:
+            # check agreement among all positions
+            revs_sorted = sorted(positions.keys())
+            agreed = all(_agreement(positions[revs_sorted[0]], positions[r])
+                         for r in revs_sorted[1:])
+            if agreed:
+                break
+            n_round += 1
+            # each reviewer sees the OTHER reviewers' last position
+            new_positions: dict[str, dict] = {}
+            threads, results = [], {}
+
+            def _debate(rev):
+                others = {r: positions[r] for r in positions if r != rev}
+                user_msg = (user_initial
+                            + "\n\nOTHER REVIEWERS' POSITIONS (round "
+                            + f"{n_round - 1}):\n"
+                            + json.dumps(others, indent=2, default=str)
+                            + "\n\nYour previous position:\n"
+                            + json.dumps(positions[rev], indent=2, default=str))
+                results[rev] = _call_reviewer(rev, DEBATE_SYSTEM, user_msg, cfg)
+
+            for rev in positions.keys():
+                t = threading.Thread(target=_debate, args=(rev,),
+                                     daemon=True,
+                                     name=f"council-r{n_round}-{rev}")
+                t.start()
+                threads.append(t)
+            for t in threads:
+                t.join()
+            for rev in list(positions.keys()):
+                if results.get(rev):
+                    new_positions[rev] = results[rev]
+                else:                            # call failed -> hold position
+                    new_positions[rev] = positions[rev]
+            positions = new_positions
+            rounds.append({"round": n_round, "positions": dict(positions)})
+
+    # Did they end up agreeing?
+    revs_sorted = sorted(positions.keys())
+    if len(revs_sorted) <= 1:
+        agreed = True
+    else:
+        agreed = all(_agreement(positions[revs_sorted[0]], positions[r])
+                     for r in revs_sorted[1:])
+
+    tiebreaker = None
+    if not agreed and _claude_available(cfg):
+        user_tb = (user_initial
+                   + "\n\nFINAL POSITIONS AFTER " + str(n_round)
+                   + " ROUNDS OF DEBATE:\n"
+                   + json.dumps(positions, indent=2, default=str))
+        tiebreaker = _call_reviewer("claude", TIEBREAKER_SYSTEM, user_tb, cfg)
+        rounds.append({"round": "tiebreaker", "positions": {
+            "claude": tiebreaker} if tiebreaker else {}})
+        if tiebreaker:
+            final = dict(tiebreaker)
+            final["reviewer"] = "claude (tiebreaker)"
+
+    if final is None:
+        # Consensus or no tiebreaker available — pick the first reviewer's
+        # latest position as canonical (Gemini wins ties by alpha order).
+        final = dict(positions[revs_sorted[0]])
+        final["reviewer"] = (
+            "+".join(revs_sorted) + (" (consensus)" if agreed else
+                                     " (no agreement, no tiebreaker)")
+        )
+
+    final["rounds"] = rounds
+    final["agreement"] = agreed
+    final["reviewed_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    return final
+
+
+# ── persistence + ideas.md surgery (unchanged interface) ─────────────────
 def review_async(run_id: str) -> bool:
-    """Fire-and-forget background review. Idempotent per run."""
-    if not is_enabled():
+    """Fire-and-forget background debate. Idempotent per run."""
+    cfg = _settings()
+    if not _available_reviewers(cfg):
+        return False
+    # Skip cheap probe runs and metric-less crashed runs — no signal to review.
+    if not _worth_reviewing(run_id):
         return False
     with _INFLIGHT_LOCK:
         if run_id in _INFLIGHT:
@@ -357,6 +542,28 @@ def review_async(run_id: str) -> bool:
     threading.Thread(target=_worker, args=(run_id,), daemon=True,
                      name=f"council-{run_id[:16]}").start()
     return True
+
+
+def _worth_reviewing(run_id: str) -> bool:
+    """Skip runs that have nothing to teach: _probe pings, never-started
+    runs, already-reviewed runs (in case of restart)."""
+    if not run_id or run_id.startswith("_probe") or run_id == "_probe":
+        return False
+    db = SessionLocal()
+    try:
+        run = db.query(Run).filter(Run.id == run_id).first()
+        if not run:
+            return False
+        if run.status not in ("kept", "discarded", "crashed", "failed",
+                              "success"):
+            return False
+        # Already reviewed in this process? skip.
+        cfg = run.config if isinstance(run.config, dict) else {}
+        if cfg.get("reviews") or cfg.get("review"):
+            return False
+        return True
+    finally:
+        db.close()
 
 
 def _worker(run_id: str) -> None:
@@ -376,28 +583,33 @@ def _iso() -> str:
 
 
 def _persist(run_id: str, review: dict) -> None:
-    """Stash the review on the run's config so /api/runs returns it, mirror
-    the learning onto its Idea, and emit a feed event."""
+    """Stash the review on run.config so /api/runs returns it, mirror the
+    learning onto its Idea, and emit a feed event."""
     db = SessionLocal()
     try:
         run = db.query(Run).filter(Run.id == run_id).first()
         if not run:
             return
         cfg = dict(run.config) if isinstance(run.config, dict) else {}
-        cfg["review"] = review
+        # Keep both: 'review' for backwards-compat with old UI, and the full
+        # 'reviews' structure with all per-round positions.
+        cfg["review"] = {k: v for k, v in review.items() if k != "rounds"}
+        cfg["reviews"] = review              # full debate history
         run.config = cfg
         if run.idea_id:
             idea = db.query(Idea).filter(Idea.id == run.idea_id).first()
             if idea and (review.get("learning") or "").strip():
                 idea.conclusion = review["learning"].strip()
+        msg = (review.get("learning") or "")[:280] or (
+            f"Council reviewed {run.run_name}")
+        if review.get("agreement") is False:
+            msg = "[tiebreaker] " + msg
         db.add(Event(
             id="ev-" + os.urandom(4).hex(),
             type="council_reviewed", severity="info",
             actor="council:" + (review.get("reviewer") or "?"),
             run_id=run.id,
-            message=(review.get("learning") or "")[:280] or
-                    f"Council ({review.get('reviewer')}) reviewed {run.run_name}",
-            created_at=_iso()))
+            message=msg, created_at=_iso()))
         db.commit()
     finally:
         db.close()
@@ -424,124 +636,120 @@ def _onboarding_repo_name() -> str:
 
 
 def _apply_to_ideas_md(review: dict) -> None:
-    """Rewrite the pending block of ideas.md per the council's rerank, append
-    new_ideas, and veto vetoed ones. Atomic write (write tmp + rename)."""
+    """Rewrite the pending block of ideas.md per the review's rerank, append
+    new_ideas, and veto vetoed ones. Atomic write (write tmp + rename).
+    Serialized under _FILE_LOCK so concurrent reviews don't fight."""
     name = _onboarding_repo_name()
     if not name:
         return
     path = DATA_DIR / "workspace" / name / "ideas.md"
     if not path.exists():
         return
-    try:
-        text = path.read_text(errors="ignore")
-    except OSError:
-        return
-    lines = text.splitlines()
+    with _FILE_LOCK:
+        try:
+            text = path.read_text(errors="ignore")
+        except OSError:
+            return
+        lines = text.splitlines()
 
-    # Find the first ideas-table header row and walk to the end of its block.
-    hdr = -1
-    for i, ln in enumerate(lines):
-        if _HEADER_RE.match(ln.strip()):
-            hdr = i
-            break
-    if hdr < 0:
-        return
-    # Skip the separator row (|---|---|...) if present.
-    body_start = hdr + 1
-    if (body_start < len(lines)
-            and re.fullmatch(r"\|[\s\-\|:]+", lines[body_start].strip() or "|")):
-        body_start += 1
-    # The table runs until the first non-pipe line.
-    body_end = body_start
-    while body_end < len(lines) and lines[body_end].lstrip().startswith("|"):
-        body_end += 1
+        # Find the first ideas-table header row and walk to the end of its block.
+        hdr = -1
+        for i, ln in enumerate(lines):
+            if _HEADER_RE.match(ln.strip()):
+                hdr = i
+                break
+        if hdr < 0:
+            return
+        body_start = hdr + 1
+        if (body_start < len(lines)
+                and re.fullmatch(r"\|[\s\-\|:]+", lines[body_start].strip() or "|")):
+            body_start += 1
+        body_end = body_start
+        while body_end < len(lines) and lines[body_end].lstrip().startswith("|"):
+            body_end += 1
 
-    pending: list[tuple[str, list[str]]] = []   # (idea_id, cells incl. status)
-    done_rows: list[str] = []
-    for ln in lines[body_start:body_end]:
-        cells = [c.strip() for c in ln.strip().strip("|").split("|")]
-        if len(cells) < 2:
-            done_rows.append(ln)
-            continue
-        status_cell = cells[0].lower()
-        idea_id = cells[1].strip("`* ")
-        is_pending = any(w in status_cell for w in
-                         ("pending", "todo", "queued", "planned", "next"))
-        if is_pending and idea_id:
-            pending.append((idea_id, cells))
-        else:
-            done_rows.append(ln)
-
-    if not pending and not review.get("new_ideas"):
-        return
-
-    veto = {str(v) for v in (review.get("veto") or []) if v}
-    rerank = [str(x) for x in (review.get("rerank_pending") or []) if x]
-    pending_by_id = {p[0]: p[1] for p in pending}
-    new_pending: list[list[str]] = []
-    for rid in rerank:
-        if rid in veto:
-            continue
-        if rid in pending_by_id:
-            new_pending.append(pending_by_id.pop(rid))
-    for rid, cells in pending:                          # un-ranked tail
-        if rid in pending_by_id and rid not in veto:
-            new_pending.append(cells)
-            pending_by_id.pop(rid, None)
-
-    # New ideas — dedup, fuzzy-match against existing pending, and only add
-    # them if the queue is shallow enough to need fresh proposals. Otherwise
-    # the council should rerank/prune, not pile on.
-    PENDING_HEALTHY = 30          # if the queue is fuller than this, no adds
-    existing_ids = {p[0] for p in new_pending}
-    existing_whats = {(p[1][2] if len(p[1]) > 2 else "").strip().lower()
-                      for p in [(c[0], c) for c in new_pending]}
-    arity = max((len(p[1]) for p in pending), default=4)
-    if len(new_pending) < PENDING_HEALTHY:
-        room = PENDING_HEALTHY - len(new_pending)
-        for ni in (review.get("new_ideas") or [])[:min(3, room)]:
-            if not isinstance(ni, dict):
+        pending: list[tuple[str, list[str]]] = []
+        done_rows: list[str] = []
+        for ln in lines[body_start:body_end]:
+            cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+            if len(cells) < 2:
+                done_rows.append(ln)
                 continue
-            idea_id = re.sub(r"[^A-Za-z0-9_]+", "_",
-                             str(ni.get("idea_id") or "")).strip("_")
-            if not idea_id or idea_id in existing_ids:
-                continue                # exact dedup
-            what = str(ni.get("what") or "").strip()
-            wlo = what.lower()
-            # fuzzy dedup: skip if a very similar "what" line already exists
-            if any(wlo and (wlo in ew or ew in wlo) and len(ew) > 10
-                   for ew in existing_whats):
+            status_cell = cells[0].lower()
+            idea_id = cells[1].strip("`* ")
+            is_pending = any(w in status_cell for w in
+                             ("pending", "todo", "queued", "planned", "next"))
+            if is_pending and idea_id:
+                pending.append((idea_id, cells))
+            else:
+                done_rows.append(ln)
+
+        if not pending and not review.get("new_ideas"):
+            return
+
+        veto = {str(v) for v in (review.get("veto") or []) if v}
+        rerank = [str(x) for x in (review.get("rerank_pending") or []) if x]
+        pending_by_id = {p[0]: p[1] for p in pending}
+        new_pending: list[list[str]] = []
+        for rid in rerank:
+            if rid in veto:
                 continue
-            why = str(ni.get("why") or "").strip()
-            row = ["pending", idea_id, what, why]
-            while len(row) < arity:
-                row.append("")
-            new_pending.append(row[:arity])
-            existing_ids.add(idea_id)
-            existing_whats.add(wlo)
+            if rid in pending_by_id:
+                new_pending.append(pending_by_id.pop(rid))
+        for rid, cells in pending:                          # un-ranked tail
+            if rid in pending_by_id and rid not in veto:
+                new_pending.append(cells)
+                pending_by_id.pop(rid, None)
 
-    # Render
-    out_rows = list(done_rows)
-    out_rows.extend("| " + " | ".join(cells) + " |" for cells in new_pending)
-    if veto:
-        out_rows.append("")
-        for rid in sorted(veto):
-            out_rows.append(f"<!-- council vetoed: {rid} -->")
-    new_text = ("\n".join(lines[:body_start])
-                + ("\n" if body_start else "")
-                + "\n".join(out_rows)
-                + "\n"
-                + "\n".join(lines[body_end:]))
-    if not new_text.endswith("\n"):
-        new_text += "\n"
+        PENDING_HEALTHY = 30
+        existing_ids = {p[0] for p in new_pending}
+        existing_whats = {(p[2] if len(p) > 2 else "").strip().lower()
+                          for p in new_pending}
+        arity = max((len(p[1]) for p in pending), default=4)
+        if len(new_pending) < PENDING_HEALTHY:
+            room = PENDING_HEALTHY - len(new_pending)
+            for ni in (review.get("new_ideas") or [])[:min(3, room)]:
+                if not isinstance(ni, dict):
+                    continue
+                idea_id = re.sub(r"[^A-Za-z0-9_]+", "_",
+                                 str(ni.get("idea_id") or "")).strip("_")
+                if not idea_id or idea_id in existing_ids:
+                    continue
+                what = str(ni.get("what") or "").strip()
+                wlo = what.lower()
+                if any(wlo and (wlo in ew or ew in wlo) and len(ew) > 10
+                       for ew in existing_whats):
+                    continue
+                why = str(ni.get("why") or "").strip()
+                row = ["pending", idea_id, what, why]
+                while len(row) < arity:
+                    row.append("")
+                new_pending.append(row[:arity])
+                existing_ids.add(idea_id)
+                existing_whats.add(wlo)
 
-    try:
-        fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".ideas-",
-                                   suffix=".md")
-        with os.fdopen(fd, "w") as f:
-            f.write(new_text)
-        shutil.move(tmp, str(path))
-        print(f"[council] rewrote {path} — {len(new_pending)} pending rows, "
-              f"{len(veto)} vetoed", flush=True)
-    except Exception as e:                              # noqa: BLE001
-        print(f"[council] could not rewrite ideas.md: {e}", flush=True)
+        out_rows = list(done_rows)
+        out_rows.extend("| " + " | ".join(cells) + " |"
+                        for cells in new_pending)
+        if veto:
+            out_rows.append("")
+            for rid in sorted(veto):
+                out_rows.append(f"<!-- council vetoed: {rid} -->")
+        new_text = ("\n".join(lines[:body_start])
+                    + ("\n" if body_start else "")
+                    + "\n".join(out_rows)
+                    + "\n"
+                    + "\n".join(lines[body_end:]))
+        if not new_text.endswith("\n"):
+            new_text += "\n"
+
+        try:
+            fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".ideas-",
+                                       suffix=".md")
+            with os.fdopen(fd, "w") as f:
+                f.write(new_text)
+            shutil.move(tmp, str(path))
+            print(f"[council] rewrote {path} — {len(new_pending)} pending, "
+                  f"{len(veto)} vetoed", flush=True)
+        except Exception as e:                          # noqa: BLE001
+            print(f"[council] could not rewrite ideas.md: {e}", flush=True)

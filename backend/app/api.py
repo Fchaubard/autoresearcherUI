@@ -472,6 +472,30 @@ def agent_terminal():
             "alive": _tmux_alive("agent")}
 
 
+@router.post("/pi/run")
+async def pi_run_now(request: Request):
+    """Trigger an immediate PI cycle. Returns the decision dict so the UI /
+    a test script can verify the PI is wired up correctly."""
+    from . import pi as _pi
+    out = _pi.cycle(force=True)
+    return out or {"status": "skipped"}
+
+
+@router.post("/council/review")
+async def council_review_now(request: Request):
+    """Trigger a council review on a specific run_id (synchronous)."""
+    from . import council as _c
+    body = await request.json()
+    rid = (body.get("run_id") or "").strip()
+    if not rid:
+        return {"status": "error", "detail": "run_id required"}
+    out = _c.deliberate(rid)
+    if out:
+        _c._persist(rid, out)
+        _c._apply_to_ideas_md(out)
+    return out or {"status": "no_review"}
+
+
 @router.post("/agent/send")
 async def agent_send(request: Request):
     """Type a message into the agent's Claude Code tmux session."""
@@ -519,7 +543,60 @@ def get_onboarding(db: Session = Depends(get_session)):
 def onboarding_defaults():
     """Defaults for editable onboarding fields. The frontend pre-fills these
     so the user sees how the agent is configured by default and can override."""
-    return {"agent_instructions": realrun.DEFAULT_AGENT_INSTRUCTIONS}
+    # Lazy imports so circular-import safety: council and pi import db/models.
+    from . import council as _c
+    from . import pi as _p
+    out = {"agent_instructions": realrun.DEFAULT_AGENT_INSTRUCTIONS}
+    out.update(_c.DEFAULTS)
+    out.update(_p.DEFAULTS)
+    # research agent (Claude) default model
+    out.setdefault("research_agent_model", "claude-opus-4-6")
+    return out
+
+
+# Secret / token fields are blanked in /api/settings responses so the UI
+# doesn't display the saved value. PUTting blank means "leave unchanged".
+SECRET_FIELDS = {"claude_token", "gemini_token", "openai_token",
+                 "github_token", "gmail_app_pw", "passcode"}
+
+
+@router.get("/settings")
+def get_settings(db: Session = Depends(get_session)):
+    """Return the saved onboarding config (= live settings), with secret
+    fields masked. The Settings tab uses this to populate its form."""
+    row = db.query(Setting).filter(Setting.key == "onboarding").first()
+    cfg = dict(row.value) if row and isinstance(row.value, dict) else {}
+    masked = {k: ("••••••••" if (k in SECRET_FIELDS and v) else v)
+              for k, v in cfg.items()}
+    return masked
+
+
+@router.put("/settings")
+async def put_settings(request: Request):
+    """Merge updates into the onboarding config. Secret fields are only
+    updated when the user provides a non-empty, non-mask value (blanks
+    mean 'leave alone'). Returns the new (masked) settings."""
+    updates = await request.json()
+    if not isinstance(updates, dict):
+        return {"status": "error", "detail": "expected an object"}
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(Setting.key == "onboarding").first()
+        cur = dict(row.value) if row and isinstance(row.value, dict) else {}
+        for k, v in updates.items():
+            # don't clobber a saved secret with a blank or mask
+            if k in SECRET_FIELDS:
+                if not v or str(v).strip() in ("", "••••••••"):
+                    continue
+            cur[k] = v
+        if row:
+            row.value = cur
+        else:
+            db.add(Setting(key="onboarding", value=cur))
+        db.commit()
+    finally:
+        db.close()
+    return {"status": "ok"}
 
 
 @router.post("/onboarding")
