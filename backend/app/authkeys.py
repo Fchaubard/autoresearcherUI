@@ -107,6 +107,89 @@ def add_key(line: str) -> dict:
     return {"ok": True}
 
 
+_SSH_INFO_CACHE: dict = {}
+
+
+def detect_ssh_info() -> dict:
+    """Best-effort detection of how to SSH into this node:
+      user   - whoami
+      host   - the node's public IP (from ipify, since the host the user is
+               reaching the dashboard at is likely behind a cloudflared
+               tunnel that doesn't accept SSH)
+      port   - the lowest non-default port sshd is listening on (RunPod and
+               vast.ai both expose sshd on a high port; if only :22 is open
+               we report :22)
+      command - the assembled `ssh user@host -p port` string
+
+    The result is cached for the process — public-IP lookups aren't free
+    and the answer doesn't change. The user can still override any of
+    these fields from Settings.
+    """
+    global _SSH_INFO_CACHE
+    if _SSH_INFO_CACHE.get("command"):
+        return dict(_SSH_INFO_CACHE)
+
+    user = "root"
+    try:
+        u = subprocess.run(["whoami"], capture_output=True, text=True,
+                           timeout=3)
+        if u.returncode == 0 and u.stdout.strip():
+            user = u.stdout.strip()
+    except Exception:
+        pass
+
+    # public IP
+    host = ""
+    for url in ("https://api.ipify.org", "https://ifconfig.me/ip",
+                "https://icanhazip.com"):
+        try:
+            import urllib.request
+            with urllib.request.urlopen(url, timeout=4) as resp:
+                txt = resp.read().decode("utf-8", errors="ignore").strip()
+            # very rough IPv4 sanity check
+            parts = txt.split(".")
+            if (len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255
+                                        for p in parts)):
+                host = txt
+                break
+        except Exception:
+            continue
+
+    # ssh port — prefer a non-22 listening port (typical of RunPod/vast)
+    port = "22"
+    try:
+        ss = subprocess.run(["ss", "-lntp"], capture_output=True, text=True,
+                            timeout=5)
+        if ss.returncode == 0:
+            ports: list[int] = []
+            for ln in ss.stdout.splitlines():
+                if "sshd" not in ln:
+                    continue
+                # local-address is in column 4 (Local Address:Port)
+                cols = ln.split()
+                addr = next((c for c in cols if ":" in c
+                             and not c.startswith("users:")), "")
+                if not addr:
+                    continue
+                p = addr.rsplit(":", 1)[-1]
+                if p.isdigit():
+                    ports.append(int(p))
+            non22 = [p for p in ports if p != 22]
+            if non22:
+                port = str(min(non22))
+            elif 22 in ports:
+                port = "22"
+    except Exception:
+        pass
+
+    cmd = f"ssh {user}@{host} -p {port}" if host else \
+          f"ssh {user}@<node-ip> -p {port}"
+
+    out = {"user": user, "host": host, "port": port, "command": cmd}
+    _SSH_INFO_CACHE = out
+    return dict(out)
+
+
 def local_pubkey() -> dict:
     """Return this node's SSH public key + a one-liner to install it on
     another machine. If no keypair exists, generate one (ed25519). The user

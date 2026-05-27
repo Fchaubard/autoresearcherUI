@@ -770,9 +770,28 @@ def authkeys_pubkey():
 
 
 @router.get("/authkeys")
-def authkeys_list():
-    return {"keys": authkeys.list_keys(),
-            "ssh": "ssh root@<node-ip> -p <ssh-port>"}
+def authkeys_list(db: Session = Depends(get_session)):
+    """Authorized keys + a real SSH connect command for this node.
+    Auto-detects user / public IP / sshd port; Settings overrides win
+    (node_ssh_user, node_ssh_host, node_ssh_port)."""
+    info = authkeys.detect_ssh_info()
+    row = db.query(Setting).filter(Setting.key == "onboarding").first()
+    cfg = dict(row.value) if row and isinstance(row.value, dict) else {}
+    user = (cfg.get("node_ssh_user") or info.get("user") or "root").strip()
+    host = (cfg.get("node_ssh_host") or info.get("host") or "").strip()
+    port = str(cfg.get("node_ssh_port") or info.get("port") or "22").strip()
+    overridden = bool(cfg.get("node_ssh_port"))
+    hint = ""
+    if host and port == "22" and not overridden:
+        hint = (" — note: this is the INTERNAL sshd port. On RunPod / "
+                "vast.ai the public port is usually a high port (e.g. "
+                "22149); set node_ssh_port in Settings to override.")
+    cmd = (f"ssh {user}@{host} -p {port}" if host
+           else f"ssh {user}@<node-ip> -p {port}  (set node_ssh_host in "
+                "Settings — public IP auto-detect failed)")
+    return {"keys": authkeys.list_keys(), "ssh": cmd, "ssh_hint": hint,
+            "ssh_user": user, "ssh_host": host, "ssh_port": port,
+            "ssh_detected": info}
 
 
 @router.post("/authkeys")

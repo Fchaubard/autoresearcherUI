@@ -202,6 +202,111 @@ def _frontier_ids(runs) -> set[str]:
     return out
 
 
+def _compact_one_line(r, frontier: set[str], maximize: bool) -> str:
+    """One-line digest of a run that fits ~80-120 chars: id, status, metric,
+    abbreviated 'what'. Frontier-movers get a star. ~30-40 tokens each."""
+    star = " ★" if r.id in frontier else ""
+    m = "—" if r.headline_metric is None else f"{r.headline_metric:.4f}"
+    cfg = r.config if isinstance(r.config, dict) else {}
+    what = (cfg.get("what") or "").strip()
+    if not what:
+        what = (r.run_name or r.id)
+    what = " ".join(what.split())[:70]            # collapse whitespace, clip
+    return f"{r.status[:9]:<9} {m:<8} {r.id[:34]:<34}{star}  {what}"
+
+
+def _aggregate_stats(runs, proj) -> dict:
+    """Cheap aggregate stats: counts by status, frontier progression, and a
+    naive crash-pattern detector that surfaces words appearing in many
+    crashed-run names (typical signal: 'lr=5e-4' in N/M crashes)."""
+    by_status: dict[str, int] = {}
+    crashed_tokens: dict[str, int] = {}
+    metrics_seen = []
+    for r in runs:
+        by_status[r.status] = by_status.get(r.status, 0) + 1
+        if r.status == "crashed":
+            name = (r.run_name or r.id).lower()
+            for tok in re.split(r"[_\s=]+", name):
+                if 2 < len(tok) < 28 and not tok.isdigit():
+                    crashed_tokens[tok] = crashed_tokens.get(tok, 0) + 1
+        if r.headline_metric is not None and r.status in ("kept", "success"):
+            metrics_seen.append((r.created_at or "", r.headline_metric, r.id,
+                                  r.run_name))
+    # Best 5 crash-pattern tokens, only if they appear in ≥4 crashes
+    crash_patterns = sorted(
+        [(k, v) for k, v in crashed_tokens.items() if v >= 4],
+        key=lambda kv: -kv[1])[:5]
+    # Frontier progression (only kept improvements, in chronological order)
+    metrics_seen.sort(key=lambda x: x[0])
+    maximize = proj.metric_direction == "maximize"
+    frontier_progression = []
+    best = None
+    for _ts, m, rid, name in metrics_seen:
+        if best is None or (m > best if maximize else m < best):
+            best = m
+            frontier_progression.append({"run_id": rid, "name": name,
+                                          "metric": m})
+    return {
+        "by_status": by_status,
+        "frontier_progression": frontier_progression[-20:],   # last 20 best
+        "crash_patterns": [{"token": k, "n_crashed_runs": v}
+                            for k, v in crash_patterns],
+    }
+
+
+def _lessons_path() -> Path | None:
+    """workspace/<repo_name>/lessons.md — the council's running notebook."""
+    name = _onboarding_repo_name()
+    if not name:
+        return None
+    p = DATA_DIR / "workspace" / name / "lessons.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _read_lessons(max_chars: int = 6000) -> str:
+    p = _lessons_path()
+    if not p or not p.exists():
+        return ""
+    try:
+        text = p.read_text(errors="ignore")
+    except OSError:
+        return ""
+    # Trim to last max_chars so the file can't blow the budget
+    if len(text) > max_chars:
+        text = "… (older lessons trimmed)\n\n" + text[-max_chars:]
+    return text
+
+
+def _append_lesson(reviewer: str, run_name: str, learning: str) -> None:
+    """Append the council's takeaway from this run to lessons.md, dedup'd
+    against the previous N entries so identical / near-identical lessons
+    don't clutter the file."""
+    p = _lessons_path()
+    if not p or not learning or not learning.strip():
+        return
+    ll = learning.strip()
+    if len(ll) < 12:
+        return
+    cur = _read_lessons(max_chars=20000)
+    # naive fuzzy dedup: skip if a recent line shares ≥80% of words
+    new_words = set(re.findall(r"\w+", ll.lower()))
+    if new_words:
+        for line in cur.splitlines()[-30:]:
+            old_words = set(re.findall(r"\w+", line.lower()))
+            if old_words:
+                overlap = len(new_words & old_words) / max(len(new_words), 1)
+                if overlap > 0.8:
+                    return
+    ts = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M")
+    line = f"- [{ts} · {reviewer} on {run_name}] {ll}\n"
+    try:
+        with open(p, "a") as f:
+            f.write(line)
+    except OSError as e:
+        print(f"[council] could not append lesson: {e}", flush=True)
+
+
 def _build_context(run_id: str) -> dict | None:
     db = SessionLocal()
     try:
@@ -209,20 +314,38 @@ def _build_context(run_id: str) -> dict | None:
         run = db.query(Run).filter(Run.id == run_id).first()
         if not (proj and run):
             return None
-        all_runs = db.query(Run).order_by(Run.created_at.desc()).limit(40).all()
-        frontier = _frontier_ids(db.query(Run).all())
+        every_run = db.query(Run).all()
+        frontier = _frontier_ids(every_run)
         ideas = db.query(Idea).filter(Idea.id.like("deck-%")).all()
+        maximize = proj.metric_direction == "maximize"
 
-        def _cfg(r):
-            c = r.config if isinstance(r.config, dict) else {}
-            return {k: c.get(k) for k in ("what", "why") if c.get(k)}
+        # Compress every prior run into a one-liner. Sort: frontier-movers
+        # first, then crashed, then everything else. This is the central
+        # change — the council now sees the WHOLE project history, not just
+        # the last 8 runs.
+        others = [r for r in every_run if r.id != run.id]
 
-        return {
+        def _key(r):
+            on_front = r.id in frontier
+            is_crash = (r.status == "crashed")
+            # frontier first (0), then crash (1), then others (2);
+            # within each bucket newest first
+            return (0 if on_front else (1 if is_crash else 2),
+                    -1 * (1 if r.created_at else 0),
+                    r.created_at or "")
+        others.sort(key=_key)
+        run_lines = [_compact_one_line(r, frontier, maximize) for r in others]
+        run_lines_text = "\n".join(run_lines)[:24000]   # cap ~6k tokens
+
+        stats = _aggregate_stats(every_run, proj)
+
+        ctx = {
             "project": {
                 "name": proj.name,
                 "purpose": proj.purpose,
                 "metric": proj.validation_metric,
                 "direction": proj.metric_direction,
+                "baseline_metric": getattr(proj, "baseline_metric", None),
             },
             "this_run": {
                 "id": run.id,
@@ -232,22 +355,17 @@ def _build_context(run_id: str) -> dict | None:
                 "baseline_delta": run.baseline_delta,
                 "config": run.config if isinstance(run.config, dict) else {},
             },
-            "recent_runs": [
-                {
-                    "id": r.id,
-                    "status": r.status,
-                    "metric": r.headline_metric,
-                    "on_frontier": r.id in frontier,
-                    "config": _cfg(r),
-                }
-                for r in all_runs if r.id != run.id
-            ][:8],
+            "aggregate": stats,
+            "all_prior_runs_count": len(others),
+            "all_prior_runs_oneliners": run_lines_text,
             "pending_ideas": [
                 {"idea_id": i.idea_id, "what": i.description}
                 for i in ideas
-            ][:20],
+            ][:30],
             "pending_total_count": len(ideas),
+            "lessons_so_far": _read_lessons(max_chars=6000),
         }
+        return ctx
     finally:
         db.close()
 
@@ -414,16 +532,36 @@ def _agreement(a: dict, b: dict) -> bool:
 
 # ── the debate orchestrator ──────────────────────────────────────────────
 def _ctx_text(ctx: dict) -> str:
+    """Build the user message for the council. We INLINE the all-runs
+    digest + lessons.md as natural-language blocks (not JSON-quoted) so the
+    model reads them as the body of context, not as a stringified blob. The
+    rest of the context (project, this_run, aggregate, pending, ...) is
+    serialised as JSON for structure."""
     total = ctx.get("pending_total_count", 0)
+    n_runs = ctx.get("all_prior_runs_count", 0)
     note = ""
     if total > 40:
-        note = (f"\n\nNOTE: queue has {total} pending ideas (you only see "
-                f"top 20). Focus on RERANK / VETO. Only propose new_ideas if "
-                f"they would CLEARLY replace existing ones.")
-    return ("Here is the current state of an autonomous ML research project. "
-            "Review the most recent run and return JSON per the schema in the "
-            "system prompt." + note + "\n\n"
-            + json.dumps(ctx, indent=2, default=str))
+        note += (f"\n\nNOTE: queue has {total} pending ideas (you only see "
+                 f"top 30). Focus on RERANK / VETO. Only propose new_ideas "
+                 f"if they would CLEARLY replace existing ones.")
+    # Inline blocks
+    runs_block = ctx.pop("all_prior_runs_oneliners", "") or "(none)"
+    lessons_block = ctx.pop("lessons_so_far", "").strip() or \
+        "(none yet — this is the first review)"
+    return (
+        "You are reviewing the most recent run on an autonomous ML research "
+        "project. Use all the context below — especially the lessons "
+        "already learned and the history of prior runs — to avoid "
+        "recommending anything that's already been tried or dead-ended."
+        + note + "\n\n"
+        "=== LESSONS LEARNED SO FAR (from your previous reviews) ===\n"
+        + lessons_block + "\n\n"
+        f"=== ALL PRIOR RUNS ({n_runs} total — frontier-movers ★ first, then "
+        "crashed, then everything else) ===\n"
+        "status    metric   run_id                              what\n"
+        "" + runs_block + "\n\n"
+        "=== STRUCTURED CONTEXT (project / this run / aggregate / pending) "
+        "===\n" + json.dumps(ctx, indent=2, default=str))
 
 
 def deliberate(run_id: str) -> dict | None:
@@ -636,10 +774,12 @@ def _persist(run_id: str, review: dict) -> None:
     """Stash the review on run.config so /api/runs returns it, mirror the
     learning onto its Idea, and emit a feed event."""
     db = SessionLocal()
+    captured_run_name = run_id
     try:
         run = db.query(Run).filter(Run.id == run_id).first()
         if not run:
             return
+        captured_run_name = run.run_name or run.id    # capture before close
         cfg = dict(run.config) if isinstance(run.config, dict) else {}
         # Keep both: 'review' for backwards-compat with old UI, and the full
         # 'reviews' structure with all per-round positions.
@@ -663,6 +803,14 @@ def _persist(run_id: str, review: dict) -> None:
         db.commit()
     finally:
         db.close()
+    # Append the review's learning to lessons.md so future reviews see it.
+    try:
+        _append_lesson(
+            reviewer=(review.get("reviewer") or "?"),
+            run_name=captured_run_name,
+            learning=review.get("learning") or "")
+    except Exception as e:                              # noqa: BLE001
+        print(f"[council] _append_lesson failed: {e}", flush=True)
     try:
         from .bus import bus
         bus.publish("events", "runs_changed", {})

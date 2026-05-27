@@ -1569,6 +1569,10 @@ const OB_FIELDS = [
   ['run_debate', 'Run debate between reviewers', 'check', ''],
   ['debate_max_rounds', 'Debate max rounds (before tiebreaker)', 'select',
     '3|2|1|4|5'],
+  ['sec', 'This node — SSH access (auto-detected, override if wrong)'],
+  ['node_ssh_user', 'SSH user', 'text', 'root'],
+  ['node_ssh_host', 'SSH host / public IP (blank = auto-detect)', 'text', ''],
+  ['node_ssh_port', 'SSH port (blank = auto-detect)', 'text', '22'],
   ['sec', 'Extra GPU nodes (optional)'],
   ['extra_gpu_nodes',
     'One SSH target per line — e.g. `root@10.0.0.5:22` or `user@host`. '
@@ -1976,6 +1980,9 @@ function renderAuthkeys(c) {
       'deleting any old key.</div>' +
       '<div class="sys-sec">SSH into the node</div>' +
       `<code class="ak-ssh">${esc(d.ssh || '')}</code>` +
+      (d.ssh_hint
+        ? `<div class="ak-help" style="color:var(--warn)">${esc(d.ssh_hint)}</div>`
+        : '') +
       pubBlock +
       `<div class="sys-sec">Authorized keys (${keys.length})</div>` +
       `<div class="ak-list">${rows}</div>` +
