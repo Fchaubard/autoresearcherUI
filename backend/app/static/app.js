@@ -2645,6 +2645,7 @@ const AnaState = {
 
 async function renderAnalysis(c) {
   AnaState.baseline = getBaseline();
+  AnaState.container = c;          // module-wide reference so other fns can use it
   // Add fallback class so the layout works even if the browser doesn't
   // support :has() (CSS rule .viewpane:has(.anav2){padding:0}).
   c.classList.add('full-bleed');
@@ -3210,14 +3211,7 @@ async function refreshPanel(p) {
   // Legend
   if (legend) {
     if (!rendered.length) {
-      // Show which runs were selected but didn't log this metric
-      const missing = runIds.map(rid => {
-        const r = (S.runs || []).find(r => r.id === rid);
-        return (r && r.run_name) || rid;
-      });
-      legend.innerHTML =
-        `<span class="anav2-legend-empty">None of the selected run(s) ` +
-        `logged <code>${esc((p.y_keys||[]).join(', '))}</code>.</span>`;
+      _renderEmptyPanelLegend(legend, p, runIds, AnaState.container);
     } else {
       legend.innerHTML = rendered.slice(0, 10).map(s =>
         `<span class="anav2-legend-item" title="${esc(s.name)}">` +
@@ -3230,6 +3224,72 @@ async function refreshPanel(p) {
           : '');
     }
   }
+}
+
+// When a panel has no data, surface WHY and offer a click-to-fix where
+// possible. Three cases:
+//   A) The key isn't logged anywhere in the project — agent isn't tracking it.
+//   B) The key IS logged by other runs — offer to add them.
+//   C) Selected runs are all still running and just haven't logged yet.
+async function _renderEmptyPanelLegend(legend, p, runIds, c) {
+  const keys = p.y_keys || [];
+  if (!keys.length) {
+    legend.innerHTML = '<span class="anav2-legend-empty">' +
+      'Click ✎ to pick metrics for this panel.</span>';
+    return;
+  }
+  const projectKeys = new Set(AnaState.keys || []);
+  const missing = keys.filter(k => !projectKeys.has(k));
+  if (missing.length === keys.length) {
+    // Case A — none of the panel's keys exist in the project.
+    legend.innerHTML = '<span class="anav2-legend-empty">' +
+      `<code>${esc(missing.join(', '))}</code> ` +
+      `${missing.length>1?'aren\'t':'isn\'t'} logged by any run in this ` +
+      `project. The agent may not be tracking ${missing.length>1?'them':'it'} ` +
+      `yet.</span>`;
+    return;
+  }
+  // Some keys exist — find runs that DO log the first key, excluding the
+  // currently-selected set.
+  const k0 = keys.find(k => projectKeys.has(k));
+  let coverage = [];
+  try {
+    const d = await api('/metrics/key_coverage?key=' +
+      encodeURIComponent(k0) + '&limit=50');
+    coverage = (d && d.run_ids) || [];
+  } catch (e) { coverage = []; }
+  const candidates = coverage.filter(r => !AnaState.selected.has(r.id));
+  if (!candidates.length) {
+    // The selected runs DO log this metric — just don't have data yet.
+    // Most likely: they're running and haven't reached eval.
+    const allRunning = runIds.every(rid => {
+      const r = (S.runs || []).find(x => x.id === rid);
+      return r && r.status === 'running';
+    });
+    legend.innerHTML = '<span class="anav2-legend-empty">' +
+      (allRunning
+        ? `Selected runs are still training — <code>${esc(k0)}</code> ` +
+          `usually only logs at evaluation. Wait or pick a finished run.`
+        : `No data for <code>${esc(k0)}</code> in the selected runs yet.`) +
+      '</span>';
+    return;
+  }
+  // Case B — other runs DO log this; offer to add them.
+  legend.innerHTML =
+    `<span class="anav2-legend-empty">${candidates.length} other run` +
+    `${candidates.length===1?'':'s'} logged <code>${esc(k0)}</code> — ` +
+    `<button class="anav2-legend-action" data-action="add-top">` +
+    `add the latest ${Math.min(5, candidates.length)}</button> · ` +
+    `<button class="anav2-legend-action" data-action="swap">` +
+    `swap to them</button></span>`;
+  legend.querySelectorAll('.anav2-legend-action').forEach(btn => {
+    btn.onclick = () => {
+      const top = candidates.slice(0, 5).map(r => r.id);
+      if (btn.dataset.action === 'swap') AnaState.selected.clear();
+      top.forEach(rid => AnaState.selected.add(rid));
+      renderAnaTable(c); refreshAllPanels(); syncUrl();
+    };
+  });
 }
 
 function refreshAllPanels() {

@@ -374,6 +374,10 @@ body.resizing{user-select:none}
 .anav2-legend-empty{color:var(--muted);font-size:10.5px;font-style:italic}
 .anav2-legend-empty code{font-family:var(--mono);background:var(--panel-3);
   padding:1px 5px;border-radius:3px;color:var(--text-2);font-style:normal}
+.anav2-legend-action{background:transparent;border:0;color:var(--accent);
+  font:inherit;cursor:pointer;text-decoration:underline;padding:0;
+  font-style:normal}
+.anav2-legend-action:hover{color:#fff}
 .bc-canvas, .bc-overlay{position:absolute;inset:0}
 .bc-overlay{cursor:crosshair}
 

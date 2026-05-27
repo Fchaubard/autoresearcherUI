@@ -781,6 +781,28 @@ def run_metric_keys(run_id: str):
     return {"keys": metrics.run_keys(run_id)}
 
 
+@router.get("/metrics/key_coverage")
+def metrics_key_coverage(key: str = "", limit: int = 50):
+    """Which runs in this project logged a given metric key.
+    Drives the Analysis empty-state's 'X other runs logged this — click to
+    swap' helper. Returns up to `limit` run_ids ordered newest first."""
+    if not key:
+        return {"key": "", "run_ids": []}
+    db = SessionLocal()
+    try:
+        rows = (db.query(Run.id, Run.run_name, Run.created_at)
+                .filter(Run.id.in_(
+                    [r[0] for r in metrics._con.execute(
+                        "SELECT DISTINCT run_id FROM metrics WHERE key = ?",
+                        [key]).fetchall()]))
+                .order_by(Run.created_at.desc())
+                .limit(limit).all())
+        return {"key": key,
+                "run_ids": [{"id": r[0], "run_name": r[1]} for r in rows]}
+    finally:
+        db.close()
+
+
 @router.post("/metrics/batch")
 async def metrics_batch(request: Request):
     """Server-bucketed multi-run, multi-key time-series. The single endpoint
@@ -812,29 +834,44 @@ async def metrics_batch(request: Request):
 @router.get("/analysis/panels")
 def analysis_panels(db: Session = Depends(get_session)):
     """Persisted panel set for the Analysis tab. Falls back to a default
-    set when nothing is saved."""
+    set that adapts to which metric keys this project actually logs."""
     row = db.query(Setting).filter(Setting.key == "analysis_panels").first()
     if row and isinstance(row.value, dict) and row.value.get("panels"):
         return row.value
-    # Sensible default: 4 panels covering the standard metrics.
-    return {"panels": [
-        {"id": "p1", "title": "Training loss",
-         "y_keys": ["train_loss"], "x_key": "step",
-         "y_log": False, "smoothing": 0.0, "include_baseline": True,
-         "show_band": False, "width": "half"},
-        {"id": "p2", "title": "Validation loss",
-         "y_keys": ["val_loss"], "x_key": "step",
-         "y_log": False, "smoothing": 0.0, "include_baseline": True,
-         "show_band": False, "width": "half"},
-        {"id": "p3", "title": "Validation accuracy",
-         "y_keys": ["val_acc"], "x_key": "step",
-         "y_log": False, "smoothing": 0.0, "include_baseline": True,
-         "show_band": False, "width": "half"},
-        {"id": "p4", "title": "Learning rate",
-         "y_keys": ["lr"], "x_key": "step",
-         "y_log": False, "smoothing": 0.0, "include_baseline": False,
-         "show_band": False, "width": "half"},
-    ]}
+
+    # Project-aware default. Always emit the spec's standard 6 slots, so the
+    # UI shows them as labelled spots — but title each with what the project
+    # actually logs when possible. The project metric (proj.validation_metric)
+    # is the most important one and gets pinned first.
+    proj = db.query(Project).first()
+    project_metric = (proj.validation_metric if proj else "") or ""
+    keys_in_project = set(metrics.all_keys() or [])
+
+    def _panel(pid: str, title: str, key: str, log: bool = False,
+               baseline: bool = True, width: str = "half") -> dict:
+        return {"id": pid, "title": title, "y_keys": [key],
+                "x_key": "step", "y_log": log, "smoothing": 0.0,
+                "include_baseline": baseline, "show_band": False,
+                "width": width}
+
+    panels = []
+    # Pin the project's own validation metric first if it's set and exists.
+    if project_metric and project_metric in keys_in_project:
+        panels.append(_panel("p_main", f"Project metric · {project_metric}",
+                              project_metric, log=False, baseline=True,
+                              width="full"))
+    # Standard spec defaults — keep their slots even if not logged yet so
+    # the user sees the empty-state message and knows what's expected.
+    panels.append(_panel("p_train_loss", "Training loss", "train_loss",
+                         log=True))
+    panels.append(_panel("p_val_loss", "Validation loss", "val_loss",
+                         log=True))
+    panels.append(_panel("p_train_acc", "Training accuracy", "train_acc"))
+    panels.append(_panel("p_val_acc", "Validation accuracy", "val_acc"))
+    panels.append(_panel("p_lr", "Learning rate", "lr", baseline=False))
+    panels.append(_panel("p_step_time", "Time per step", "time_per_step",
+                         baseline=False))
+    return {"panels": panels}
 
 
 @router.put("/analysis/panels")

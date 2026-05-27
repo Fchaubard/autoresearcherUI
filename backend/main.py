@@ -61,9 +61,35 @@ async def _no_cache_static(request: Request, call_next):
     return response
 
 
+import time as _time
+
+_INDEX_TEMPLATE: str | None = None
+
+
+def _index_html() -> str:
+    """Serve index.html with the static-asset cache-bust REWRITTEN to the
+    current wall-clock millisecond. This guarantees Chrome (which had been
+    serving aggressively-cached app.js/style.css regardless of Cache-Control
+    headers and hard-refresh) is forced to fetch fresh bytes because every
+    page load references URLs it has never seen before. The actual asset
+    bytes are still served from disk — the version is just a query param.
+    """
+    global _INDEX_TEMPLATE
+    if _INDEX_TEMPLATE is None:
+        _INDEX_TEMPLATE = (STATIC_DIR / "index.html").read_text()
+    import re as _re
+    nonce = str(int(_time.time() * 1000))
+    return _re.sub(r"\?v=[^\"']+", f"?v={nonce}", _INDEX_TEMPLATE)
+
+
 @app.get("/")
-def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+def index():
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(_index_html(), headers={
+        "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    })
 
 
 @app.get("/healthz")
