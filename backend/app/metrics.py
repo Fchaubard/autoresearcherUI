@@ -7,8 +7,11 @@ a single DuckDB file is used - the data flow and query API are identical.
 """
 from __future__ import annotations
 
+import datetime as dt
+import math
 import shutil
 import threading
+import time
 
 import duckdb
 
@@ -25,10 +28,29 @@ _con.execute(
            wall_time DOUBLE
        )"""
 )
+# Maintain a tiny table of seen-keys per ingest, so /api/metrics/keys is
+# O(1)-ish rather than a DISTINCT-scan over the whole metrics table.
+_con.execute(
+    """CREATE TABLE IF NOT EXISTS metric_keys (
+           key          VARCHAR PRIMARY KEY,
+           last_seen_at VARCHAR
+       )"""
+)
+# Cache for the bucketed-batch query — keyed by a tuple of all parameters
+# that affect the result. We never bound it explicitly (typical project has
+# ~hundreds of (run, key) pairs); evicted lazily when a running-run cache
+# entry is stale by more than 0.5 s.
+_batch_cache: dict[tuple, dict] = {}
+_batch_cache_last_recompute: dict[str, float] = {}   # run_id -> wall
+_batch_lock = threading.Lock()
+
+
+def _iso() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat()
 
 
 def append(run_id: str, points: list[dict]) -> None:
-    """Append a batch of metric points for a run."""
+    """Append a batch of metric points for a run and update metric_keys."""
     rows = [
         (run_id, str(p["key"]), int(p.get("step") or 0),
          float(p["value"]), float(p.get("wall_time") or 0.0))
@@ -36,9 +58,21 @@ def append(run_id: str, points: list[dict]) -> None:
     ]
     if not rows:
         return
+    seen_keys = {r[1] for r in rows}
+    now_iso = _iso()
     with _lock:
         _con.executemany(
             "INSERT INTO metrics VALUES (?, ?, ?, ?, ?)", rows)
+        # INSERT OR REPLACE doesn't exist in DuckDB; use ON CONFLICT.
+        _con.executemany(
+            """INSERT INTO metric_keys VALUES (?, ?)
+               ON CONFLICT(key) DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at""",
+            [(k, now_iso) for k in seen_keys])
+    # invalidate per-run cache entries on new data
+    with _batch_lock:
+        for k in list(_batch_cache.keys()):
+            if k[0] == run_id:
+                _batch_cache.pop(k, None)
 
 
 def keys(run_id: str) -> list[str]:
@@ -88,11 +122,163 @@ def latest(run_id: str, key: str) -> float | None:
 
 
 def all_keys() -> list[str]:
-    """Every distinct metric key across all runs (drives the Analysis view)."""
+    """Every distinct metric key across all runs (drives the Analysis view).
+    Reads the maintained metric_keys table — no full table scan."""
     with _lock:
         rows = _con.execute(
-            "SELECT DISTINCT key FROM metrics ORDER BY key").fetchall()
-    return [r[0] for r in rows]
+            "SELECT key FROM metric_keys ORDER BY key").fetchall()
+    out = [r[0] for r in rows]
+    if not out:
+        # Backfill the metric_keys table if it's empty (first run after the
+        # schema change). Cheap one-time DISTINCT scan, then we're good.
+        with _lock:
+            scanned = _con.execute(
+                "SELECT DISTINCT key FROM metrics ORDER BY key").fetchall()
+            if scanned:
+                _con.executemany(
+                    """INSERT INTO metric_keys VALUES (?, ?)
+                       ON CONFLICT(key) DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at""",
+                    [(r[0], _iso()) for r in scanned])
+                out = [r[0] for r in scanned]
+    return out
+
+
+def run_keys(run_id: str) -> list[str]:
+    """Keys this specific run has logged."""
+    return keys(run_id)
+
+
+def batch_bucketed(
+        run_ids: list[str], keys_wanted: list[str],
+        x_key: str = "step", x_min: float | None = None,
+        x_max: float | None = None, bucket_count: int = 500,
+        running_set: set[str] | None = None,
+) -> dict:
+    """Return server-bucketed series for (run_ids × keys_wanted) in a single
+    query. Result schema (one entry per (run_id, key) pair that has data):
+
+      {"series": [{"run_id", "key", "x" (bucket x_first, length=bucket_count),
+                   "y" (y_last, NULL for empty), "y_min", "y_max"}, ...],
+       "x_key": ..., "buckets": bucket_count, "x_min": ..., "x_max": ...}
+
+    Empty buckets are emitted as NULL so client indices align across series
+    in the same panel. Cache keyed by (run_id, key, x_key, x_min, x_max,
+    bucket_count); cache entries for runs in `running_set` expire after
+    500 ms.
+    """
+    if not run_ids or not keys_wanted:
+        return {"series": [], "x_key": x_key, "buckets": bucket_count}
+    x_col = "step" if x_key == "step" else (
+        "wall_time" if x_key == "wall_time" else "step")
+    bc = max(8, min(int(bucket_count), 4000))
+    running_set = running_set or set()
+    now = time.time()
+
+    # Cache lookup
+    out_series: list[dict] = []
+    todo: list[tuple[str, str]] = []
+    with _batch_lock:
+        for rid in run_ids:
+            for k in keys_wanted:
+                ck = (rid, k, x_col, x_min, x_max, bc)
+                cached = _batch_cache.get(ck)
+                stale = (rid in running_set
+                         and now - _batch_cache_last_recompute.get(rid, 0) > 0.5)
+                if cached and not stale:
+                    out_series.append(cached)
+                else:
+                    todo.append((rid, k))
+
+    if todo:
+        # Compute the x range if not provided. We do this once per query.
+        if x_min is None or x_max is None:
+            ph = ",".join(["?"] * len(run_ids))
+            ph2 = ",".join(["?"] * len(keys_wanted))
+            with _lock:
+                row = _con.execute(
+                    f"SELECT min({x_col}), max({x_col}) FROM metrics "
+                    f"WHERE run_id IN ({ph}) AND key IN ({ph2})",
+                    list(run_ids) + list(keys_wanted)).fetchone()
+            qmin = row[0] if row and row[0] is not None else 0.0
+            qmax = row[1] if row and row[1] is not None else 1.0
+        else:
+            qmin = float(x_min)
+            qmax = float(x_max)
+        if qmax <= qmin:
+            qmax = qmin + 1.0
+
+        # The single batched query. We compute the bucket integer in a
+        # subquery so we can group by it and pull ARG_MAX for the line.
+        # NB: arg_max in duckdb is `arg_max(value, ordering_expr)`.
+        run_ph = ",".join(["?"] * len(run_ids))
+        key_ph = ",".join(["?"] * len(keys_wanted))
+        sql = f"""
+            WITH ranged AS (
+                SELECT run_id, key, {x_col} AS x, value,
+                       CAST(LEAST({bc} - 1,
+                            FLOOR((CAST({x_col} AS DOUBLE) - {qmin})
+                                  / NULLIF({qmax} - {qmin}, 0) * {bc})
+                            ) AS INTEGER) AS bucket
+                FROM metrics
+                WHERE run_id IN ({run_ph})
+                  AND key IN ({key_ph})
+                  AND {x_col} BETWEEN {qmin} AND {qmax}
+            )
+            SELECT run_id, key, bucket,
+                   MIN(x)              AS x_first,
+                   MAX(x)              AS x_last,
+                   arg_max(value, x)   AS y_last,
+                   MIN(value)          AS y_min,
+                   MAX(value)          AS y_max
+            FROM ranged
+            GROUP BY run_id, key, bucket
+            ORDER BY run_id, key, bucket
+        """
+        params = list(run_ids) + list(keys_wanted)
+        with _lock:
+            rows = _con.execute(sql, params).fetchall()
+
+        # Reshape rows into dense bucket_count-long arrays per (run, key).
+        grouped: dict[tuple[str, str], list[tuple[int, float, float, float, float]]] = {}
+        for r in rows:
+            rid, k, b, xf, xl, yl, ymin, ymax = r
+            grouped.setdefault((rid, k), []).append(
+                (int(b), float(xf), float(yl) if yl is not None else float("nan"),
+                 float(ymin) if ymin is not None else float("nan"),
+                 float(ymax) if ymax is not None else float("nan")))
+
+        with _batch_lock:
+            for (rid, k) in todo:
+                entries = grouped.get((rid, k)) or []
+                # Build dense arrays. Empty buckets get NULL → None in JSON.
+                x_arr = [None] * bc
+                y_arr = [None] * bc
+                ymin_arr = [None] * bc
+                ymax_arr = [None] * bc
+                for b, xf, yl, ymin, ymax in entries:
+                    if 0 <= b < bc:
+                        # Fall back to bucket-edge x when MIN(x) NaN'd out
+                        x_arr[b] = xf if not math.isnan(xf) else None
+                        y_arr[b] = yl if not math.isnan(yl) else None
+                        ymin_arr[b] = ymin if not math.isnan(ymin) else None
+                        ymax_arr[b] = ymax if not math.isnan(ymax) else None
+                cell = {
+                    "run_id": rid, "key": k,
+                    "x": x_arr, "y": y_arr,
+                    "y_min": ymin_arr, "y_max": ymax_arr,
+                }
+                if entries:
+                    out_series.append(cell)
+                    _batch_cache[(rid, k, x_col, x_min, x_max, bc)] = cell
+                    _batch_cache_last_recompute[rid] = now
+
+    return {
+        "series": out_series,
+        "x_key": x_key,
+        "buckets": bc,
+        "x_min": x_min,
+        "x_max": x_max,
+    }
 
 
 def last_activity(run_id: str) -> float | None:

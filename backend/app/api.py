@@ -314,6 +314,23 @@ async def track_run(request: Request):
     return {"run_id": name}
 
 
+_METRICS_CHANGED_DEBOUNCE: dict[str, float] = {}
+_METRICS_CHANGED_DEBOUNCE_LOCK = threading.Lock()
+
+
+def _maybe_emit_metrics_changed(run_id: str) -> None:
+    """Coalesce metrics_changed(run_id) events to at most one per 500 ms
+    per run — the Analysis tab uses this to refetch bucketed data."""
+    import time as _time
+    now = _time.time()
+    with _METRICS_CHANGED_DEBOUNCE_LOCK:
+        last = _METRICS_CHANGED_DEBOUNCE.get(run_id, 0.0)
+        if now - last < 0.5:
+            return
+        _METRICS_CHANGED_DEBOUNCE[run_id] = now
+    bus.publish("metrics", "metrics_changed", {"run_id": run_id})
+
+
 @router.post("/track/log")
 async def track_log(request: Request):
     body = await request.json()
@@ -321,6 +338,7 @@ async def track_log(request: Request):
     points = body.get("points", [])
     metrics.append(run_id, points)
     bus.publish("metrics", "metric", {"run_id": run_id, "points": points})
+    _maybe_emit_metrics_changed(run_id)
     return {"ok": True}
 
 
@@ -746,6 +764,95 @@ async def clientlog(request: Request):
 @router.get("/metrics/names")
 def metric_names():
     return {"metrics": metrics.all_keys()}
+
+
+# ─────────── Analysis v2: batched bucketed metrics + keys + panels ────────
+
+@router.get("/metrics/keys")
+def metrics_keys():
+    """All metric keys ever seen on this project (Analysis 'Add panel' uses
+    this). Backed by the metric_keys table, not a DISTINCT scan."""
+    return {"keys": metrics.all_keys()}
+
+
+@router.get("/runs/{run_id}/metric_keys")
+def run_metric_keys(run_id: str):
+    """Keys that THIS run has logged. Drives the drawer 'View all plots'."""
+    return {"keys": metrics.run_keys(run_id)}
+
+
+@router.post("/metrics/batch")
+async def metrics_batch(request: Request):
+    """Server-bucketed multi-run, multi-key time-series. The single endpoint
+    powering the Analysis tab's panel grid. Schema in
+    docs/12-analysis-v2-spec-final.md."""
+    body = await request.json()
+    run_ids = body.get("run_ids") or []
+    keys_wanted = body.get("keys") or []
+    x_key = body.get("x_key") or "step"
+    x_min = body.get("x_min")
+    x_max = body.get("x_max")
+    bucket_count = int(body.get("bucket_count") or 500)
+    if not isinstance(run_ids, list) or not isinstance(keys_wanted, list):
+        return {"status": "error", "detail": "run_ids and keys must be lists"}
+    # Which runs are still running? Affects cache freshness.
+    db = SessionLocal()
+    try:
+        running = {r.id for r in db.query(Run)
+                   .filter(Run.id.in_(run_ids), Run.status == "running")
+                   .all()}
+    finally:
+        db.close()
+    return metrics.batch_bucketed(
+        run_ids, keys_wanted,
+        x_key=x_key, x_min=x_min, x_max=x_max,
+        bucket_count=bucket_count, running_set=running)
+
+
+@router.get("/analysis/panels")
+def analysis_panels(db: Session = Depends(get_session)):
+    """Persisted panel set for the Analysis tab. Falls back to a default
+    set when nothing is saved."""
+    row = db.query(Setting).filter(Setting.key == "analysis_panels").first()
+    if row and isinstance(row.value, dict) and row.value.get("panels"):
+        return row.value
+    # Sensible default: 4 panels covering the standard metrics.
+    return {"panels": [
+        {"id": "p1", "title": "Training loss",
+         "y_keys": ["train_loss"], "x_key": "step",
+         "y_log": False, "smoothing": 0.0, "include_baseline": True,
+         "show_band": False, "width": "half"},
+        {"id": "p2", "title": "Validation loss",
+         "y_keys": ["val_loss"], "x_key": "step",
+         "y_log": False, "smoothing": 0.0, "include_baseline": True,
+         "show_band": False, "width": "half"},
+        {"id": "p3", "title": "Validation accuracy",
+         "y_keys": ["val_acc"], "x_key": "step",
+         "y_log": False, "smoothing": 0.0, "include_baseline": True,
+         "show_band": False, "width": "half"},
+        {"id": "p4", "title": "Learning rate",
+         "y_keys": ["lr"], "x_key": "step",
+         "y_log": False, "smoothing": 0.0, "include_baseline": False,
+         "show_band": False, "width": "half"},
+    ]}
+
+
+@router.put("/analysis/panels")
+async def analysis_panels_put(request: Request):
+    """Save the panel set."""
+    body = await request.json()
+    panels = body.get("panels") or []
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(Setting.key == "analysis_panels").first()
+        if row:
+            row.value = {"panels": panels}
+        else:
+            db.add(Setting(key="analysis_panels", value={"panels": panels}))
+        db.commit()
+    finally:
+        db.close()
+    return {"status": "ok"}
 
 
 # ──────────── authorized_keys management ─────────────────────────────────────

@@ -1363,6 +1363,54 @@ async function openDrawer(runId) {
             `<code>${esc(v)}</code>`).join(' ') + `</div>` : '');
     bd.append(wrap);
   }
+  // "View all plots" — lazy-loaded multi-metric plot grid for this run.
+  // Defaults to a configurable mandatory list; below that a searchable
+  // list of remaining keys with "tap to plot" chips (per the v2 spec).
+  bd.append(el('div', 'dr-h2', 'View all plots'));
+  const vapBtn = el('button', 'btn', 'Show plots');
+  const vapWrap = el('div', 'vap-wrap'); vapWrap.style.display = 'none';
+  bd.append(vapBtn, vapWrap);
+  vapBtn.onclick = async () => {
+    vapBtn.style.display = 'none';
+    vapWrap.style.display = '';
+    vapWrap.innerHTML = '<div class="skel" style="height:200px"></div>';
+    // Fetch this run's logged keys
+    let runKeys = [];
+    try {
+      const k = await api('/runs/' + encodeURIComponent(runId) + '/metric_keys');
+      runKeys = (k && k.keys) || [];
+    } catch (e) { runKeys = []; }
+    const defaults = ['val_loss', 'val_acc', 'lr', 'train_loss',
+      'train_acc', 'time_per_step', 'samples_per_sec'];
+    const extras = runKeys.filter(k => !defaults.includes(k));
+    vapWrap.innerHTML = '';
+    const grid = el('div', 'vap-grid'); vapWrap.append(grid);
+    // Default panels — slot for each (placeholder if not logged)
+    defaults.forEach(k => grid.append(_vapPanel(runId, k, runKeys.includes(k))));
+    if (extras.length) {
+      vapWrap.append(el('div', 'dr-h2', 'Other metrics'));
+      const search = el('input', 'vap-search');
+      search.placeholder = 'filter (e.g. token, mem)…';
+      vapWrap.append(search);
+      const chips = el('div', 'vap-chips'); vapWrap.append(chips);
+      const extraGrid = el('div', 'vap-grid'); vapWrap.append(extraGrid);
+      const renderChips = (filter) => {
+        chips.innerHTML = '';
+        extras.filter(k => !filter
+                          || k.toLowerCase().includes(filter.toLowerCase()))
+              .forEach(k => {
+          const b = el('button', 'evchip', '+ ' + k);
+          b.onclick = () => {
+            extraGrid.append(_vapPanel(runId, k, true));
+            b.remove();
+          };
+          chips.append(b);
+        });
+      };
+      renderChips('');
+      search.oninput = () => renderChips(search.value);
+    }
+  };
   // run logs — captured to disk, so they persist after the run finishes
   bd.append(el('div', 'dr-h2', 'Logs'));
   const logBox = el('pre', 'dr-logs', 'loading logs…');
@@ -1468,6 +1516,20 @@ function paintConvo() {
 /* ── SSE ──────────────────────────────────────────────────────────────── */
 function streams() {
   const m = new EventSource('/api/stream/metrics');
+  m.addEventListener('metrics_changed', e => {
+    try {
+      const { run_id } = JSON.parse(e.data);
+      // Invalidate Analysis tab bucket cache for this run; if we're on
+      // Analysis right now and this run is selected, repaint.
+      if (typeof invalidateBucketsForRun === 'function') {
+        invalidateBucketsForRun(run_id);
+      }
+      if (S.view === 'analysis' && AnaState && AnaState.selected
+          && AnaState.selected.has(run_id)) {
+        if (typeof refreshAllPanels === 'function') refreshAllPanels();
+      }
+    } catch (e) { /* ignore */ }
+  });
   m.addEventListener('metric', e => {
     const { run_id, points } = JSON.parse(e.data);
     const md = S.metrics[run_id] || (S.metrics[run_id] = {});
@@ -2091,6 +2153,367 @@ function renderAuthkeys(c) {
 }
 
 /* ── analysis: multi-run comparison ───────────────────────────────────── */
+/* ── Analysis v2 — W&B-style multi-panel dashboard ─────────────────────────
+   Architecture (see docs/12-analysis-v2-spec-final.md):
+   - Runs table (left) with sort, regex search, status filter, baseline tag
+     stored in localStorage, solo button, multi-select via checkboxes.
+   - Panel grid (right) — each panel is a BucketChart that fetches
+     server-bucketed data via POST /api/metrics/batch. Smoothing applied
+     client-side; log-y toggleable; shared crosshair across panels with
+     the same x_key via cursorBus; zoom via drag-select.
+   - Baseline run is included automatically on every panel where
+     include_baseline is true; rendered as a dashed grey line.
+   - Panel set persists server-side at GET/PUT /api/analysis/panels. */
+
+// Tiny pub-sub for shared crosshair, scoped by x_key group.
+const cursorBus = {
+  x: null, group: null, frame: 0,
+  listeners: new Set(),
+  set(x, group) {
+    this.x = x; this.group = group;
+    if (this.frame) return;
+    this.frame = requestAnimationFrame(() => {
+      this.frame = 0;
+      this.listeners.forEach(fn => fn(this.x, this.group));
+    });
+  },
+  clear() { this.set(null, null); },
+};
+
+// Apply client-side EMA smoothing. Operates on Number|null arrays;
+// NaN/null breaks the EMA so curves don't bridge across gaps.
+function _smooth(ys, alpha) {
+  if (!alpha || alpha <= 0) return ys;
+  const out = new Array(ys.length);
+  let s = null;
+  for (let i = 0; i < ys.length; i++) {
+    const v = ys[i];
+    if (v == null || isNaN(v)) { out[i] = null; s = null; continue; }
+    s = (s == null) ? v : (alpha * s + (1 - alpha) * v);
+    out[i] = s;
+  }
+  return out;
+}
+
+const PALETTE_BIG = [
+  '#6366F1','#34D399','#F59E0B','#F87171','#A78BFA','#22D3EE','#FBBF24',
+  '#FB7185','#10B981','#60A5FA','#F97316','#C084FC','#14B8A6','#E879F9',
+];
+const BASELINE_COLOR = '#9BA1A8';
+
+// Read/write the user's baseline run id (per-browser).
+function getBaseline() {
+  try { return localStorage.getItem('arui:baseline') || null; }
+  catch (e) { return null; }
+}
+function setBaseline(rid) {
+  try {
+    if (rid) localStorage.setItem('arui:baseline', rid);
+    else localStorage.removeItem('arui:baseline');
+  } catch (e) { /* ignore */ }
+}
+
+// === BucketChart =========================================================
+// Renders one panel of multi-run, multi-series bucketed data.
+class BucketChart {
+  constructor(host) {
+    this.host = host; this.host.classList.add('lc-host');
+    this.canvas = el('canvas', 'bc-canvas');
+    this.overlay = el('canvas', 'bc-overlay');
+    this.tip = el('div', 'lc-tip'); this.tip.style.display = 'none';
+    host.append(this.canvas, this.overlay, this.tip);
+    this.series = [];        // [{run_id, name, color, dashed, x, y}]
+    this.smoothing = 0;
+    this.log = false;
+    this.xKey = 'step';
+    this.zoom = null;        // {x_min, x_max} | null
+    this._dragStart = null;
+    this._lastDraw = null;
+    new ResizeObserver(() => this.draw()).observe(host);
+    this.overlay.addEventListener('mousemove', e => this._onMove(e));
+    this.overlay.addEventListener('mouseleave', () => {
+      cursorBus.clear(); this._dragStart = null; this._drawOverlay(null);
+    });
+    this.overlay.addEventListener('mousedown', e => {
+      const r = this.overlay.getBoundingClientRect();
+      this._dragStart = e.clientX - r.left;
+    });
+    this.overlay.addEventListener('mouseup', e => {
+      if (this._dragStart == null) return;
+      const r = this.overlay.getBoundingClientRect();
+      const xEnd = e.clientX - r.left;
+      if (Math.abs(xEnd - this._dragStart) > 10 && this._lastDraw) {
+        const { xlo, xhi, pad, w } = this._lastDraw;
+        const a = this._dragStart, b = xEnd;
+        const sx = Math.min(a, b), ex = Math.max(a, b);
+        const xv1 = xlo + (sx - pad.l) / (w - pad.l - pad.r) * (xhi - xlo);
+        const xv2 = xlo + (ex - pad.l) / (w - pad.l - pad.r) * (xhi - xlo);
+        if (this.onZoom) this.onZoom(xv1, xv2);
+      }
+      this._dragStart = null;
+    });
+    this.overlay.addEventListener('dblclick', () => {
+      if (this.onZoom) this.onZoom(null, null);
+    });
+    // subscribe to the cursor bus
+    this._busFn = (x, group) => this._drawOverlay(group === this.xKey ? x : null);
+    cursorBus.listeners.add(this._busFn);
+  }
+  destroy() { cursorBus.listeners.delete(this._busFn); }
+  setData(series) { this.series = series || []; this.draw(); }
+  setSmoothing(a) { this.smoothing = a; this.draw(); }
+  setLog(v) { this.log = !!v; this.draw(); }
+  setXKey(k) { this.xKey = k; }
+  // Compute the smoothed y for one series (with NaN-aware EMA).
+  _ySmoothed(s) { return _smooth(s.y, this.smoothing); }
+  draw() {
+    const w = this.host.clientWidth || 360, h = this.host.clientHeight || 220;
+    const dpr = devicePixelRatio || 1;
+    for (const cv of [this.canvas, this.overlay]) {
+      cv.width = w * dpr; cv.height = h * dpr;
+      cv.style.width = w + 'px'; cv.style.height = h + 'px';
+    }
+    const c = this.canvas.getContext('2d');
+    c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, h);
+    const ser = (this.series || []).filter(s => s.y && s.y.some(v => v != null));
+    if (!ser.length) {
+      c.fillStyle = '#5C636B'; c.font = '11px sans-serif';
+      c.textAlign = 'center';
+      c.fillText('no data', w / 2, h / 2);
+      return;
+    }
+    const pad = { l: 50, r: 12, t: 8, b: 26 };
+    // Determine bounds. Smoothed y is what we plot.
+    let xlo = Infinity, xhi = -Infinity, ylo = Infinity, yhi = -Infinity;
+    const smoothed = ser.map(s => {
+      const ys = this._ySmoothed(s);
+      for (let i = 0; i < s.x.length; i++) {
+        const xi = s.x[i]; const yi = ys[i];
+        if (xi != null) {
+          if (xi < xlo) xlo = xi;
+          if (xi > xhi) xhi = xi;
+        }
+        if (yi != null && !isNaN(yi)) {
+          if (yi < ylo) ylo = yi;
+          if (yi > yhi) yhi = yi;
+        }
+      }
+      return ys;
+    });
+    if (!isFinite(xlo) || !isFinite(yhi)) {
+      c.fillStyle = '#5C636B'; c.font = '11px sans-serif';
+      c.textAlign = 'center';
+      c.fillText('no data', w / 2, h / 2); return;
+    }
+    const log = this.log && ylo > 0;
+    const tf = v => log ? Math.log10(v) : v;
+    let Ylo = tf(ylo), Yhi = tf(yhi);
+    const yp = (Yhi - Ylo) * 0.08 || Math.abs(Yhi) * 0.1 || 1;
+    Ylo -= yp; Yhi += yp;
+    if (xhi === xlo) xhi = xlo + 1;
+    const X = v => pad.l + (v - xlo) / (xhi - xlo) * (w - pad.l - pad.r);
+    const Y = v => pad.t + (1 - (tf(v) - Ylo) / (Yhi - Ylo))
+      * (h - pad.t - pad.b);
+    this._lastDraw = { xlo, xhi, Ylo, Yhi, log, pad, w, h, smoothed, ser };
+    // Y gridlines
+    c.font = '9.5px ' + MONO; c.fillStyle = '#5C636B'; c.textBaseline = 'middle';
+    c.textAlign = 'right';
+    for (let i = 0; i <= 4; i++) {
+      const yy = pad.t + i / 4 * (h - pad.t - pad.b);
+      c.strokeStyle = '#1b1f25'; c.beginPath();
+      c.moveTo(pad.l, yy); c.lineTo(w - pad.r, yy); c.stroke();
+      const val = log ? 10 ** (Yhi - i / 4 * (Yhi - Ylo))
+        : Yhi - i / 4 * (Yhi - Ylo);
+      const label = Math.abs(val) >= 1000 || (val !== 0 && Math.abs(val) < 1e-3)
+        ? val.toExponential(1) : val.toFixed(3);
+      c.fillText(label, pad.l - 6, yy);
+    }
+    // X ticks
+    c.textAlign = 'center'; c.textBaseline = 'top';
+    for (let i = 0; i <= 5; i++) {
+      const xv = xlo + (i / 5) * (xhi - xlo);
+      const xx = X(xv);
+      c.strokeStyle = '#1b1f2588'; c.beginPath();
+      c.moveTo(xx, h - pad.b); c.lineTo(xx, h - pad.b + 4); c.stroke();
+      const lbl = (xhi - xlo > 10) ? Math.round(xv).toString()
+        : (+xv).toFixed(2);
+      c.fillText(lbl, xx, h - pad.b + 6);
+    }
+    c.strokeStyle = '#2a2f37'; c.beginPath();
+    c.moveTo(pad.l, h - pad.b); c.lineTo(w - pad.r, h - pad.b); c.stroke();
+    // series
+    ser.forEach((s, idx) => {
+      const ys = smoothed[idx];
+      c.strokeStyle = s.color || PALETTE_BIG[idx % PALETTE_BIG.length];
+      c.lineWidth = s.dashed ? 1.4 : 1.8;
+      if (s.dashed) c.setLineDash([4, 3]); else c.setLineDash([]);
+      let pen = false;
+      c.beginPath();
+      for (let i = 0; i < s.x.length; i++) {
+        const xi = s.x[i], yi = ys[i];
+        if (xi == null || yi == null || isNaN(yi)) { pen = false; continue; }
+        const px = X(xi), py = Y(yi);
+        if (!pen) { c.moveTo(px, py); pen = true; } else c.lineTo(px, py);
+      }
+      c.stroke(); c.setLineDash([]);
+    });
+    // Wipe overlay so we don't leave a stale crosshair
+    this._drawOverlay(cursorBus.x);
+  }
+  _onMove(e) {
+    const r = this.overlay.getBoundingClientRect();
+    const mx = e.clientX - r.left;
+    if (!this._lastDraw) return;
+    const { xlo, xhi, pad, w } = this._lastDraw;
+    const xv = xlo + (mx - pad.l) / (w - pad.l - pad.r) * (xhi - xlo);
+    cursorBus.set(xv, this.xKey);
+  }
+  _drawOverlay(xv) {
+    const o = this.overlay.getContext('2d');
+    const dpr = devicePixelRatio || 1;
+    o.setTransform(dpr, 0, 0, dpr, 0, 0);
+    o.clearRect(0, 0, this.overlay.width / dpr, this.overlay.height / dpr);
+    this.tip.style.display = 'none';
+    if (xv == null || !this._lastDraw) return;
+    const { xlo, xhi, pad, w, h, smoothed, ser } = this._lastDraw;
+    if (xv < xlo || xv > xhi) return;
+    const mx = pad.l + (xv - xlo) / (xhi - xlo) * (w - pad.l - pad.r);
+    // drag-zoom band
+    if (this._dragStart != null) {
+      o.fillStyle = 'rgba(99,102,241,0.15)';
+      o.fillRect(Math.min(this._dragStart, mx), pad.t,
+                 Math.abs(mx - this._dragStart), h - pad.t - pad.b);
+    }
+    // crosshair line
+    o.strokeStyle = '#5C636B66'; o.lineWidth = 1; o.setLineDash([3, 3]);
+    o.beginPath(); o.moveTo(mx, pad.t); o.lineTo(mx, h - pad.b); o.stroke();
+    o.setLineDash([]);
+    // nearest point per series
+    const Y = v => {
+      const log = this._lastDraw.log;
+      const tf = z => log ? Math.log10(z) : z;
+      return pad.t + (1 - (tf(v) - this._lastDraw.Ylo)
+        / (this._lastDraw.Yhi - this._lastDraw.Ylo))
+        * (h - pad.t - pad.b);
+    };
+    const rows = [];
+    ser.forEach((s, idx) => {
+      const ys = smoothed[idx];
+      let best = -1, bd = Infinity;
+      for (let i = 0; i < s.x.length; i++) {
+        if (s.x[i] == null || ys[i] == null || isNaN(ys[i])) continue;
+        const d = Math.abs(s.x[i] - xv);
+        if (d < bd) { bd = d; best = i; }
+      }
+      if (best >= 0) {
+        const px = pad.l + (s.x[best] - xlo) / (xhi - xlo) * (w - pad.l - pad.r);
+        const py = Y(ys[best]);
+        o.fillStyle = s.color || PALETTE_BIG[idx % PALETTE_BIG.length];
+        o.beginPath(); o.arc(px, py, 3.2, 0, 6.283); o.fill();
+        rows.push({ s, x: s.x[best], y: ys[best], color: o.fillStyle });
+      }
+    });
+    if (rows.length) {
+      this.tip.innerHTML =
+        `<div style="color:#9BA1A8;margin-bottom:3px">${this.xKey} ` +
+        `${(+rows[0].x).toFixed(rows[0].x < 1 ? 4 : 0)}</div>` +
+        rows.slice(0, 8).map(r =>
+          `<div style="white-space:nowrap"><span style="display:` +
+          `inline-block;width:8px;height:8px;border-radius:2px;` +
+          `background:${r.color};margin-right:5px"></span>` +
+          `${esc(r.s.name)} <b>${fmt(r.y)}</b></div>`).join('') +
+        (rows.length > 8 ? `<div style="color:#5C636B">+${rows.length-8} more</div>` : '');
+      this.tip.style.display = 'block';
+      let tx = mx + 12;
+      if (tx > w - 200) tx = mx - 204;
+      this.tip.style.left = Math.max(4, tx) + 'px';
+      this.tip.style.top = (pad.t + 4) + 'px';
+    }
+  }
+}
+
+// Bucketed-batch fetch with per-(run,key,zoom) caching.
+const _bucketCache = new Map();
+function _bucketKey(rid, k, xKey, xMin, xMax, bc) {
+  return `${rid}|${k}|${xKey}|${xMin}|${xMax}|${bc}`;
+}
+async function fetchBuckets(runIds, keys, opts = {}) {
+  const xKey = opts.x_key || 'step';
+  const xMin = opts.x_min ?? null;
+  const xMax = opts.x_max ?? null;
+  const bc = opts.bucket_count || 500;
+  // Look up cache; collect missing.
+  const missing_runs = new Set();
+  const missing_keys = new Set();
+  runIds.forEach(rid => keys.forEach(k => {
+    if (!_bucketCache.has(_bucketKey(rid, k, xKey, xMin, xMax, bc))) {
+      missing_runs.add(rid); missing_keys.add(k);
+    }
+  }));
+  if (missing_runs.size) {
+    try {
+      const resp = await fetch('/api/metrics/batch', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          run_ids: Array.from(missing_runs),
+          keys: Array.from(missing_keys),
+          x_key: xKey, x_min: xMin, x_max: xMax, bucket_count: bc,
+        }),
+      }).then(r => r.json());
+      (resp.series || []).forEach(s => {
+        _bucketCache.set(
+          _bucketKey(s.run_id, s.key, xKey, xMin, xMax, bc), s);
+      });
+    } catch (e) { /* leave cache as is */ }
+  }
+  // Assemble result in input order.
+  const out = [];
+  runIds.forEach(rid => keys.forEach(k => {
+    const s = _bucketCache.get(_bucketKey(rid, k, xKey, xMin, xMax, bc));
+    if (s) out.push(s);
+  }));
+  return out;
+}
+// Invalidate cache for one run (SSE metrics_changed handler will use this).
+function invalidateBucketsForRun(rid) {
+  for (const k of Array.from(_bucketCache.keys())) {
+    if (k.startsWith(rid + '|')) _bucketCache.delete(k);
+  }
+}
+
+// Build a tiny panel for the drawer's "View all plots" grid. Lazy-loads
+// the data via IntersectionObserver — many panels can fit on screen but
+// only the visible ones fetch.
+function _vapPanel(runId, key, hasData) {
+  const card = el('div', 'vap-panel');
+  const hd = el('div', 'vap-hd');
+  hd.innerHTML = `<span class="vap-key mono">${esc(key)}</span>` +
+    (hasData ? '' : '<span class="vap-no">(not logged)</span>');
+  card.append(hd);
+  const body = el('div', 'vap-body'); card.append(body);
+  if (!hasData) return card;
+  let loaded = false;
+  const io = new IntersectionObserver(async entries => {
+    if (loaded) return;
+    if (!entries[0].isIntersecting) return;
+    loaded = true;
+    io.disconnect();
+    const ch = new BucketChart(body);
+    ch.setXKey('step');
+    const series = await fetchBuckets([runId], [key], {
+      x_key: 'step', bucket_count: 300,
+    });
+    ch.setData(series.map(s => ({
+      run_id: s.run_id, key: s.key,
+      name: key, color: PALETTE_BIG[0], dashed: false,
+      x: s.x, y: s.y,
+    })));
+  }, { rootMargin: '120px' });
+  io.observe(card);
+  return card;
+}
+
+// Legacy MultiChart kept as a no-op shim so any leftover callers don't break.
 class MultiChart {
   constructor(host) {
     this.host = host; this.series = []; this.log = false; this.hx = null;
@@ -2192,72 +2615,419 @@ class MultiChart {
   }
 }
 
+/* W&B-style Analysis tab — two-pane: runs table left, panel grid right. */
+const AnaState = {
+  selected: new Set(),     // run_ids currently selected to plot
+  panels: [],              // [{id, title, y_keys, x_key, smoothing, log, include_baseline, show_band, zoom: null|{x_min,x_max}}]
+  keys: [],                // all known metric keys
+  search: '', regex: false, status: 'all', sortKey: 'started', sortAsc: false,
+  charts: new Map(),       // panel_id -> BucketChart instance
+  baseline: null,
+  panelsLoaded: false,
+};
+
 async function renderAnalysis(c) {
-  c.innerHTML =
-    '<div class="ana-wrap"><div class="ana-side"></div>' +
-    '<div class="ana-main"><div class="ana-bar"></div>' +
-    '<div class="ana-chart"></div><div class="ana-legend"></div></div></div>';
-  const side = c.querySelector('.ana-side');
-  const bar = c.querySelector('.ana-bar');
-  const legend = c.querySelector('.ana-legend');
-  let names = [];
-  try { names = (await api('/metrics/names')).metrics || []; } catch (e) { }
-  if (!names.length) names = ['train_loss'];
-  if (!names.includes(S.cmpMetric)) {
-    S.cmpMetric = names.includes('train_loss') ? 'train_loss' : names[0];
-  }
-  const runs = expRuns().slice().reverse();
-  side.innerHTML = '<div class="ana-h">Runs to compare</div>';
-  runs.forEach(r => {
-    const lab = el('label', 'ana-run');
-    const cb = el('input'); cb.type = 'checkbox';
-    cb.checked = S.cmp.includes(r.id);
-    cb.onchange = () => {
-      if (cb.checked) { if (!S.cmp.includes(r.id)) S.cmp.push(r.id); }
-      else S.cmp = S.cmp.filter(x => x !== r.id);
-      draw();
+  AnaState.baseline = getBaseline();
+  c.innerHTML = `
+    <div class="anav2">
+      <div class="anav2-side">
+        <div class="anav2-side-hd">
+          <input class="anav2-search" placeholder="search runs…" />
+          <label class="anav2-rx"><input type="checkbox" /> .*</label>
+        </div>
+        <div class="anav2-filters">
+          <button class="anav2-fil on" data-s="all">all</button>
+          <button class="anav2-fil" data-s="kept">kept</button>
+          <button class="anav2-fil" data-s="running">running</button>
+          <button class="anav2-fil" data-s="crashed">crashed</button>
+          <button class="anav2-fil" data-s="discarded">discarded</button>
+        </div>
+        <div class="anav2-tablewrap"><table class="anav2-table"></table></div>
+        <div class="anav2-side-ft">
+          <button class="anav2-clear">clear selection</button>
+          <span class="anav2-count"></span>
+        </div>
+      </div>
+      <div class="anav2-main">
+        <div class="anav2-bar">
+          <div class="anav2-bar-l">
+            <button class="anav2-add">+ Add panel</button>
+            <span class="anav2-baseline-tag" style="display:none">
+              <span class="anav2-base-dot">★</span>
+              <span class="anav2-base-name"></span>
+              <button class="anav2-base-clear" title="Clear baseline">✕</button>
+            </span>
+          </div>
+          <div class="anav2-hint">drag-select on a panel to zoom · double-click to reset</div>
+        </div>
+        <div class="anav2-grid"></div>
+      </div>
+    </div>`;
+  // Wire search + filters
+  const searchEl = c.querySelector('.anav2-search');
+  const rxEl = c.querySelector('.anav2-rx input');
+  searchEl.value = AnaState.search;
+  rxEl.checked = AnaState.regex;
+  searchEl.oninput = () => { AnaState.search = searchEl.value; renderAnaTable(c); };
+  rxEl.onchange = () => { AnaState.regex = rxEl.checked; renderAnaTable(c); };
+  c.querySelectorAll('.anav2-fil').forEach(b => {
+    b.onclick = () => {
+      AnaState.status = b.dataset.s;
+      c.querySelectorAll('.anav2-fil').forEach(x =>
+        x.classList.toggle('on', x === b));
+      renderAnaTable(c);
     };
-    lab.append(cb, document.createTextNode(' ' + r.run_name));
-    side.append(lab);
   });
-  const sel = el('select', 'ana-select');
-  names.forEach(m => {
-    const o = el('option'); o.value = m; o.textContent = m;
-    if (m === S.cmpMetric) o.selected = true; sel.append(o);
-  });
-  sel.onchange = () => { S.cmpMetric = sel.value; draw(); };
-  const logb = el('button', 'tg' + (S.cmpLog ? ' on' : ''), 'log y');
-  logb.onclick = () => {
-    S.cmpLog = !S.cmpLog; logb.classList.toggle('on');
-    chart.log = S.cmpLog; chart.draw();
+  c.querySelector('.anav2-clear').onclick = () => {
+    AnaState.selected.clear(); renderAnaTable(c); refreshAllPanels();
+    syncUrl();
   };
-  bar.append(el('span', 'ana-lbl', 'Metric'), sel, logb,
-    el('span', 'ana-note', 'pick up to 12 runs'));
-  const chart = new MultiChart(c.querySelector('.ana-chart'));
-  chart.log = !!S.cmpLog;
-  async function draw() {
-    const pick = S.cmp.slice(0, 12);
-    const series = [];
-    for (let i = 0; i < pick.length; i++) {
-      try {
-        const m = await api('/runs/' + encodeURIComponent(pick[i]) +
-          '/metrics');
-        const run = S.runs.find(r => r.id === pick[i]);
-        series.push({
-          name: (run && run.run_name) || pick[i],
-          color: PALETTE[i % PALETTE.length],
-          points: m[S.cmpMetric] || [],
-        });
-      } catch (e) { /* skip */ }
-    }
-    chart.setData(series);
-    legend.innerHTML = series.map(s =>
-      `<span class="lg-item"><span class="lg-dot" style="background:` +
-      `${s.color}"></span>${esc(s.name)}` +
-      `${s.points.length ? '' : ' (no data)'}</span>`).join('')
-      || '<span class="ana-note">no runs selected</span>';
+  c.querySelector('.anav2-add').onclick = () => openAddPanelModal(c);
+  // Load keys + panels + initial selection from URL
+  try {
+    const k = await api('/metrics/keys');
+    AnaState.keys = (k && k.keys) || [];
+  } catch (e) { AnaState.keys = []; }
+  if (!AnaState.panelsLoaded) {
+    try {
+      const p = await api('/analysis/panels');
+      AnaState.panels = (p && p.panels) || [];
+      AnaState.panelsLoaded = true;
+    } catch (e) { AnaState.panels = []; }
+    // Hydrate selection + baseline from URL
+    const u = new URL(location.href);
+    const sel = u.searchParams.get('runs');
+    if (sel) sel.split(',').filter(Boolean).forEach(r => AnaState.selected.add(r));
+    const base = u.searchParams.get('base');
+    if (base) { setBaseline(base); AnaState.baseline = base; }
   }
-  draw();
+  renderAnaBaselineTag(c);
+  renderAnaTable(c);
+  renderAnaPanels(c);
+}
+
+function renderAnaBaselineTag(c) {
+  const tag = c.querySelector('.anav2-baseline-tag');
+  if (!tag) return;
+  if (!AnaState.baseline) { tag.style.display = 'none'; return; }
+  const r = (S.runs || []).find(r => r.id === AnaState.baseline);
+  tag.querySelector('.anav2-base-name').textContent =
+    (r && r.run_name) || AnaState.baseline;
+  tag.style.display = '';
+  tag.querySelector('.anav2-base-clear').onclick = () => {
+    setBaseline(null); AnaState.baseline = null;
+    renderAnaBaselineTag(c); refreshAllPanels(); syncUrl();
+    renderAnaTable(c);
+  };
+}
+
+function _matchesRun(r) {
+  if (AnaState.status !== 'all' && r.status !== AnaState.status) return false;
+  const q = (AnaState.search || '').trim();
+  if (!q) return true;
+  const hay = (r.run_name || '') + ' ' + (r.id || '');
+  if (AnaState.regex) {
+    try { return new RegExp(q, 'i').test(hay); }
+    catch (e) { return false; }
+  }
+  return hay.toLowerCase().includes(q.toLowerCase());
+}
+
+function _sortedAnaRuns() {
+  const runs = (S.runs || []).filter(_matchesRun);
+  const k = AnaState.sortKey;
+  const asc = AnaState.sortAsc;
+  runs.sort((a, b) => {
+    let va, vb;
+    if (k === 'name') { va = (a.run_name||'').toLowerCase(); vb = (b.run_name||'').toLowerCase(); }
+    else if (k === 'status') { va = a.status||''; vb = b.status||''; }
+    else if (k === 'metric') { va = a.headline_metric ?? Infinity; vb = b.headline_metric ?? Infinity; }
+    else { va = a.started_at||a.created_at||''; vb = b.started_at||b.created_at||''; }
+    if (typeof va === 'number' && typeof vb === 'number') return asc ? va - vb : vb - va;
+    return asc ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
+  });
+  return runs;
+}
+
+function renderAnaTable(c) {
+  const tbl = c.querySelector('.anav2-table');
+  if (!tbl) return;
+  const runs = _sortedAnaRuns();
+  const COLS = [['name', 'name'], ['status', 'status'],
+    ['metric', 'metric'], ['started', 'started']];
+  const hrow = COLS.map(([k, lbl]) => {
+    const on = AnaState.sortKey === k;
+    const arrow = on ? (AnaState.sortAsc ? ' ▲' : ' ▼') : '';
+    return `<th data-s="${k}" class="th-sort${on?' on':''}">${esc(lbl)}<span class="th-arrow">${arrow}</span></th>`;
+  }).join('');
+  tbl.innerHTML = `<thead><tr><th></th><th></th>${hrow}<th></th></tr></thead><tbody></tbody>`;
+  tbl.querySelectorAll('thead th[data-s]').forEach(th => {
+    th.onclick = () => {
+      const k = th.dataset.s;
+      if (AnaState.sortKey === k) AnaState.sortAsc = !AnaState.sortAsc;
+      else { AnaState.sortKey = k; AnaState.sortAsc = k === 'name'; }
+      renderAnaTable(c);
+    };
+  });
+  const tb = tbl.querySelector('tbody');
+  runs.slice(0, 1000).forEach(r => {
+    const tr = el('tr', AnaState.selected.has(r.id) ? 'sel' : '');
+    const isBase = r.id === AnaState.baseline;
+    const m = r.headline_metric == null ? '—' : fmt(r.headline_metric, 4);
+    tr.innerHTML =
+      `<td><input type="checkbox"${AnaState.selected.has(r.id)?' checked':''}/></td>` +
+      `<td class="anav2-star${isBase?' on':''}" title="Set as baseline">★</td>` +
+      `<td class="anav2-name mono">${esc(r.run_name||r.id)}</td>` +
+      `<td><span class="chip s-${r.status}"><span class="dot"></span>${esc(r.status||'')}</span></td>` +
+      `<td class="mono">${m}</td>` +
+      `<td class="mono">${esc(ago(r.started_at||r.created_at||''))}</td>` +
+      `<td><button class="anav2-solo" title="Solo this run">👁</button></td>`;
+    tr.querySelector('input').onchange = e => {
+      if (e.target.checked) AnaState.selected.add(r.id);
+      else AnaState.selected.delete(r.id);
+      tr.classList.toggle('sel', e.target.checked);
+      refreshAllPanels(); syncUrl();
+      c.querySelector('.anav2-count').textContent =
+        `${AnaState.selected.size} selected`;
+    };
+    tr.querySelector('.anav2-star').onclick = e => {
+      e.stopPropagation();
+      const newBase = isBase ? null : r.id;
+      setBaseline(newBase); AnaState.baseline = newBase;
+      renderAnaTable(c); renderAnaBaselineTag(c);
+      refreshAllPanels(); syncUrl();
+    };
+    tr.querySelector('.anav2-solo').onclick = e => {
+      e.stopPropagation();
+      AnaState.selected.clear(); AnaState.selected.add(r.id);
+      renderAnaTable(c); refreshAllPanels(); syncUrl();
+    };
+    tb.append(tr);
+  });
+  c.querySelector('.anav2-count').textContent =
+    `${AnaState.selected.size} selected · ${runs.length} runs`;
+}
+
+function renderAnaPanels(c) {
+  const grid = c.querySelector('.anav2-grid');
+  if (!grid) return;
+  // Tear down old charts
+  AnaState.charts.forEach(ch => ch.destroy && ch.destroy());
+  AnaState.charts.clear();
+  grid.innerHTML = '';
+  AnaState.panels.forEach(p => grid.append(buildPanel(c, p)));
+  refreshAllPanels();
+}
+
+function buildPanel(c, p) {
+  const card = el('div', 'anav2-panel' + (p.width === 'full' ? ' full' : ''));
+  card.dataset.pid = p.id;
+  // Header
+  const hd = el('div', 'anav2-panel-hd');
+  hd.innerHTML =
+    `<div class="anav2-panel-title">${esc(p.title)}</div>` +
+    `<div class="anav2-panel-ctrls">` +
+      `<label class="anav2-ctrl"><span>smoothing</span>` +
+      `<input type="range" min="0" max="0.99" step="0.01" value="${p.smoothing||0}" class="anav2-smooth"/>` +
+      `<span class="anav2-smooth-val">${(+(p.smoothing||0)).toFixed(2)}</span></label>` +
+      `<button class="anav2-ctrl-btn anav2-logy${p.y_log?' on':''}" title="log y">log y</button>` +
+      `<button class="anav2-ctrl-btn anav2-baseinc${p.include_baseline?' on':''}" title="include baseline">★</button>` +
+      `<button class="anav2-ctrl-btn anav2-edit" title="edit panel">✎</button>` +
+      `<button class="anav2-ctrl-btn anav2-rm" title="remove panel">✕</button>` +
+    `</div>`;
+  card.append(hd);
+  // Body host
+  const body = el('div', 'anav2-panel-body');
+  card.append(body);
+  // Chart
+  const chart = new BucketChart(body);
+  chart.setLog(!!p.y_log);
+  chart.setSmoothing(+(p.smoothing || 0));
+  chart.setXKey(p.x_key || 'step');
+  chart.onZoom = (a, b) => {
+    if (a == null) p.zoom = null;
+    else p.zoom = { x_min: Math.min(a, b), x_max: Math.max(a, b) };
+    refreshPanel(p);
+  };
+  AnaState.charts.set(p.id, chart);
+  // Wire controls
+  const smInput = hd.querySelector('.anav2-smooth');
+  const smVal = hd.querySelector('.anav2-smooth-val');
+  smInput.oninput = () => {
+    p.smoothing = parseFloat(smInput.value);
+    smVal.textContent = p.smoothing.toFixed(2);
+    chart.setSmoothing(p.smoothing);
+    savePanelsDebounced();
+  };
+  hd.querySelector('.anav2-logy').onclick = e => {
+    p.y_log = !p.y_log;
+    e.currentTarget.classList.toggle('on', p.y_log);
+    chart.setLog(p.y_log); savePanelsDebounced();
+  };
+  hd.querySelector('.anav2-baseinc').onclick = e => {
+    p.include_baseline = !p.include_baseline;
+    e.currentTarget.classList.toggle('on', p.include_baseline);
+    refreshPanel(p); savePanelsDebounced();
+  };
+  hd.querySelector('.anav2-edit').onclick = () => openEditPanelModal(c, p);
+  hd.querySelector('.anav2-rm').onclick = () => {
+    AnaState.panels = AnaState.panels.filter(x => x.id !== p.id);
+    renderAnaPanels(c); savePanelsDebounced();
+  };
+  return card;
+}
+
+async function refreshPanel(p) {
+  const chart = AnaState.charts.get(p.id);
+  if (!chart) return;
+  const runIds = Array.from(AnaState.selected);
+  if (AnaState.baseline && p.include_baseline
+      && !runIds.includes(AnaState.baseline)) {
+    runIds.push(AnaState.baseline);
+  }
+  if (!runIds.length || !(p.y_keys || []).length) {
+    chart.setData([]); return;
+  }
+  const opts = { x_key: p.x_key || 'step', bucket_count: 500 };
+  if (p.zoom) { opts.x_min = p.zoom.x_min; opts.x_max = p.zoom.x_max; }
+  const series = await fetchBuckets(runIds, p.y_keys, opts);
+  // Color assignment: stable per-run via a map; baseline always grey/dashed.
+  const colorOf = new Map();
+  let idx = 0;
+  Array.from(AnaState.selected).forEach(rid => {
+    colorOf.set(rid, PALETTE_BIG[idx++ % PALETTE_BIG.length]);
+  });
+  const rendered = series.map(s => {
+    const isBase = (s.run_id === AnaState.baseline);
+    const run = (S.runs || []).find(r => r.id === s.run_id);
+    return {
+      run_id: s.run_id, key: s.key,
+      name: ((run && run.run_name) || s.run_id) + (s.key && p.y_keys.length > 1 ? ' · ' + s.key : ''),
+      color: isBase ? BASELINE_COLOR : (colorOf.get(s.run_id) || PALETTE_BIG[0]),
+      dashed: isBase,
+      x: s.x, y: s.y,
+    };
+  });
+  chart.setData(rendered);
+}
+
+function refreshAllPanels() {
+  AnaState.panels.forEach(p => refreshPanel(p));
+}
+
+let _saveTimer = null;
+function savePanelsDebounced() {
+  if (_saveTimer) clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(async () => {
+    try {
+      await fetch('/api/analysis/panels', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ panels: AnaState.panels }),
+      });
+    } catch (e) { /* ignore */ }
+  }, 500);
+}
+
+function syncUrl() {
+  const u = new URL(location.href);
+  const sel = Array.from(AnaState.selected);
+  if (sel.length) u.searchParams.set('runs', sel.join(','));
+  else u.searchParams.delete('runs');
+  if (AnaState.baseline) u.searchParams.set('base', AnaState.baseline);
+  else u.searchParams.delete('base');
+  history.replaceState({}, '', u);
+}
+
+function openAddPanelModal(c) {
+  const sc = el('div', 'mscrim');
+  const m = el('div', 'modal');
+  m.innerHTML = `
+    <div class="modal-hd"><h2>Add panel</h2>
+      <button class="iconbtn" id="apx">✕</button></div>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-top:8px">
+      <label>Title <input class="onb-in" id="ap-title" placeholder="Panel title"/></label>
+      <label>Y metric(s)
+        <select class="onb-in" id="ap-y" multiple size="8" style="height:auto"></select>
+        <div style="font-size:11px;color:var(--muted)">cmd/ctrl-click to multi-select</div>
+      </label>
+      <label>X axis
+        <select class="onb-in" id="ap-x">
+          <option value="step">step</option>
+          <option value="wall_time">wall_time</option>
+        </select>
+      </label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn pri" id="ap-add">Add panel</button>
+    </div>`;
+  sc.append(m); document.body.append(sc);
+  sc.onclick = e => { if (e.target === sc) sc.remove(); };
+  m.querySelector('#apx').onclick = () => sc.remove();
+  const ysel = m.querySelector('#ap-y');
+  AnaState.keys.forEach(k => {
+    const o = el('option'); o.value = k; o.textContent = k; ysel.append(o);
+  });
+  m.querySelector('#ap-add').onclick = () => {
+    const yks = Array.from(ysel.selectedOptions).map(o => o.value);
+    if (!yks.length) return;
+    const title = m.querySelector('#ap-title').value.trim() || yks.join(', ');
+    const xk = m.querySelector('#ap-x').value || 'step';
+    const id = 'p' + Date.now().toString(36);
+    AnaState.panels.push({
+      id, title, y_keys: yks, x_key: xk,
+      smoothing: 0, y_log: false, include_baseline: true,
+      show_band: false, width: 'half',
+    });
+    sc.remove();
+    renderAnaPanels(c); savePanelsDebounced();
+  };
+}
+
+function openEditPanelModal(c, p) {
+  const sc = el('div', 'mscrim');
+  const m = el('div', 'modal');
+  m.innerHTML = `
+    <div class="modal-hd"><h2>Edit panel</h2>
+      <button class="iconbtn" id="epx">✕</button></div>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-top:8px">
+      <label>Title <input class="onb-in" id="ep-title" value="${esc(p.title)}"/></label>
+      <label>Y metric(s)
+        <select class="onb-in" id="ep-y" multiple size="8" style="height:auto"></select>
+      </label>
+      <label>X axis
+        <select class="onb-in" id="ep-x">
+          <option value="step">step</option>
+          <option value="wall_time">wall_time</option>
+        </select>
+      </label>
+      <label>Width
+        <select class="onb-in" id="ep-w">
+          <option value="half">half-width</option>
+          <option value="full">full-width</option>
+        </select>
+      </label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn pri" id="ep-save">Save</button>
+    </div>`;
+  sc.append(m); document.body.append(sc);
+  sc.onclick = e => { if (e.target === sc) sc.remove(); };
+  m.querySelector('#epx').onclick = () => sc.remove();
+  const ysel = m.querySelector('#ep-y');
+  AnaState.keys.forEach(k => {
+    const o = el('option'); o.value = k; o.textContent = k;
+    if ((p.y_keys||[]).includes(k)) o.selected = true; ysel.append(o);
+  });
+  m.querySelector('#ep-x').value = p.x_key || 'step';
+  m.querySelector('#ep-w').value = p.width || 'half';
+  m.querySelector('#ep-save').onclick = () => {
+    p.title = m.querySelector('#ep-title').value.trim() || p.title;
+    p.y_keys = Array.from(ysel.selectedOptions).map(o => o.value);
+    p.x_key = m.querySelector('#ep-x').value;
+    p.width = m.querySelector('#ep-w').value;
+    sc.remove();
+    renderAnaPanels(c); savePanelsDebounced();
+  };
 }
 
 /* ── boot ─────────────────────────────────────────────────────────────── */
