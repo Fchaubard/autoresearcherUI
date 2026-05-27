@@ -3136,18 +3136,20 @@ function buildPanel(c, p) {
     chart.setSmoothing(p.smoothing);
     savePanelsDebounced();
   };
-  hd.querySelector('.anav2-logy').onclick = e => {
+  // Use card.querySelector since some buttons live in the title row and
+  // others live in the control row. Querying from the right ancestor.
+  card.querySelector('.anav2-logy').onclick = e => {
     p.y_log = !p.y_log;
     e.currentTarget.classList.toggle('on', p.y_log);
     chart.setLog(p.y_log); savePanelsDebounced();
   };
-  hd.querySelector('.anav2-baseinc').onclick = e => {
+  card.querySelector('.anav2-baseinc').onclick = e => {
     p.include_baseline = !p.include_baseline;
     e.currentTarget.classList.toggle('on', p.include_baseline);
     refreshPanel(p); savePanelsDebounced();
   };
-  hd.querySelector('.anav2-edit').onclick = () => openEditPanelModal(c, p);
-  hd.querySelector('.anav2-rm').onclick = () => {
+  card.querySelector('.anav2-edit').onclick = () => openEditPanelModal(c, p);
+  card.querySelector('.anav2-rm').onclick = () => {
     AnaState.panels = AnaState.panels.filter(x => x.id !== p.id);
     renderAnaPanels(c); savePanelsDebounced();
   };
