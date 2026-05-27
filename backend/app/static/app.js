@@ -3038,6 +3038,14 @@ function renderAnaTable(c) {
     tr.dataset.rid = r.id;
     tr.onmouseenter = () => hoverBus.set(r.id);
     tr.onmouseleave = () => hoverBus.set(null);
+    // Click anywhere on the row opens the drawer — same UX as the
+    // Dashboard runs table. Buttons (eye, star, solo) keep their own
+    // handlers; we ignore clicks that target a button.
+    tr.onclick = (e) => {
+      if (e.target.closest('button')) return;
+      openDrawer(r.id);
+    };
+    tr.style.cursor = 'pointer';
     const isBase = r.id === AnaState.baseline;
     const m = r.headline_metric == null ? '—' : fmt(r.headline_metric, 4);
     // Each row gets a stable color so the eye dot matches the plot line.
