@@ -1428,18 +1428,14 @@ async function openDrawer(runId) {
             `<code>${esc(v)}</code>`).join(' ') + `</div>` : '');
     bd.append(wrap);
   }
-  // "View all plots" — lazy-loaded multi-metric plot grid for this run.
-  // Defaults to a configurable mandatory list; below that a searchable
-  // list of remaining keys with "tap to plot" chips (per the v2 spec).
-  bd.append(el('div', 'dr-h2', 'View all plots'));
-  const vapBtn = el('button', 'btn', 'Show plots');
-  const vapWrap = el('div', 'vap-wrap'); vapWrap.style.display = 'none';
-  bd.append(vapBtn, vapWrap);
-  vapBtn.onclick = async () => {
-    vapBtn.style.display = 'none';
-    vapWrap.style.display = '';
-    vapWrap.innerHTML = '<div class="skel" style="height:200px"></div>';
-    // Fetch this run's logged keys
+  // Always-on multi-metric plot grid — used to be a "Show plots" button +
+  // expand. The button-gating was unnecessary friction; the panels are
+  // lazy-loaded via IntersectionObserver so off-screen plots don't fetch
+  // anything until they scroll into view.
+  bd.append(el('div', 'dr-h2', 'All plots'));
+  const vapWrap = el('div', 'vap-wrap');
+  bd.append(vapWrap);
+  (async () => {
     let runKeys = [];
     try {
       const k = await api('/runs/' + encodeURIComponent(runId) + '/metric_keys');
@@ -1450,32 +1446,26 @@ async function openDrawer(runId) {
     const extras = runKeys.filter(k => !defaults.includes(k));
     vapWrap.innerHTML = '';
     const grid = el('div', 'vap-grid'); vapWrap.append(grid);
-    // Default panels — slot for each (placeholder if not logged)
+    // Default slots first (with '(not logged)' placeholders when missing)
     defaults.forEach(k => grid.append(_vapPanel(runId, k, runKeys.includes(k))));
     if (extras.length) {
       vapWrap.append(el('div', 'dr-h2', 'Other metrics'));
       const search = el('input', 'vap-search');
       search.placeholder = 'filter (e.g. token, mem)…';
       vapWrap.append(search);
-      const chips = el('div', 'vap-chips'); vapWrap.append(chips);
+      // Render every extra key directly; lazy IntersectionObserver inside
+      // _vapPanel ensures only visible plots fetch data.
       const extraGrid = el('div', 'vap-grid'); vapWrap.append(extraGrid);
-      const renderChips = (filter) => {
-        chips.innerHTML = '';
+      const renderExtras = (filter) => {
+        extraGrid.innerHTML = '';
         extras.filter(k => !filter
                           || k.toLowerCase().includes(filter.toLowerCase()))
-              .forEach(k => {
-          const b = el('button', 'evchip', '+ ' + k);
-          b.onclick = () => {
-            extraGrid.append(_vapPanel(runId, k, true));
-            b.remove();
-          };
-          chips.append(b);
-        });
+              .forEach(k => extraGrid.append(_vapPanel(runId, k, true)));
       };
-      renderChips('');
-      search.oninput = () => renderChips(search.value);
+      renderExtras('');
+      search.oninput = () => renderExtras(search.value);
     }
-  };
+  })();
   // run logs — captured to disk, so they persist after the run finishes
   bd.append(el('div', 'dr-h2', 'Logs'));
   const logBox = el('pre', 'dr-logs', 'loading logs…');
