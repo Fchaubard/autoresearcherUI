@@ -720,6 +720,55 @@ def metric_names():
 
 # ──────────── authorized_keys management ─────────────────────────────────────
 
+@router.post("/extra_nodes/check")
+async def extra_nodes_check(request: Request):
+    """Try to ssh to each of the user's extra GPU nodes and run nvidia-smi.
+    Returns a list of {target, ok, gpus, error}. Best-effort — never raises."""
+    body = await request.json()
+    targets = body.get("targets") or []
+    if isinstance(targets, str):
+        targets = [t.strip() for t in targets.splitlines() if t.strip()]
+    out = []
+    for t in targets[:16]:
+        host = t.strip()
+        if not host:
+            continue
+        port = "22"
+        user_host = host
+        if ":" in host and "@" in host.split(":")[-1] is False:  # user@h:p
+            try:
+                user_host, port = host.rsplit(":", 1)
+                int(port)
+            except Exception:
+                user_host, port = host, "22"
+        cmd = ["ssh", "-i", "/root/.ssh/id_ed25519", "-p", port,
+               "-o", "StrictHostKeyChecking=accept-new",
+               "-o", "ConnectTimeout=8",
+               "-o", "BatchMode=yes",
+               user_host,
+               "nvidia-smi --query-gpu=name --format=csv,noheader || hostname"]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            if r.returncode == 0:
+                gpus = [g.strip() for g in (r.stdout or "").splitlines()
+                        if g.strip()]
+                out.append({"target": host, "ok": True, "gpus": gpus})
+            else:
+                out.append({"target": host, "ok": False,
+                            "error": (r.stderr or r.stdout)[:200]})
+        except Exception as e:                          # noqa: BLE001
+            out.append({"target": host, "ok": False, "error": str(e)[:200]})
+    return {"results": out}
+
+
+@router.get("/authkeys/pubkey")
+def authkeys_pubkey():
+    """This node's SSH public key (generated on first call if missing) — so
+    the user can paste it into another GPU server's authorized_keys to attach
+    that server as an additional GPU node."""
+    return authkeys.local_pubkey()
+
+
 @router.get("/authkeys")
 def authkeys_list():
     return {"keys": authkeys.list_keys(),

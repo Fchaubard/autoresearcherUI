@@ -5,6 +5,7 @@ const S = {
   project: null, runs: [], ideas: [], events: [], chat: [], gpus: [],
   metrics: {}, filter: 'all', search: '', sel: null, ylog: false,
   railTab: 'summary', sessTab: null, view: 'dashboard', cmp: [], cmpMetric: '',
+  sortKey: 'time', sortAsc: true,    // main table sort — default ASC by time
 };
 
 const api = (p) => fetch('/api' + p).then(r => r.json());
@@ -220,10 +221,60 @@ class ProgressChart {
 
 /* ════════════════════════ LINE CHART (drawer) ═════════════════════════════ */
 class LineChart {
-  constructor(host, color) { this.host = host; this.color = color || '#6366F1';
+  constructor(host, color) {
+    this.host = host; this.color = color || '#6366F1';
+    host.classList.add('lc-host');
     this.canvas = el('canvas'); host.append(this.canvas);
-    new ResizeObserver(() => this.draw()).observe(host); }
+    // Hover tooltip element (one per chart, positioned absolutely in host).
+    this.tip = el('div', 'lc-tip'); this.tip.style.display = 'none';
+    host.append(this.tip);
+    new ResizeObserver(() => this.draw()).observe(host);
+    this.canvas.addEventListener('mousemove', e => this._onHover(e));
+    this.canvas.addEventListener('mouseleave', () => this._hideTip());
+  }
   setData(d) { this.data = d || []; this.draw(); }
+  _format(v, digits) {
+    if (v == null || isNaN(v)) return '—';
+    const a = Math.abs(v);
+    if (a !== 0 && (a < 1e-3 || a >= 1e5)) return (+v).toExponential(2);
+    return (+v).toFixed(digits != null ? digits : (a < 1 ? 4 : 3));
+  }
+  _onHover(e) {
+    if (!this.data || this.data.length < 2) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    // find nearest data point in screen X
+    const { _X, _Y, _pad, _w, _h } = this;
+    if (!_X) return;
+    let best = -1, bestDist = Infinity;
+    this.data.forEach((p, i) => {
+      const dx = Math.abs(_X(p[0]) - mx);
+      if (dx < bestDist) { bestDist = dx; best = i; }
+    });
+    if (best < 0 || bestDist > 50) { this._hideTip(); return; }
+    const [px, py] = [this.data[best][0], this.data[best][1]];
+    const tx = _X(px), ty = _Y(py);
+    // crosshair + dot
+    this.draw();
+    const c = this.canvas.getContext('2d');
+    c.setTransform(devicePixelRatio || 1, 0, 0, devicePixelRatio || 1, 0, 0);
+    c.strokeStyle = '#5C636B66'; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(tx, _pad.t); c.lineTo(tx, _h - _pad.b); c.stroke();
+    c.fillStyle = this.color;
+    c.beginPath(); c.arc(tx, ty, 3.5, 0, 6.283); c.fill();
+    this.tip.style.display = 'block';
+    this.tip.innerHTML = `<b>step ${px}</b><br>${this._format(py)}`;
+    // position tip; flip side if near right edge
+    const tipW = 100;
+    const left = (tx + tipW + 10 > _w) ? tx - tipW - 8 : tx + 8;
+    const top = Math.max(4, ty - 28);
+    this.tip.style.left = left + 'px';
+    this.tip.style.top = top + 'px';
+  }
+  _hideTip() {
+    if (this.tip) this.tip.style.display = 'none';
+    this.draw();
+  }
   draw() {
     const d = this.data || [], w = this.host.clientWidth || 300,
       h = this.host.clientHeight || 150, dpr = devicePixelRatio || 1;
@@ -233,7 +284,7 @@ class LineChart {
     c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, h);
     if (d.length < 2) { c.fillStyle = '#5C636B'; c.font = '11px sans-serif';
       c.textAlign = 'center'; c.fillText('no series', w / 2, h / 2); return; }
-    const pad = { l: 44, r: 10, t: 10, b: 18 };
+    const pad = { l: 44, r: 10, t: 10, b: 28 };
     const xs = d.map(p => p[0]), ys = d.map(p => p[1]);
     let xlo = Math.min(...xs), xhi = Math.max(...xs);
     let ylo = Math.min(...ys), yhi = Math.max(...ys);
@@ -241,14 +292,34 @@ class LineChart {
     if (xhi === xlo) xhi++;
     const X = v => pad.l + (v - xlo) / (xhi - xlo) * (w - pad.l - pad.r);
     const Y = v => pad.t + (1 - (v - ylo) / (yhi - ylo)) * (h - pad.t - pad.b);
-    c.font = '9px ' + MONO; c.fillStyle = '#5C636B'; c.textAlign = 'right';
+    // expose for hover
+    this._X = X; this._Y = Y; this._pad = pad; this._w = w; this._h = h;
+    c.font = '9px ' + MONO; c.fillStyle = '#5C636B';
     c.textBaseline = 'middle';
+    // y-axis gridlines + labels
+    c.textAlign = 'right';
     for (let i = 0; i <= 3; i++) {
       const yy = pad.t + i / 3 * (h - pad.t - pad.b);
       c.strokeStyle = '#1b1f25'; c.beginPath();
       c.moveTo(pad.l, yy); c.lineTo(w - pad.r, yy); c.stroke();
-      c.fillText((yhi - i / 3 * (yhi - ylo)).toFixed(2), pad.l - 6, yy);
+      c.fillText(this._format(yhi - i / 3 * (yhi - ylo), 2), pad.l - 6, yy);
     }
+    // x-axis ticks: 5 ticks evenly across the visible x range
+    c.textAlign = 'center'; c.textBaseline = 'top';
+    const nTicks = 5;
+    for (let i = 0; i <= nTicks; i++) {
+      const xv = xlo + (i / nTicks) * (xhi - xlo);
+      const xx = X(xv);
+      c.strokeStyle = '#1b1f2588'; c.beginPath();
+      c.moveTo(xx, h - pad.b); c.lineTo(xx, h - pad.b + 4); c.stroke();
+      const lbl = (xhi - xlo > 10) ? Math.round(xv).toString()
+        : (+xv).toFixed(2);
+      c.fillText(lbl, xx, h - pad.b + 7);
+    }
+    // axis line at the bottom
+    c.strokeStyle = '#2a2f37'; c.beginPath();
+    c.moveTo(pad.l, h - pad.b); c.lineTo(w - pad.r, h - pad.b); c.stroke();
+    // series
     c.strokeStyle = this.color; c.lineWidth = 1.8; c.beginPath();
     d.forEach(([x, y], i) => { const px = X(x), py = Y(y);
       i ? c.lineTo(px, py) : c.moveTo(px, py); });
@@ -527,13 +598,14 @@ function tableRows() {
   const runs = frontier(expRuns());
   const byId = {}; runs.forEach(r => byId[r.idea_id] = r);
   let rows = runs.map(r => ({
-    exp: '#' + r.exp, id: r.id, kind: 'run', name: r.run_name,
-    desc: ideaDesc(r.idea_id), status: r.status,
+    exp: '#' + r.exp, _exp_num: r.exp, id: r.id, kind: 'run',
+    name: r.run_name, desc: ideaDesc(r.idea_id), status: r.status,
     metric: r.headline_metric, delta: r.baseline_delta,
     gpu: r.gpu_index, started: r.started_at, ended: r.ended_at,
   }));
   S.ideas.filter(i => i.status === 'not_implemented').forEach(i => {
-    rows.push({ exp: '—', id: i.id, kind: 'idea', name: i.idea_id,
+    rows.push({ exp: '—', _exp_num: Number.POSITIVE_INFINITY,
+      id: i.id, kind: 'idea', name: i.idea_id,
       desc: i.description, status: 'queued', metric: null, delta: null,
       gpu: -1, started: '', ended: '' });
   });
@@ -558,12 +630,69 @@ function paintTable() {
     const q = S.search.toLowerCase();
     rows = rows.filter(r => (r.name + ' ' + r.desc).toLowerCase().includes(q));
   }
+  // Sort: default key 'time' (started_at), ascending. Click any column header
+  // to toggle the sort. Queued rows (no time) sink to the end either way.
+  const sortBy = S.sortKey || 'time';
+  const asc = S.sortAsc !== false;
+  const getVal = r => {
+    switch (sortBy) {
+      case 'exp': return r._exp_num;
+      case 'status': return r.status || '';
+      case 'name': return (r.name || '').toLowerCase();
+      case 'metric': return r.metric == null ? null : +r.metric;
+      case 'gpu': return r.gpu == null ? -1 : r.gpu;
+      case 'duration':
+        if (!r.started) return null;
+        return ((r.ended ? +new Date(r.ended) : Date.now())
+                - +new Date(r.started));
+      case 'time':
+      default:
+        return r.started || r.ended || '';
+    }
+  };
+  rows = rows.slice().sort((a, b) => {
+    const va = getVal(a), vb = getVal(b);
+    const ea = va == null || va === '' || va === -1;
+    const eb = vb == null || vb === '' || vb === -1;
+    if (ea && eb) return 0;
+    if (ea) return 1;           // empties sink
+    if (eb) return -1;
+    if (typeof va === 'number' && typeof vb === 'number')
+      return asc ? va - vb : vb - va;
+    return asc ? String(va).localeCompare(String(vb))
+                : String(vb).localeCompare(String(va));
+  });
   const deltas = rows.map(r => r.delta).filter(d => d != null && isFinite(d));
   const mx = Math.max(0.001, ...deltas.map(Math.abs));
   const ts = document.getElementById('tscroll');
   const tbl = el('table', 'runs');
-  tbl.innerHTML = `<thead><tr><th>#</th><th>Status</th><th>Idea</th>` +
-    `<th>Result vs baseline</th><th>GPU</th><th>Duration</th></tr></thead>`;
+  const COLS = [
+    ['exp',      '#'],
+    ['status',   'Status'],
+    ['name',     'Idea'],
+    ['metric',   'Result vs baseline'],
+    ['gpu',      'GPU'],
+    ['duration', 'Duration'],
+    ['time',     'Started'],
+  ];
+  const hrow = COLS.map(([k, label]) => {
+    const on = (S.sortKey || 'time') === k;
+    const arrow = on ? (S.sortAsc !== false ? ' ▲' : ' ▼') : '';
+    return `<th data-sort="${k}" class="th-sort${on ? ' on' : ''}">`
+      + esc(label) + `<span class="th-arrow">${arrow}</span></th>`;
+  }).join('');
+  tbl.innerHTML = `<thead><tr>${hrow}</tr></thead>`;
+  // wire header clicks
+  setTimeout(() => {
+    tbl.querySelectorAll('thead th[data-sort]').forEach(th => {
+      th.onclick = () => {
+        const k = th.dataset.sort;
+        if (S.sortKey === k) S.sortAsc = !S.sortAsc;
+        else { S.sortKey = k; S.sortAsc = true; }
+        paintTable();
+      };
+    });
+  }, 0);
   const tb = el('tbody');
   rows.forEach(r => {
     const tr = el('tr', S.sel === r.id ? 'sel' : '');
@@ -577,6 +706,8 @@ function paintTable() {
         `<span style="opacity:.7"> ${d >= 0 ? '−' : '+'}` +
         `${fmt(Math.abs(d), 4)}</span></span>`;
     }
+    const tcell = r.started ? ago(r.started)
+                : r.ended ? ago(r.ended) : '—';
     tr.innerHTML =
       `<td class="mono" style="color:#5C636B">${r.exp}</td>` +
       `<td><span class="chip s-${r.status}"><span class="dot"></span>` +
@@ -585,7 +716,9 @@ function paintTable() {
       `<div class="idea-desc">${esc(r.desc)}</div></td>` +
       `<td>${mc}</td>` +
       `<td class="mono">${r.gpu >= 0 ? r.gpu : '—'}</td>` +
-      `<td class="mono">${r.started ? dur(r.started, r.ended) : '—'}</td>`;
+      `<td class="mono">${r.started ? dur(r.started, r.ended) : '—'}</td>` +
+      `<td class="mono" title="${esc(r.started || r.ended || '')}">` +
+        `${esc(tcell)}</td>`;
     if (r.kind === 'run') {
       tr.onclick = () => openDrawer(r.id);
     } else if (r.status === 'queued') {
@@ -1121,13 +1254,43 @@ async function openDrawer(runId) {
   bd.append(el('div', 'dr-h2', 'Result'));
   const dl = el('dl', 'kv');
   const delta = run.baseline_delta;
-  [['final ' + (S.project.validation_metric), run.status === 'crashed'
-      ? 'diverged' : fmt(run.headline_metric)],
-   ['vs baseline', delta == null ? '—'
-      : (delta >= 0 ? '−' : '+') + fmt(Math.abs(delta))],
-   ['GPU', run.gpu_index], ['duration', dur(run.started_at, run.ended_at)],
-   ['commit', run.git_commit || '—']]
-    .forEach(([k, v]) => dl.innerHTML += `<dt>${k}</dt><dd>${esc(v)}</dd>`);
+  const baseline = (S.project && S.project.baseline_metric != null)
+    ? S.project.baseline_metric : null;
+  // Compute a vs-baseline string even when baseline_delta isn't populated.
+  let vsBaseline = '—';
+  if (run.headline_metric != null && baseline != null) {
+    const dabs = run.headline_metric - baseline;
+    const mins = minimize();
+    const better = mins ? dabs < 0 : dabs > 0;
+    vsBaseline =
+      `<span class="${better ? 'up' : 'down'}">` +
+      (dabs >= 0 ? '+' : '−') + fmt(Math.abs(dabs)) +
+      ` (${better ? 'better' : 'worse'})</span>`;
+  } else if (delta != null) {
+    const better = (S.project?.metric_direction === 'minimize')
+      ? (delta > 0) : (delta < 0);
+    vsBaseline = `<span class="${better ? 'up' : 'down'}">` +
+      (delta >= 0 ? '−' : '+') + fmt(Math.abs(delta)) + '</span>';
+  }
+  // Build result rows, dropping any row whose value is unknown/missing.
+  const rows = [];
+  rows.push(['final ' + (S.project.validation_metric),
+             run.status === 'crashed' ? 'diverged'
+                                       : fmt(run.headline_metric)]);
+  rows.push(['vs baseline', vsBaseline]);
+  if (run.gpu_index != null && run.gpu_index >= 0) {
+    rows.push(['GPU', '#' + run.gpu_index]);
+  }
+  rows.push(['duration', dur(run.started_at, run.ended_at)]);
+  if (run.tmux_session && run.status === 'running') {
+    rows.push(['tmux session', run.tmux_session]);
+  }
+  if (run.git_commit) rows.push(['commit', run.git_commit.slice(0, 10)]);
+  if (run.status) rows.push(['status', run.status]);
+  rows.forEach(([k, v]) => {
+    if (v == null || v === '' || v === '—') return;
+    dl.innerHTML += `<dt>${k}</dt><dd>${v}</dd>`;
+  });
   bd.append(dl);
   // metrics — curves for time-series, a value list for single points
   const have = Object.keys(m).filter(k => (m[k] || []).length);
@@ -1406,6 +1569,13 @@ const OB_FIELDS = [
   ['run_debate', 'Run debate between reviewers', 'check', ''],
   ['debate_max_rounds', 'Debate max rounds (before tiebreaker)', 'select',
     '3|2|1|4|5'],
+  ['sec', 'Extra GPU nodes (optional)'],
+  ['extra_gpu_nodes',
+    'One SSH target per line — e.g. `root@10.0.0.5:22` or `user@host`. '
+    + 'The autoresearcher can ssh into these to launch experiments on '
+    + 'their GPUs (paste this node\'s pub key into their authorized_keys '
+    + 'first — see authorized_keys panel).',
+    'area', 'root@gpu-node-2:22\nuser@10.0.0.7'],
   ['sec', 'PI agent — periodic oversight'],
   ['pi_agent_enabled', 'Run the PI agent on a schedule', 'check', ''],
   ['pi_agent_model', 'PI agent model', 'select',
@@ -1774,8 +1944,9 @@ function renderSystem(c) {
 function renderAuthkeys(c) {
   c.innerHTML = '<div class="ak-wrap"><div class="empty2">loading…</div></div>';
   const load = async () => {
-    let d;
-    try { d = await api('/authkeys'); } catch (e) { return; }
+    let d, pk;
+    try { [d, pk] = await Promise.all(
+      [api('/authkeys'), api('/authkeys/pubkey')]); } catch (e) { return; }
     const keys = d.keys || [];
     const rows = keys.map(k =>
       `<div class="ak-row"><div class="ak-info">` +
@@ -1784,18 +1955,46 @@ function renderAuthkeys(c) {
       `</div><button class="ak-del" data-fp="${esc(k.fingerprint || '')}">` +
       `Delete</button></div>`).join('')
       || '<div class="empty2">No authorized keys.</div>';
+    // This node's own SSH pub key block — for copying to OTHER GPU servers
+    // so this autoresearcher can SSH into them.
+    const pubBlock = pk && pk.ok
+      ? '<div class="sys-sec">This node\'s SSH public key</div>' +
+        '<p class="ak-help">Paste this into ~/.ssh/authorized_keys on ' +
+        'another GPU server so this autoresearcher can SSH into it. ' +
+        'Useful when attaching additional GPU nodes.</p>' +
+        `<code class="ak-ssh" id="ak-pub">${esc(pk.pubkey)}</code>` +
+        '<div class="ak-pub-row">' +
+        '<button class="btn ak-copy-pub">Copy public key</button> ' +
+        '<button class="btn ak-copy-oneliner">Copy install one-liner</button>' +
+        `<span class="ak-cmt mono" style="margin-left:8px">${esc(pk.fingerprint || '')}</span>` +
+        '</div>'
+      : '<div class="sys-sec">This node\'s SSH public key</div>' +
+        '<div class="empty2">' + esc((pk && pk.error) || 'not available') + '</div>';
     c.querySelector('.ak-wrap').innerHTML =
       '<div class="ak-warn">⚠ These keys control SSH access to the node. ' +
       'After adding a key, test the new login in another terminal before ' +
       'deleting any old key.</div>' +
       '<div class="sys-sec">SSH into the node</div>' +
       `<code class="ak-ssh">${esc(d.ssh || '')}</code>` +
+      pubBlock +
       `<div class="sys-sec">Authorized keys (${keys.length})</div>` +
       `<div class="ak-list">${rows}</div>` +
       '<div class="sys-sec">Add a public key</div>' +
       '<textarea class="ak-add" placeholder="ssh-ed25519 AAAA… you@host">' +
       '</textarea><button class="btn ak-addbtn">Add key</button>' +
       '<span class="ak-status"></span>';
+    const cpb = c.querySelector('.ak-copy-pub');
+    if (cpb) cpb.onclick = () => {
+      navigator.clipboard?.writeText(pk.pubkey);
+      cpb.textContent = 'Copied ✓';
+      setTimeout(() => cpb.textContent = 'Copy public key', 1400);
+    };
+    const cob = c.querySelector('.ak-copy-oneliner');
+    if (cob) cob.onclick = () => {
+      navigator.clipboard?.writeText(pk.install_one_liner || '');
+      cob.textContent = 'Copied ✓';
+      setTimeout(() => cob.textContent = 'Copy install one-liner', 1400);
+    };
     c.querySelectorAll('.ak-del').forEach(b => {
       b.onclick = async () => {
         if (!confirm('Delete this SSH key from the node?')) return;

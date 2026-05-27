@@ -473,8 +473,82 @@ def summary_text(window_hours: float):
         db.close()
 
 
+_STATUS_ICON = {
+    "kept": "✓", "success": "✓",
+    "discarded": "◯", "failed": "◯",
+    "crashed": "✕", "running": "▶", "queued": "·",
+}
+_STATUS_COLOR = {
+    "kept": "#34D399", "success": "#34D399",
+    "discarded": "#F87171", "failed": "#F87171",
+    "crashed": "#F43F5E", "running": "#FBBF24", "queued": "#A78BFA",
+}
+
+
+def _run_cards_html(runs, metric_name: str, baseline: float | None) -> str:
+    """Render Summary-style cards for each completed run in the digest window."""
+    if not runs:
+        return ""
+    rows = []
+    for r in runs:
+        ic = _STATUS_ICON.get(r.status, "•")
+        col = _STATUS_COLOR.get(r.status, "#A78BFA")
+        cfg = r.config if isinstance(r.config, dict) else {}
+        what = (cfg.get("what") or cfg.get("description") or "").strip()
+        why = (cfg.get("why") or "").strip()
+        review = cfg.get("review") or {}
+        learning = (review.get("learning") or "").strip()
+        reviewer = (review.get("reviewer") or "").strip()
+        hm = "diverged" if r.status == "crashed" else (
+            f"{r.headline_metric:.4f}" if r.headline_metric is not None
+            else "—")
+        delta = ""
+        if (r.headline_metric is not None and baseline is not None
+                and r.status != "crashed"):
+            d = r.headline_metric - baseline
+            sign = "+" if d >= 0 else "−"
+            delta = (f'<span style="color:#9BA1A8;font-size:11px;'
+                     f'margin-left:8px">{sign}{abs(d):.3f} vs base</span>')
+        meta = ((f'<div style="font-size:12px;color:#9BA1A8;'
+                 f'margin-top:6px">{_esc(what)}</div>') if what else "") + \
+               ((f'<div style="font-size:11px;color:#7a818b;'
+                 f'margin-top:3px"><i>why:</i> {_esc(why)}</div>') if why else "")
+        rv = ""
+        if learning:
+            rv = (f'<div style="margin-top:8px;padding:8px 10px;'
+                  f'background:#181C22;border-left:2px solid #6366F1;'
+                  f'border-radius:5px;font-size:11.5px;color:#C7CCD3;'
+                  f'line-height:1.5"><b style="color:#A78BFA">'
+                  f'★ Council · {_esc(reviewer or "?")}</b><br>'
+                  f'{_esc(learning)}</div>')
+        rows.append(
+            f'<tr><td style="padding:12px 14px;border-bottom:1px solid #23272E">'
+            f'<table width="100%" cellspacing="0" cellpadding="0"><tr>'
+            f'<td width="22" style="vertical-align:top;color:{col};'
+            f'font-size:14px;font-weight:700">{ic}</td>'
+            f'<td style="padding-left:8px">'
+            f'<div style="font-family:Menlo,monospace;font-size:12px;'
+            f'color:#E6E8EB;font-weight:600">{_esc(r.run_name or r.id)}</div>'
+            f'{meta}{rv}</td>'
+            f'<td align="right" style="vertical-align:top;'
+            f'font-family:Menlo,monospace;font-size:12px;'
+            f'color:{col};white-space:nowrap;padding-left:10px">'
+            f'{hm}{delta}</td></tr></table></td></tr>')
+    return ('<div style="font-size:9px;color:#5C636B;text-transform:uppercase;'
+            'letter-spacing:.7px;font-weight:700;margin:18px 0 6px">'
+            'Completed experiments this period</div>'
+            f'<table width="100%" cellspacing="0" cellpadding="0" '
+            f'style="border-collapse:collapse;background:#14171C;'
+            f'border:1px solid #23272E;border-radius:8px;overflow:hidden">'
+            f'{"".join(rows)}</table>')
+
+
 def digest_email(window_hours: float):
-    """Build the full (subject, text, html, images) for a periodic digest."""
+    """Build the full (subject, text, html, images) for a periodic digest.
+
+    Rebuilt to surface Summary-style content: per-finished-run cards with
+    status icon, what/why, the council's learning, and metric vs baseline.
+    A fresh progress chart is rendered AT SEND TIME from current DuckDB."""
     subject, text = summary_text(window_hours)
     if not subject:
         return None, None, None, None
@@ -491,11 +565,13 @@ def digest_email(window_hours: float):
         finished, running = [], []
         for r in runs:
             ed = _parse_iso(r.ended_at)
-            if r.status in ("kept", "crashed", "discarded") and ed \
-                    and ed >= cutoff:
+            if r.status in ("kept", "crashed", "discarded", "failed",
+                            "success") and ed and ed >= cutoff:
                 finished.append(r)
             if r.status == "running":
                 running.append(r)
+        # newest first — most relevant at the top of the email
+        finished.sort(key=lambda r: r.ended_at or "", reverse=True)
     finally:
         db.close()
     ideas = _ideas_on_deck(_cfg(), proj)
@@ -503,30 +579,35 @@ def digest_email(window_hours: float):
              ("best", f"{best.headline_metric:.4f}" if best else "—"),
              ("done {}h".format(int(window_hours)), str(len(finished))),
              ("running", str(len(running)))]
-    tried = []
-    for r in finished:
-        hm = "—" if r.headline_metric is None else f"{r.headline_metric:.4f}"
-        tried.append(f"{r.status}: {r.run_name or r.id}  ({metric}={hm})")
     images = {}
+    # Generate chart pngs FRESH at send time (no caching) so the email reflects
+    # what just happened, not an hour-old snapshot.
     ch = _safe_charts()
     if ch:
-        p = ch.progress_png()
-        if p:
-            images["progress"] = p
-        lp = ch.losses_png()
-        if lp:
-            images["losses"] = lp
+        try:
+            p = ch.progress_png()
+            if p:
+                images["progress"] = p
+        except Exception as e:                          # noqa: BLE001
+            print(f"[notify] progress chart error: {e}", flush=True)
+        try:
+            lp = ch.losses_png()
+            if lp:
+                images["losses"] = lp
+        except Exception as e:                          # noqa: BLE001
+            print(f"[notify] losses chart error: {e}", flush=True)
     body = (f'<p style="margin:0 0 10px;">How '
             f'<b style="color:#E6E8EB;">{_esc(pname)}</b> has progressed over '
             f'the last {window_hours:g}h:</p>' + _stat_cards(cards))
     if "progress" in images:
-        body += _img("progress", "progress")
-    body += _section(f"Tried in the last {window_hours:g}h", tried)
+        body += _img("progress", f"{metric} vs experiment — fresh as of "
+                                  f"send time")
+    body += _run_cards_html(finished[:8], metric, base)
     body += _section("In progress now",
                      [r.run_name or r.id for r in running])
     body += _section("Next on deck", ideas[:8])
     if "losses" in images:
-        body += _img("losses", "training curves")
+        body += _img("losses", "Recent training curves")
     html = _shell(f"{window_hours:g}h digest — {pname}", body,
                   _dashboard_url(_cfg()))
     return subject, text, html, images

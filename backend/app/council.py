@@ -114,6 +114,20 @@ _INFLIGHT_LOCK = threading.Lock()
 _INFLIGHT: set[str] = set()
 _FILE_LOCK = threading.Lock()           # serialize ideas.md edits
 
+# Global semaphore: never more than this many council reviews in flight at
+# once across the whole process. A runaway agent that finishes 300 runs/min
+# (it happened once and cost the user $300) cannot DDoS the model endpoints
+# or run up an enormous bill — surplus reviews are skipped, not queued.
+_GLOBAL_MAX_CONCURRENT = 2
+_GLOBAL_SEMAPHORE = threading.Semaphore(_GLOBAL_MAX_CONCURRENT)
+
+# Per-idea cooldown — at most one council review per idea_id every
+# COOLDOWN_SEC seconds, even if the agent re-runs the same idea on a new
+# GPU. Stops "300 finishes in 5 minutes" from triggering 300 reviews.
+_COOLDOWN_SEC = 15 * 60
+_LAST_REVIEW_AT: dict[str, float] = {}  # idea_id -> wall-clock seconds
+_COOLDOWN_LOCK = threading.Lock()
+
 
 # ── the prompt ────────────────────────────────────────────────────────────
 SYSTEM = """You are the senior scientific advisor on an autonomous ML research
@@ -528,20 +542,56 @@ def deliberate(run_id: str) -> dict | None:
 
 # ── persistence + ideas.md surgery (unchanged interface) ─────────────────
 def review_async(run_id: str) -> bool:
-    """Fire-and-forget background debate. Idempotent per run."""
+    """Fire-and-forget background debate. Idempotent per run, rate-limited
+    per idea_id, and globally capped to _GLOBAL_MAX_CONCURRENT in-flight."""
     cfg = _settings()
     if not _available_reviewers(cfg):
         return False
-    # Skip cheap probe runs and metric-less crashed runs — no signal to review.
     if not _worth_reviewing(run_id):
         return False
+    # Per-idea cooldown: at most 1 review per idea every _COOLDOWN_SEC.
+    idea = _idea_id_of(run_id)
+    if idea:
+        with _COOLDOWN_LOCK:
+            t = _LAST_REVIEW_AT.get(idea, 0)
+            if time.time() - t < _COOLDOWN_SEC:
+                return False
+            # Mark optimistically; the worker will refresh it on success.
+            _LAST_REVIEW_AT[idea] = time.time()
     with _INFLIGHT_LOCK:
         if run_id in _INFLIGHT:
             return False
         _INFLIGHT.add(run_id)
-    threading.Thread(target=_worker, args=(run_id,), daemon=True,
+    # Global semaphore: if 2 reviews are already in flight, skip this one
+    # rather than queueing it (queueing would mask runaway agent behaviour).
+    if not _GLOBAL_SEMAPHORE.acquire(blocking=False):
+        with _INFLIGHT_LOCK:
+            _INFLIGHT.discard(run_id)
+        print(f"[council] busy — skipping review of {run_id}", flush=True)
+        return False
+    threading.Thread(target=_worker_wrapped, args=(run_id,), daemon=True,
                      name=f"council-{run_id[:16]}").start()
     return True
+
+
+def _idea_id_of(run_id: str) -> str:
+    db = SessionLocal()
+    try:
+        r = db.query(Run).filter(Run.id == run_id).first()
+        return (r.idea_id or "") if r else ""
+    finally:
+        db.close()
+
+
+def _worker_wrapped(run_id: str) -> None:
+    """Wraps _worker so the global semaphore is always released."""
+    try:
+        _worker(run_id)
+    finally:
+        try:
+            _GLOBAL_SEMAPHORE.release()
+        except Exception:
+            pass
 
 
 def _worth_reviewing(run_id: str) -> bool:

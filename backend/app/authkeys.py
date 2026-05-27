@@ -107,6 +107,49 @@ def add_key(line: str) -> dict:
     return {"ok": True}
 
 
+def local_pubkey() -> dict:
+    """Return this node's SSH public key + a one-liner to install it on
+    another machine. If no keypair exists, generate one (ed25519). The user
+    pastes this key into another node's authorized_keys so this autoresearcher
+    can SSH into it (e.g. to attach a remote GPU server)."""
+    priv = os.path.join(_SSH_DIR, "id_ed25519")
+    pub = priv + ".pub"
+    try:
+        os.makedirs(_SSH_DIR, exist_ok=True)
+        try:
+            os.chmod(_SSH_DIR, 0o700)
+        except OSError:
+            pass
+        if not os.path.exists(pub):
+            # generate a fresh ed25519 keypair non-interactively
+            subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "",
+                            "-f", priv,
+                            "-C", "autoresearcherUI@" + _hostname()],
+                           capture_output=True, timeout=20)
+        if not os.path.exists(pub):
+            return {"ok": False, "error": "could not read or create pub key"}
+        with open(pub) as f:
+            key = f.read().strip()
+        return {"ok": True, "pubkey": key, "fingerprint": _fingerprint(key),
+                "install_one_liner": (
+                    'echo ' + _shell_quote(key) +
+                    ' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys')}
+    except Exception as e:                             # noqa: BLE001
+        return {"ok": False, "error": str(e)}
+
+
+def _hostname() -> str:
+    try:
+        return subprocess.run(["hostname"], capture_output=True, text=True,
+                              timeout=4).stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _shell_quote(s: str) -> str:
+    return "'" + s.replace("'", "'\\''") + "'"
+
+
 def delete_key(fingerprint: str) -> dict:
     lines = _read_lines()
     if len(lines) <= 1:
