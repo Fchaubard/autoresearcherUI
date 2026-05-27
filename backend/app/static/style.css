@@ -254,6 +254,21 @@ body.resizing{user-select:none}
 .anav2-pop-it:hover{background:var(--panel-3);color:var(--text)}
 .anav2-pop-it.on{color:var(--accent)}
 .anav2-pop-sep{height:1px;background:var(--border);margin:4px 6px}
+.anav2-pop-h{font-size:9.5px;text-transform:uppercase;letter-spacing:.7px;
+  color:var(--muted);font-weight:700;padding:6px 11px 4px}
+.anav2-pop-it[data-a]{display:flex;align-items:center;gap:8px;width:100%}
+.anav2-pop-lbl{flex:1}
+.anav2-pop-n{color:var(--muted);font-family:var(--mono);font-size:10px;
+  background:var(--panel-3);padding:1px 6px;border-radius:9px;min-width:18px;
+  text-align:center}
+.anav2-pop-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;
+  background:var(--accent)}
+.anav2-pop-dot.s-kept{background:#34D399}
+.anav2-pop-dot.s-running{background:#FBBF24}
+.anav2-pop-dot.s-crashed{background:#F43F5E}
+.anav2-pop-dot.s-discarded{background:#F87171}
+.anav2-pop-it[disabled]{opacity:.4;cursor:not-allowed;pointer-events:none}
+.anav2-bulkpop{min-width:240px}
 
 .anav2-eyecell{display:flex;align-items:center;gap:6px;padding:6px 4px 6px 10px}
 .anav2-eye{background:transparent;border:0;font-size:14px;cursor:pointer;

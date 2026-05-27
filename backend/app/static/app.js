@@ -3029,13 +3029,39 @@ function openSortMenu(c, anchor) {
 // === Bulk visualize menu =================================================
 function openBulkMenu(c, anchor) {
   document.querySelectorAll('.anav2-popover').forEach(p => p.remove());
-  const pop = el('div', 'anav2-popover');
+  const pop = el('div', 'anav2-popover anav2-bulkpop');
+  // Per-status counts so labels say "Show kept (12)"
+  const byStatus = {};
+  (S.runs || []).forEach(r => {
+    byStatus[r.status] = (byStatus[r.status] || 0) + 1;
+  });
+  const statusBtn = (st, label, dot) => {
+    const n = byStatus[st] || 0;
+    return `<button class="anav2-pop-it anav2-pop-status" data-a="status:${st}"` +
+           ` ${n?'':'disabled'} title="Show only ${st} runs">` +
+           `<span class="anav2-pop-dot s-${st}"></span>` +
+           `<span class="anav2-pop-lbl">Show ${esc(label)}</span>` +
+           `<span class="anav2-pop-n">${n}</span></button>`;
+  };
   pop.innerHTML =
-    `<button class="anav2-pop-it" data-a="all">Make all visible</button>` +
+    `<div class="anav2-pop-h">Bulk actions</div>` +
+    `<button class="anav2-pop-it" data-a="all">Make all visible` +
+      `<span class="anav2-pop-n">${(S.runs||[]).length}</span></button>` +
     `<button class="anav2-pop-it" data-a="none">Make all hidden</button>` +
+    `<button class="anav2-pop-it" data-a="visible">` +
+      `Make filtered visible</button>` +
+    `<button class="anav2-pop-it" data-a="invert">Invert</button>` +
     `<div class="anav2-pop-sep"></div>` +
-    `<button class="anav2-pop-it" data-a="visible">Make filtered visible</button>` +
-    `<button class="anav2-pop-it" data-a="invert">Invert</button>`;
+    `<div class="anav2-pop-h">Show only…</div>` +
+    statusBtn('kept', 'kept', '#34D399') +
+    statusBtn('running', 'running', '#FBBF24') +
+    statusBtn('crashed', 'crashed', '#F43F5E') +
+    statusBtn('discarded', 'discarded', '#F87171') +
+    `<div class="anav2-pop-sep"></div>` +
+    `<button class="anav2-pop-it" data-a="add-best">` +
+      `Add top-5 by metric (best on frontier)</button>` +
+    `<button class="anav2-pop-it" data-a="add-recent">` +
+      `Add 5 most-recent kept</button>`;
   const r = anchor.getBoundingClientRect();
   pop.style.left = r.left + 'px';
   pop.style.top = (r.bottom + 4) + 'px';
@@ -3047,17 +3073,49 @@ function openBulkMenu(c, anchor) {
     };
     document.addEventListener('mousedown', off);
   }, 0);
-  pop.querySelectorAll('button').forEach(b => b.onclick = () => {
+  pop.querySelectorAll('button[data-a]').forEach(b => b.onclick = (ev) => {
     const filtered = _sortedAnaRuns();
     const act = b.dataset.a;
-    if (act === 'all') (S.runs || []).forEach(r => AnaState.selected.add(r.id));
+    const runs = S.runs || [];
+    // Shift-click adds to current selection; plain click replaces (per
+    // W&B convention for these "show only X" actions).
+    const add = ev.shiftKey;
+    if (act === 'all') runs.forEach(r => AnaState.selected.add(r.id));
     else if (act === 'none') AnaState.selected.clear();
-    else if (act === 'visible') filtered.forEach(r => AnaState.selected.add(r.id));
+    else if (act === 'visible') {
+      if (!add) AnaState.selected.clear();
+      filtered.forEach(r => AnaState.selected.add(r.id));
+    }
     else if (act === 'invert') {
-      (S.runs || []).forEach(r => {
+      runs.forEach(r => {
         if (AnaState.selected.has(r.id)) AnaState.selected.delete(r.id);
         else AnaState.selected.add(r.id);
       });
+    }
+    else if (act && act.startsWith('status:')) {
+      const want = act.slice('status:'.length);
+      if (!add) AnaState.selected.clear();
+      runs.filter(r => r.status === want)
+          .forEach(r => AnaState.selected.add(r.id));
+    }
+    else if (act === 'add-best') {
+      // Top-5 kept by direction-aware metric, ignoring null metrics.
+      const dir = (S.project && S.project.metric_direction === 'minimize')
+                ? 1 : -1;
+      const kept = runs
+        .filter(r => r.headline_metric != null
+                  && (r.status === 'kept' || r.status === 'success'))
+        .sort((a,b) => dir * (a.headline_metric - b.headline_metric))
+        .slice(0, 5);
+      kept.forEach(r => AnaState.selected.add(r.id));
+    }
+    else if (act === 'add-recent') {
+      const recent = runs
+        .filter(r => r.status === 'kept' || r.status === 'success')
+        .sort((a,b) => (b.ended_at||b.created_at||'')
+                       .localeCompare(a.ended_at||a.created_at||''))
+        .slice(0, 5);
+      recent.forEach(r => AnaState.selected.add(r.id));
     }
     pop.remove();
     renderAnaTable(c); refreshAllPanels(); syncUrl();
