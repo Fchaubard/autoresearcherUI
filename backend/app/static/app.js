@@ -1699,6 +1699,17 @@ function buildSettingsForm({ initial = {}, hideFields = [] } = {}) {
         });
       } else { x = el('input', 'onb-in'); x.type = type; }
       if (extra && type !== 'select') x.placeholder = extra;
+      // Mitigate Chrome's "deceptive site / you entered a password"
+      // heuristic on the *.trycloudflare.com tunnel. autocomplete +
+      // data-form-type tell Chrome these aren't login passwords.
+      if (type === 'password' || type === 'email') {
+        x.setAttribute('autocomplete', 'new-password');
+        x.setAttribute('data-form-type', 'other');
+        x.setAttribute('data-1p-ignore', 'true');     // 1Password
+        x.setAttribute('data-lpignore', 'true');      // LastPass
+      } else if (type === 'text') {
+        x.setAttribute('autocomplete', 'off');
+      }
       inp[k] = x; row.append(x);
     }
     form.append(row);
@@ -2617,10 +2628,16 @@ class MultiChart {
 
 /* W&B-style Analysis tab — two-pane: runs table left, panel grid right. */
 const AnaState = {
-  selected: new Set(),     // run_ids currently selected to plot
+  selected: new Set(),     // run_ids currently VISUALIZED (plotted)
   panels: [],              // [{id, title, y_keys, x_key, smoothing, log, include_baseline, show_band, zoom: null|{x_min,x_max}}]
   keys: [],                // all known metric keys
-  search: '', regex: false, status: 'all', sortKey: 'started', sortAsc: false,
+  search: '', regex: false,
+  // Multi-condition filter modal — clauses are { join: 'AND'|'OR'|'WHERE',
+  //   field: 'status'|'name'|'metric'|'started_at', op: '=|!=|contains|>|<',
+  //   value: string }.
+  filters: [],
+  hideCrashed: false,
+  sortKey: 'started', sortAsc: false,
   charts: new Map(),       // panel_id -> BucketChart instance
   baseline: null,
   panelsLoaded: false,
@@ -2632,15 +2649,23 @@ async function renderAnalysis(c) {
     <div class="anav2">
       <div class="anav2-side">
         <div class="anav2-side-hd">
-          <input class="anav2-search" placeholder="search runs…" />
+          <input class="anav2-search" placeholder="search runs…" autocomplete="off" />
           <label class="anav2-rx"><input type="checkbox" /> .*</label>
         </div>
-        <div class="anav2-filters">
-          <button class="anav2-fil on" data-s="all">all</button>
-          <button class="anav2-fil" data-s="kept">kept</button>
-          <button class="anav2-fil" data-s="running">running</button>
-          <button class="anav2-fil" data-s="crashed">crashed</button>
-          <button class="anav2-fil" data-s="discarded">discarded</button>
+        <div class="anav2-toolbar">
+          <button class="anav2-tb anav2-filter-btn" title="Filter">
+            <span class="anav2-tb-ic">≡</span>
+            <span class="anav2-tb-lbl">Filter</span>
+            <span class="anav2-filter-count"></span>
+          </button>
+          <button class="anav2-tb anav2-sort-btn" title="Sort">
+            <span class="anav2-tb-ic">↕</span>
+            <span class="anav2-tb-lbl">Sort</span>
+          </button>
+          <button class="anav2-tb anav2-bulk-btn" title="Show / hide all">
+            <span class="anav2-tb-ic">👁</span>
+          </button>
+          <span class="anav2-visualized"></span>
         </div>
         <div class="anav2-tablewrap"><table class="anav2-table"></table></div>
         <div class="anav2-side-ft">
@@ -2652,6 +2677,7 @@ async function renderAnalysis(c) {
         <div class="anav2-bar">
           <div class="anav2-bar-l">
             <button class="anav2-add">+ Add panel</button>
+            <button class="anav2-reset">Reset to defaults</button>
             <span class="anav2-baseline-tag" style="display:none">
               <span class="anav2-base-dot">★</span>
               <span class="anav2-base-name"></span>
@@ -2663,26 +2689,37 @@ async function renderAnalysis(c) {
         <div class="anav2-grid"></div>
       </div>
     </div>`;
-  // Wire search + filters
+  // Wire search + toolbar buttons
   const searchEl = c.querySelector('.anav2-search');
   const rxEl = c.querySelector('.anav2-rx input');
   searchEl.value = AnaState.search;
   rxEl.checked = AnaState.regex;
   searchEl.oninput = () => { AnaState.search = searchEl.value; renderAnaTable(c); };
   rxEl.onchange = () => { AnaState.regex = rxEl.checked; renderAnaTable(c); };
-  c.querySelectorAll('.anav2-fil').forEach(b => {
-    b.onclick = () => {
-      AnaState.status = b.dataset.s;
-      c.querySelectorAll('.anav2-fil').forEach(x =>
-        x.classList.toggle('on', x === b));
-      renderAnaTable(c);
-    };
-  });
+  c.querySelector('.anav2-filter-btn').onclick = () => openFilterModal(c);
+  c.querySelector('.anav2-sort-btn').onclick = e =>
+    openSortMenu(c, e.currentTarget);
+  c.querySelector('.anav2-bulk-btn').onclick = e =>
+    openBulkMenu(c, e.currentTarget);
   c.querySelector('.anav2-clear').onclick = () => {
     AnaState.selected.clear(); renderAnaTable(c); refreshAllPanels();
     syncUrl();
   };
   c.querySelector('.anav2-add').onclick = () => openAddPanelModal(c);
+  c.querySelector('.anav2-reset').onclick = async () => {
+    if (!confirm('Reset to the default 4 panels (train/val loss, val_acc, lr)?')) return;
+    AnaState.panels = [];
+    // Pull defaults from the backend (which provides them when saved is empty)
+    try {
+      await fetch('/api/analysis/panels', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ panels: [] }),
+      });
+      const p = await api('/analysis/panels');
+      AnaState.panels = (p && p.panels) || [];
+    } catch (e) { /* keep empty */ }
+    renderAnaPanels(c);
+  };
   // Load keys + panels + initial selection from URL
   try {
     const k = await api('/metrics/keys');
@@ -2721,8 +2758,53 @@ function renderAnaBaselineTag(c) {
   };
 }
 
+function _runFieldValue(r, field) {
+  switch (field) {
+    case 'status': return (r.status || '').toLowerCase();
+    case 'name': return (r.run_name || r.id || '').toLowerCase();
+    case 'metric': return r.headline_metric ?? null;
+    case 'started_at': return r.started_at || r.created_at || '';
+    case 'gpu': return r.gpu_index;
+    default: return '';
+  }
+}
+
+function _matchesClause(r, clause) {
+  const v = _runFieldValue(r, clause.field);
+  const tv = (clause.value || '').toString().toLowerCase();
+  const num = parseFloat(clause.value);
+  switch (clause.op) {
+    case '=':   return String(v).toLowerCase() === tv;
+    case '!=':  return String(v).toLowerCase() !== tv;
+    case 'contains':
+      return String(v).toLowerCase().includes(tv);
+    case '!contains':
+      return !String(v).toLowerCase().includes(tv);
+    case '>':   return typeof v === 'number' && v > num;
+    case '<':   return typeof v === 'number' && v < num;
+    case '>=':  return typeof v === 'number' && v >= num;
+    case '<=':  return typeof v === 'number' && v <= num;
+    default: return true;
+  }
+}
+
+function _matchesFilters(r) {
+  const fs = AnaState.filters || [];
+  if (!fs.length) return true;
+  // Evaluate left-to-right honoring AND/OR. First clause's join is ignored
+  // ('WHERE'). Each subsequent join combines with the running value.
+  let acc = _matchesClause(r, fs[0]);
+  for (let i = 1; i < fs.length; i++) {
+    const ok = _matchesClause(r, fs[i]);
+    if (fs[i].join === 'OR') acc = acc || ok;
+    else acc = acc && ok;
+  }
+  return acc;
+}
+
 function _matchesRun(r) {
-  if (AnaState.status !== 'all' && r.status !== AnaState.status) return false;
+  if (AnaState.hideCrashed && r.status === 'crashed') return false;
+  if (!_matchesFilters(r)) return false;
   const q = (AnaState.search || '').trim();
   if (!q) return true;
   const hay = (r.run_name || '') + ' ' + (r.id || '');
@@ -2771,24 +2853,27 @@ function renderAnaTable(c) {
   });
   const tb = tbl.querySelector('tbody');
   runs.slice(0, 1000).forEach(r => {
-    const tr = el('tr', AnaState.selected.has(r.id) ? 'sel' : '');
+    const isViz = AnaState.selected.has(r.id);
+    const tr = el('tr', isViz ? 'sel' : '');
     const isBase = r.id === AnaState.baseline;
     const m = r.headline_metric == null ? '—' : fmt(r.headline_metric, 4);
+    // Each row gets a stable color so the eye dot matches the plot line.
+    const idx = Array.from(AnaState.selected).indexOf(r.id);
+    const color = isViz && idx >= 0
+      ? PALETTE_BIG[idx % PALETTE_BIG.length] : 'transparent';
     tr.innerHTML =
-      `<td><input type="checkbox"${AnaState.selected.has(r.id)?' checked':''}/></td>` +
+      `<td class="anav2-eyecell"><button class="anav2-eye${isViz?' on':''}" title="${isViz?'Hide':'Visualize'}">${isViz?'👁':'👁'}</button>` +
+        `<span class="anav2-eyedot" style="background:${color}"></span></td>` +
       `<td class="anav2-star${isBase?' on':''}" title="Set as baseline">★</td>` +
       `<td class="anav2-name mono">${esc(r.run_name||r.id)}</td>` +
       `<td><span class="chip s-${r.status}"><span class="dot"></span>${esc(r.status||'')}</span></td>` +
       `<td class="mono">${m}</td>` +
       `<td class="mono">${esc(ago(r.started_at||r.created_at||''))}</td>` +
-      `<td><button class="anav2-solo" title="Solo this run">👁</button></td>`;
-    tr.querySelector('input').onchange = e => {
-      if (e.target.checked) AnaState.selected.add(r.id);
-      else AnaState.selected.delete(r.id);
-      tr.classList.toggle('sel', e.target.checked);
-      refreshAllPanels(); syncUrl();
-      c.querySelector('.anav2-count').textContent =
-        `${AnaState.selected.size} selected`;
+      `<td><button class="anav2-solo" title="Solo this run">↗</button></td>`;
+    tr.querySelector('.anav2-eye').onclick = () => {
+      if (AnaState.selected.has(r.id)) AnaState.selected.delete(r.id);
+      else AnaState.selected.add(r.id);
+      renderAnaTable(c); refreshAllPanels(); syncUrl();
     };
     tr.querySelector('.anav2-star').onclick = e => {
       e.stopPropagation();
@@ -2805,7 +2890,174 @@ function renderAnaTable(c) {
     tb.append(tr);
   });
   c.querySelector('.anav2-count').textContent =
-    `${AnaState.selected.size} selected · ${runs.length} runs`;
+    `${AnaState.selected.size} visualized · ${runs.length} runs`;
+  const visEl = c.querySelector('.anav2-visualized');
+  if (visEl) visEl.textContent =
+    `${AnaState.selected.size} visualized`;
+  const filterCount = c.querySelector('.anav2-filter-count');
+  if (filterCount) {
+    const n = AnaState.filters.length + (AnaState.hideCrashed ? 1 : 0);
+    filterCount.textContent = n ? `(${n})` : '';
+  }
+}
+
+// === Filter modal ========================================================
+function openFilterModal(c) {
+  const sc = el('div', 'mscrim');
+  const m = el('div', 'modal modal-filter');
+  m.innerHTML = `
+    <div class="modal-hd"><h2>Filter runs</h2>
+      <button class="iconbtn" id="fmx">✕</button></div>
+    <div class="fm-rows" id="fm-rows"></div>
+    <div class="fm-add-row">
+      <button class="btn" id="fm-add">+ New filter</button>
+    </div>
+    <div class="fm-toggles">
+      <label><input type="checkbox" id="fm-hide-crashed" />
+        <span>Hide crashed runs</span></label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="fm-clear">Clear all filters</button>
+      <button class="btn pri" id="fm-apply">Apply</button>
+    </div>`;
+  sc.append(m); document.body.append(sc);
+  sc.onclick = e => { if (e.target === sc) sc.remove(); };
+  m.querySelector('#fmx').onclick = () => sc.remove();
+  // Working copy
+  let rows = (AnaState.filters || []).map(c => ({ ...c }));
+  if (!rows.length) {
+    rows.push({ join: 'WHERE', field: 'status', op: '=', value: '' });
+  }
+  const fields = [
+    ['status','status'], ['name','name'], ['metric','headline metric'],
+    ['started_at','started_at'], ['gpu','GPU index'],
+  ];
+  const ops = [
+    ['=','='], ['!=','!='], ['contains','contains'], ['!contains','does not contain'],
+    ['>','>'], ['<','<'], ['>=','>='], ['<=','<='],
+  ];
+  const rowsEl = m.querySelector('#fm-rows');
+  function paint() {
+    rowsEl.innerHTML = '';
+    rows.forEach((cl, i) => {
+      const r = el('div', 'fm-row');
+      const join = (i === 0)
+        ? `<div class="fm-join fm-where">WHERE</div>`
+        : `<select class="fm-join-sel">
+             <option value="AND"${cl.join==='AND'?' selected':''}>AND</option>
+             <option value="OR"${cl.join==='OR'?' selected':''}>OR</option>
+           </select>`;
+      const fOpts = fields.map(([v,l]) =>
+        `<option value="${v}"${cl.field===v?' selected':''}>${esc(l)}</option>`).join('');
+      const oOpts = ops.map(([v,l]) =>
+        `<option value="${v}"${cl.op===v?' selected':''}>${esc(l)}</option>`).join('');
+      r.innerHTML =
+        `<div class="fm-cell">${join}</div>` +
+        `<select class="fm-field">${fOpts}</select>` +
+        `<select class="fm-op">${oOpts}</select>` +
+        `<input class="fm-val" value="${esc(cl.value||'')}" autocomplete="off"/>` +
+        `<button class="fm-del" title="Remove">✕</button>`;
+      r.querySelector('.fm-field').onchange = e => { rows[i].field = e.target.value; };
+      r.querySelector('.fm-op').onchange = e => { rows[i].op = e.target.value; };
+      r.querySelector('.fm-val').oninput = e => { rows[i].value = e.target.value; };
+      if (i > 0) {
+        r.querySelector('.fm-join-sel').onchange = e => { rows[i].join = e.target.value; };
+      }
+      r.querySelector('.fm-del').onclick = () => { rows.splice(i,1); paint(); };
+      rowsEl.append(r);
+    });
+  }
+  paint();
+  m.querySelector('#fm-hide-crashed').checked = !!AnaState.hideCrashed;
+  m.querySelector('#fm-add').onclick = () => {
+    rows.push({ join: 'AND', field: 'name', op: 'contains', value: '' });
+    paint();
+  };
+  m.querySelector('#fm-clear').onclick = () => {
+    rows.length = 0; paint();
+  };
+  m.querySelector('#fm-apply').onclick = () => {
+    AnaState.filters = rows.filter(r =>
+      r.field && r.op && (r.value !== '' || r.field === 'status'));
+    AnaState.hideCrashed = m.querySelector('#fm-hide-crashed').checked;
+    sc.remove();
+    renderAnaTable(c);
+  };
+}
+
+// === Sort menu ===========================================================
+function openSortMenu(c, anchor) {
+  document.querySelectorAll('.anav2-popover').forEach(p => p.remove());
+  const pop = el('div', 'anav2-popover');
+  const opts = [
+    ['started', 'started time'], ['name', 'name'], ['status', 'status'],
+    ['metric', 'metric'],
+  ];
+  pop.innerHTML = opts.map(([k,l]) =>
+    `<button data-k="${k}" class="anav2-pop-it${AnaState.sortKey===k?' on':''}">` +
+    `${esc(l)} ${AnaState.sortKey===k ? (AnaState.sortAsc?'▲':'▼') : ''}</button>`
+  ).join('') +
+    `<div class="anav2-pop-sep"></div>` +
+    `<button class="anav2-pop-it" data-dir>${AnaState.sortAsc?'ascending':'descending'}</button>`;
+  const r = anchor.getBoundingClientRect();
+  pop.style.left = r.left + 'px';
+  pop.style.top = (r.bottom + 4) + 'px';
+  document.body.append(pop);
+  setTimeout(() => {
+    const off = (e) => {
+      if (pop.contains(e.target)) return;
+      pop.remove(); document.removeEventListener('mousedown', off);
+    };
+    document.addEventListener('mousedown', off);
+  }, 0);
+  pop.querySelectorAll('button').forEach(b => b.onclick = () => {
+    if (b.dataset.k) {
+      if (AnaState.sortKey === b.dataset.k) AnaState.sortAsc = !AnaState.sortAsc;
+      else { AnaState.sortKey = b.dataset.k; AnaState.sortAsc = (b.dataset.k === 'name'); }
+    } else {
+      AnaState.sortAsc = !AnaState.sortAsc;
+    }
+    pop.remove();
+    renderAnaTable(c);
+  });
+}
+
+// === Bulk visualize menu =================================================
+function openBulkMenu(c, anchor) {
+  document.querySelectorAll('.anav2-popover').forEach(p => p.remove());
+  const pop = el('div', 'anav2-popover');
+  pop.innerHTML =
+    `<button class="anav2-pop-it" data-a="all">Make all visible</button>` +
+    `<button class="anav2-pop-it" data-a="none">Make all hidden</button>` +
+    `<div class="anav2-pop-sep"></div>` +
+    `<button class="anav2-pop-it" data-a="visible">Make filtered visible</button>` +
+    `<button class="anav2-pop-it" data-a="invert">Invert</button>`;
+  const r = anchor.getBoundingClientRect();
+  pop.style.left = r.left + 'px';
+  pop.style.top = (r.bottom + 4) + 'px';
+  document.body.append(pop);
+  setTimeout(() => {
+    const off = (e) => {
+      if (pop.contains(e.target)) return;
+      pop.remove(); document.removeEventListener('mousedown', off);
+    };
+    document.addEventListener('mousedown', off);
+  }, 0);
+  pop.querySelectorAll('button').forEach(b => b.onclick = () => {
+    const filtered = _sortedAnaRuns();
+    const act = b.dataset.a;
+    if (act === 'all') (S.runs || []).forEach(r => AnaState.selected.add(r.id));
+    else if (act === 'none') AnaState.selected.clear();
+    else if (act === 'visible') filtered.forEach(r => AnaState.selected.add(r.id));
+    else if (act === 'invert') {
+      (S.runs || []).forEach(r => {
+        if (AnaState.selected.has(r.id)) AnaState.selected.delete(r.id);
+        else AnaState.selected.add(r.id);
+      });
+    }
+    pop.remove();
+    renderAnaTable(c); refreshAllPanels(); syncUrl();
+  });
 }
 
 function renderAnaPanels(c) {
@@ -2815,6 +3067,23 @@ function renderAnaPanels(c) {
   AnaState.charts.forEach(ch => ch.destroy && ch.destroy());
   AnaState.charts.clear();
   grid.innerHTML = '';
+  if (!AnaState.panels.length) {
+    const empty = el('div', 'anav2-grid-empty');
+    empty.innerHTML =
+      '<div class="anav2-grid-empty-icon">📊</div>' +
+      '<h2>No panels</h2>' +
+      '<p>Add a panel to start plotting selected runs, or reset to the ' +
+      'default set (train/val loss, val accuracy, learning rate).</p>' +
+      '<div class="anav2-grid-empty-actions">' +
+      '<button class="btn pri anav2-emp-add">+ Add panel</button>' +
+      '<button class="btn anav2-emp-reset">Reset to defaults</button>' +
+      '</div>';
+    grid.append(empty);
+    empty.querySelector('.anav2-emp-add').onclick = () => openAddPanelModal(c);
+    empty.querySelector('.anav2-emp-reset').onclick =
+      () => c.querySelector('.anav2-reset').click();
+    return;
+  }
   AnaState.panels.forEach(p => grid.append(buildPanel(c, p)));
   refreshAllPanels();
 }
