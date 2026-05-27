@@ -2399,6 +2399,10 @@ class BucketChart {
     // Draw active line LAST so it's on top.
     const activeRun = (typeof hoverBus !== 'undefined') ? hoverBus.runId : null;
     const hasMany = ser.length > 1;
+    // Bridge short null gaps (<= MAX_GAP buckets) so a single missing
+    // sample doesn't visually break the line. Longer gaps stay broken
+    // so real data dropouts remain truthful to the user.
+    const MAX_GAP = 3;
     const drawSeries = (s, idx) => {
       const ys = smoothed[idx];
       const isActive = activeRun && s.run_id === activeRun;
@@ -2408,12 +2412,26 @@ class BucketChart {
       c.lineWidth = isActive ? 2.8 : (s.dashed ? 1.4 : 1.8);
       if (s.dashed) c.setLineDash([4, 3]); else c.setLineDash([]);
       let pen = false;
+      let gapLen = 0;     // consecutive nulls since last drawn point
+      let lastX = null, lastY = null;
       c.beginPath();
       for (let i = 0; i < s.x.length; i++) {
         const xi = s.x[i], yi = ys[i];
-        if (xi == null || yi == null || isNaN(yi)) { pen = false; continue; }
+        if (xi == null || yi == null || isNaN(yi)) {
+          gapLen++;
+          continue;
+        }
         const px = X(xi), py = Y(yi);
-        if (!pen) { c.moveTo(px, py); pen = true; } else c.lineTo(px, py);
+        if (!pen) {
+          c.moveTo(px, py); pen = true;
+        } else if (gapLen > MAX_GAP) {
+          // long gap — drop the pen, start a new segment so the gap is honest
+          c.moveTo(px, py);
+        } else {
+          // short or zero-length gap — connect through to keep the line smooth
+          c.lineTo(px, py);
+        }
+        gapLen = 0; lastX = px; lastY = py;
       }
       c.stroke(); c.setLineDash([]);
     };
@@ -3256,7 +3274,7 @@ function buildPanel(c, p) {
     `<div class="anav2-panel-title">${esc(p.title)}</div>` +
     `<div class="anav2-panel-keys mono">${esc((p.y_keys||[]).join(' · '))}</div>` +
     `<div class="anav2-panel-ctrls-r">` +
-      `<button class="anav2-ctrl-btn anav2-expand" title="${isExpanded?'Minimize panel':'Expand panel'}">${isExpanded?'⛶⃝':'⛶'}</button>` +
+      `<button class="anav2-ctrl-btn anav2-expand${isExpanded?' on':''}" title="${isExpanded?'Minimize panel':'Expand panel'}">${isExpanded?'⤡':'⤢'}</button>` +
       `<button class="anav2-ctrl-btn anav2-edit" title="edit panel">✎</button>` +
       `<button class="anav2-ctrl-btn anav2-rm" title="remove panel">✕</button>` +
     `</div>`;
