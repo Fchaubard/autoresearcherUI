@@ -3227,6 +3227,20 @@ function renderAnaPanels(c) {
       () => c.querySelector('.anav2-reset').click();
     return;
   }
+  // When a panel is expanded, hide the rest so it fills the grid area.
+  // The left runs table is unaffected.
+  if (AnaState.expandedPanel) {
+    const target = AnaState.panels.find(p => p.id === AnaState.expandedPanel);
+    if (target) {
+      grid.classList.add('expanded');
+      grid.append(buildPanel(c, target));
+      refreshAllPanels();
+      return;
+    }
+    // expanded panel no longer exists — reset
+    AnaState.expandedPanel = null;
+  }
+  grid.classList.remove('expanded');
   AnaState.panels.forEach(p => grid.append(buildPanel(c, p)));
   refreshAllPanels();
 }
@@ -3236,11 +3250,13 @@ function buildPanel(c, p) {
   card.dataset.pid = p.id;
   // Two-row header: title on its own row (so it's never squeezed), then
   // a control row below it.
+  const isExpanded = AnaState.expandedPanel === p.id;
   const titleRow = el('div', 'anav2-panel-titlerow');
   titleRow.innerHTML =
     `<div class="anav2-panel-title">${esc(p.title)}</div>` +
     `<div class="anav2-panel-keys mono">${esc((p.y_keys||[]).join(' · '))}</div>` +
     `<div class="anav2-panel-ctrls-r">` +
+      `<button class="anav2-ctrl-btn anav2-expand" title="${isExpanded?'Minimize panel':'Expand panel'}">${isExpanded?'⛶⃝':'⛶'}</button>` +
       `<button class="anav2-ctrl-btn anav2-edit" title="edit panel">✎</button>` +
       `<button class="anav2-ctrl-btn anav2-rm" title="remove panel">✕</button>` +
     `</div>`;
@@ -3291,9 +3307,14 @@ function buildPanel(c, p) {
     e.currentTarget.classList.toggle('on', p.include_baseline);
     refreshPanel(p); savePanelsDebounced();
   };
+  card.querySelector('.anav2-expand').onclick = () => {
+    AnaState.expandedPanel = (AnaState.expandedPanel === p.id) ? null : p.id;
+    renderAnaPanels(c);
+  };
   card.querySelector('.anav2-edit').onclick = () => openEditPanelModal(c, p);
   card.querySelector('.anav2-rm').onclick = () => {
     AnaState.panels = AnaState.panels.filter(x => x.id !== p.id);
+    if (AnaState.expandedPanel === p.id) AnaState.expandedPanel = null;
     renderAnaPanels(c); savePanelsDebounced();
   };
   return card;
