@@ -270,6 +270,34 @@ body.resizing{user-select:none}
 .anav2-pop-it[disabled]{opacity:.4;cursor:not-allowed;pointer-events:none}
 .anav2-bulkpop{min-width:240px}
 
+/* Themed confirm/alert/prompt dialog. Matches the rest of the dark UI;
+   replaces the white browser native confirm() popup. */
+.arui-dlg-scrim{display:flex;align-items:center;justify-content:center;
+  z-index:200;background:rgba(0,0,0,.65)}
+.arui-dlg{max-width:460px;min-width:380px;padding:22px 22px 18px;
+  border-radius:12px;border:1px solid var(--border);background:var(--panel);
+  box-shadow:0 20px 60px #0009}
+.arui-dlg.danger{border-color:#f43f5e55}
+.arui-dlg-hd{font-size:15px;font-weight:700;color:var(--text);
+  margin-bottom:10px}
+.arui-dlg.danger .arui-dlg-hd{color:#FCA5A5}
+.arui-dlg-bd{font-size:12.5px;line-height:1.55;color:var(--text-2);
+  margin-bottom:16px}
+.arui-dlg-in{display:block;width:100%;background:var(--bg);
+  border:1px solid var(--border);border-radius:6px;padding:8px 11px;
+  color:var(--text);font-size:13px;font-family:inherit;margin-bottom:16px;
+  outline:none}
+.arui-dlg-in:focus{border-color:var(--accent)}
+.arui-dlg-actions{display:flex;justify-content:flex-end;gap:8px}
+.arui-dlg-cancel{background:transparent !important;border:1px solid var(--border) !important;
+  color:var(--text-2) !important}
+.arui-dlg-cancel:hover{border-color:var(--text-2) !important;color:var(--text) !important}
+.arui-dlg-ok{background:var(--accent) !important;color:#fff !important;
+  border:0 !important;font-weight:600}
+.arui-dlg-ok.danger{background:#F43F5E !important}
+.arui-dlg-ok.danger:hover{background:#E11D48 !important}
+.arui-dlg-ok:focus{outline:2px solid #ffffff44;outline-offset:2px}
+
 .anav2-eyecell{display:flex;align-items:center;gap:6px;padding:6px 4px 6px 10px}
 .anav2-eye{background:transparent;border:0;font-size:14px;cursor:pointer;
   opacity:.4;color:var(--text-2);width:22px;height:22px;border-radius:4px}

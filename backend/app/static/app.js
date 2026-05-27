@@ -393,6 +393,68 @@ function header() {
   return h;
 }
 
+/* ── styled dialog helpers (replace native confirm/alert/prompt) ────── */
+// Async, dark-theme dialogs that match the app's design. Each returns a
+// Promise so we can `await aruiConfirm(...)`. Esc cancels; Enter submits.
+function _aruiDialog({ title, message, kind = 'confirm', danger = false,
+                       defaultValue = '', okText, cancelText } = {}) {
+  return new Promise(resolve => {
+    const sc = el('div', 'mscrim arui-dlg-scrim');
+    const m  = el('div', 'modal arui-dlg' + (danger ? ' danger' : ''));
+    const okLabel = okText || (kind === 'alert' ? 'OK'
+                              : danger ? 'Delete' : 'Confirm');
+    const cancelLabel = cancelText || 'Cancel';
+    m.innerHTML =
+      `<div class="arui-dlg-hd">${title ? esc(title) : 'Confirm'}</div>` +
+      (message ? `<div class="arui-dlg-bd">${esc(message)
+                  .replace(/\n/g, '<br>')}</div>` : '') +
+      (kind === 'prompt'
+        ? `<input class="arui-dlg-in" autocomplete="off" />` : '') +
+      `<div class="arui-dlg-actions">` +
+        (kind === 'alert' ? ''
+          : `<button class="btn arui-dlg-cancel">${esc(cancelLabel)}</button>`) +
+        `<button class="btn pri arui-dlg-ok${danger?' danger':''}">${esc(okLabel)}</button>` +
+      `</div>`;
+    sc.append(m); document.body.append(sc);
+    const inp = m.querySelector('.arui-dlg-in');
+    if (inp) { inp.value = defaultValue; setTimeout(() => inp.focus(), 0); }
+    else setTimeout(() => m.querySelector('.arui-dlg-ok').focus(), 0);
+    const close = (val) => {
+      document.removeEventListener('keydown', onKey);
+      sc.remove();
+      resolve(val);
+    };
+    const onKey = e => {
+      if (e.key === 'Escape') close(kind === 'prompt' ? null
+                                  : kind === 'alert' ? undefined : false);
+      else if (e.key === 'Enter' && (!inp || document.activeElement === inp
+                                          || document.activeElement.tagName === 'BUTTON'))
+        close(kind === 'prompt' ? inp.value
+             : kind === 'alert' ? undefined : true);
+    };
+    document.addEventListener('keydown', onKey);
+    sc.onclick = e => { if (e.target === sc) close(
+      kind === 'prompt' ? null : kind === 'alert' ? undefined : false); };
+    m.querySelector('.arui-dlg-ok').onclick = () => close(
+      kind === 'prompt' ? (inp ? inp.value : '')
+      : kind === 'alert' ? undefined : true);
+    const cancel = m.querySelector('.arui-dlg-cancel');
+    if (cancel) cancel.onclick = () => close(
+      kind === 'prompt' ? null : false);
+  });
+}
+const aruiConfirm = (msg, opts={}) =>
+  _aruiDialog({ title: opts.title || 'Are you sure?', message: msg,
+                kind: 'confirm', danger: opts.danger, okText: opts.okText });
+const aruiAlert = (msg, opts={}) =>
+  _aruiDialog({ title: opts.title || 'Heads up', message: msg,
+                kind: 'alert', okText: opts.okText });
+const aruiPrompt = (msg, opts={}) =>
+  _aruiDialog({ title: opts.title || 'Input',
+                message: msg, kind: 'prompt',
+                defaultValue: opts.defaultValue || '',
+                okText: opts.okText });
+
 /* ── side menu ────────────────────────────────────────────────────────── */
 function closeMenu() {
   document.querySelector('.sidemenu')?.remove();
@@ -742,10 +804,11 @@ function paintTable() {
       last.innerHTML = '<button class="idel" title="Remove idea">✕</button>';
       last.querySelector('.idel').onclick = e => {
         e.stopPropagation();
-        const why = prompt('Remove this idea from the queue.\n\n' +
-          'Why? (sent to the agent so it learns your preference)');
-        if (why === null) return;
-        deleteIdea(r.id, why);
+        aruiPrompt(
+          'Why are you removing it? (sent to the agent so it learns your ' +
+          'preference)',
+          { title: 'Remove idea from queue', okText: 'Remove' })
+          .then(why => { if (why !== null) deleteIdea(r.id, why); });
       };
     }
     tb.append(tr);
@@ -1234,8 +1297,10 @@ async function openDrawer(runId) {
   if (run.status === 'running') {
     const kb = el('button', 'dr-kill', 'Kill run');
     kb.onclick = async () => {
-      if (!confirm('Kill this run? Its tmux session will be terminated.'))
-        return;
+      const ok = await aruiConfirm(
+        'Its tmux session will be terminated and the run marked crashed.',
+        { title: 'Kill this run?', danger: true, okText: 'Kill run' });
+      if (!ok) return;
       await post('/runs/' + encodeURIComponent(runId) + '/kill', {});
       kb.textContent = 'Killed'; kb.disabled = true;
     };
@@ -1952,8 +2017,12 @@ async function openArchive() {
 }
 
 async function resetAll() {
-  if (!confirm('Reset autoresearcherUI?\n\nThis deletes all experiments, runs, '
-    + 'metrics and config, and returns to the onboarding screen.')) return;
+  const ok = await aruiConfirm(
+    'This deletes ALL experiments, runs, metrics, and config, and returns ' +
+    'to the onboarding screen. This cannot be undone.',
+    { title: 'Reset autoresearcherUI?', danger: true,
+      okText: 'Delete everything' });
+  if (!ok) return;
   await post('/reset', {});
   setTimeout(() => location.reload(), 300);
 }
@@ -2142,9 +2211,15 @@ function renderAuthkeys(c) {
     };
     c.querySelectorAll('.ak-del').forEach(b => {
       b.onclick = async () => {
-        if (!confirm('Delete this SSH key from the node?')) return;
+        const ok = await aruiConfirm(
+          'This key will no longer be able to SSH into the node. Make sure ' +
+          'you have another working key before deleting.',
+          { title: 'Delete this SSH key?', danger: true,
+            okText: 'Delete key' });
+        if (!ok) return;
         const r = await post('/authkeys/delete', { fingerprint: b.dataset.fp });
-        if (!r.ok) { alert(r.error || 'failed'); }
+        if (!r.ok) { await aruiAlert(r.error || 'Delete failed.',
+                                     { title: 'Could not delete key' }); }
         load();
       };
     });
@@ -2402,7 +2477,7 @@ class BucketChart {
     // Bridge short null gaps (<= MAX_GAP buckets) so a single missing
     // sample doesn't visually break the line. Longer gaps stay broken
     // so real data dropouts remain truthful to the user.
-    const MAX_GAP = 3;
+    const MAX_GAP = 8;   // bridge cosmetic dropouts ~1.6% of x range
     const drawSeries = (s, idx) => {
       const ys = smoothed[idx];
       const isActive = activeRun && s.run_id === activeRun;
@@ -2807,7 +2882,12 @@ async function renderAnalysis(c) {
   };
   c.querySelector('.anav2-add').onclick = () => openAddPanelModal(c);
   c.querySelector('.anav2-reset').onclick = async () => {
-    if (!confirm('Reset to the default 4 panels (train/val loss, val_acc, lr)?')) return;
+    const ok = await aruiConfirm(
+      'This replaces your current panel set with the project-aware ' +
+      'defaults (7 panels: project metric, train/val loss, train/val acc, ' +
+      'learning rate, time per step).',
+      { title: 'Reset panels to defaults?', okText: 'Reset panels' });
+    if (!ok) return;
     AnaState.panels = [];
     // Pull defaults from the backend (which provides them when saved is empty)
     try {
