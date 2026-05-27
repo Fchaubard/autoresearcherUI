@@ -10,7 +10,7 @@ import asyncio
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -43,6 +43,22 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="autoresearcherUI", version="0.2.0", lifespan=lifespan)
 app.include_router(router)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+# Browsers were aggressively disk-caching app.js / style.css despite our
+# query-string cache-busting (Chrome heuristic when no Cache-Control header
+# is sent). Force them to revalidate every request with no-cache on static
+# assets and on the index. ETag/Last-Modified make this cheap (304 replies).
+@app.middleware("http")
+async def _no_cache_static(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/static/"):
+        response.headers["Cache-Control"] = (
+            "no-cache, no-store, must-revalidate, max-age=0")
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 
 @app.get("/")
