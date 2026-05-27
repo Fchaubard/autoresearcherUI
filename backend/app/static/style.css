@@ -309,6 +309,10 @@ body.resizing{user-select:none}
   vertical-align:middle}
 .anav2-table tbody tr:hover{background:var(--panel-2)}
 .anav2-table tbody tr.sel{background:#6366F114}
+/* When the user hovers a plot line, the matching row gets pulsed by .hover
+   (also applied on direct row-hover via JS — CSS :hover wouldn't reach
+   here from the chart). */
+.anav2-table tbody tr.hover{background:#6366F128;box-shadow:inset 3px 0 0 var(--accent)}
 .anav2-table .anav2-star{cursor:pointer;color:var(--muted);text-align:center;
   font-size:14px;width:18px;padding:6px 2px}
 .anav2-table .anav2-star:hover{color:#FBBF24}

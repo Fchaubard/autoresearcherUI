@@ -319,13 +319,16 @@ _METRICS_CHANGED_DEBOUNCE_LOCK = threading.Lock()
 
 
 def _maybe_emit_metrics_changed(run_id: str) -> None:
-    """Coalesce metrics_changed(run_id) events to at most one per 500 ms
-    per run — the Analysis tab uses this to refetch bucketed data."""
+    """Coalesce metrics_changed(run_id) events to at most one per 2 s per
+    run. The Analysis tab uses this to refetch bucketed data; firing more
+    often than that just makes lines flash as buckets shift. Combined
+    with the frontend's 1.2 s refresh debounce, this gives a smooth
+    once-per-2 s tick on running runs."""
     import time as _time
     now = _time.time()
     with _METRICS_CHANGED_DEBOUNCE_LOCK:
         last = _METRICS_CHANGED_DEBOUNCE.get(run_id, 0.0)
-        if now - last < 0.5:
+        if now - last < 2.0:
             return
         _METRICS_CHANGED_DEBOUNCE[run_id] = now
     bus.publish("metrics", "metrics_changed", {"run_id": run_id})

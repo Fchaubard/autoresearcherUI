@@ -1519,14 +1519,11 @@ function streams() {
   m.addEventListener('metrics_changed', e => {
     try {
       const { run_id } = JSON.parse(e.data);
-      // Invalidate Analysis tab bucket cache for this run; if we're on
-      // Analysis right now and this run is selected, repaint.
-      if (typeof invalidateBucketsForRun === 'function') {
-        invalidateBucketsForRun(run_id);
-      }
-      if (S.view === 'analysis' && AnaState && AnaState.selected
-          && AnaState.selected.has(run_id)) {
-        if (typeof refreshAllPanels === 'function') refreshAllPanels();
+      // Debounced: coalesce multiple metrics_changed events into one
+      // panel refresh ~every 1.2s so running runs don't make the chart
+      // flicker by rebuilding at 4Hz.
+      if (typeof scheduleLiveRefresh === 'function') {
+        scheduleLiveRefresh(run_id);
       }
     } catch (e) { /* ignore */ }
   });
@@ -2176,6 +2173,48 @@ function renderAuthkeys(c) {
      include_baseline is true; rendered as a dashed grey line.
    - Panel set persists server-side at GET/PUT /api/analysis/panels. */
 
+// Two-way "active run hover" — chart line ↔ table row. Hovering a line in
+// any panel emphasizes that line and scrolls/highlights the matching row
+// in the runs table on the left. Hovering a row emphasizes that run's
+// lines in every panel.
+const hoverBus = {
+  runId: null, frame: 0, listeners: new Set(),
+  set(rid) {
+    if (rid === this.runId) return;
+    this.runId = rid;
+    if (this.frame) return;
+    this.frame = requestAnimationFrame(() => {
+      this.frame = 0;
+      this.listeners.forEach(fn => fn(this.runId));
+    });
+  },
+};
+// Side-effect: highlight + scroll the matching row in the table.
+hoverBus.listeners.add(rid => {
+  document.querySelectorAll('.anav2-table tbody tr').forEach(tr => {
+    const isHover = !!rid && tr.dataset.rid === rid;
+    tr.classList.toggle('hover', isHover);
+  });
+  if (rid) {
+    const tr = document.querySelector(
+      `.anav2-table tbody tr[data-rid="${CSS.escape(rid)}"]`);
+    if (tr) {
+      const rect = tr.getBoundingClientRect();
+      const tw = tr.parentElement.parentElement.parentElement; // tablewrap
+      if (tw && tw.scrollHeight > tw.clientHeight) {
+        const twRect = tw.getBoundingClientRect();
+        if (rect.top < twRect.top || rect.bottom > twRect.bottom) {
+          tr.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+      }
+    }
+  }
+  // Tell every panel to redraw with the new hover emphasis.
+  if (AnaState && AnaState.charts) {
+    AnaState.charts.forEach(ch => ch.draw && ch.draw());
+  }
+});
+
 // Tiny pub-sub for shared crosshair, scoped by x_key group.
 const cursorBus = {
   x: null, group: null, frame: 0,
@@ -2243,7 +2282,10 @@ class BucketChart {
     new ResizeObserver(() => this.draw()).observe(host);
     this.overlay.addEventListener('mousemove', e => this._onMove(e));
     this.overlay.addEventListener('mouseleave', () => {
-      cursorBus.clear(); this._dragStart = null; this._drawOverlay(null);
+      cursorBus.clear();
+      hoverBus.set(null);
+      this._dragStart = null;
+      this._drawOverlay(null);
     });
     this.overlay.addEventListener('mousedown', e => {
       const r = this.overlay.getBoundingClientRect();
@@ -2352,11 +2394,18 @@ class BucketChart {
     }
     c.strokeStyle = '#2a2f37'; c.beginPath();
     c.moveTo(pad.l, h - pad.b); c.lineTo(w - pad.r, h - pad.b); c.stroke();
-    // series
-    ser.forEach((s, idx) => {
+    // series — emphasize the line whose run is currently hovered. Subtle
+    // dim (0.55) on inactive lines so context isn't lost; thicken active.
+    // Draw active line LAST so it's on top.
+    const activeRun = (typeof hoverBus !== 'undefined') ? hoverBus.runId : null;
+    const hasMany = ser.length > 1;
+    const drawSeries = (s, idx) => {
       const ys = smoothed[idx];
+      const isActive = activeRun && s.run_id === activeRun;
+      c.globalAlpha = (!activeRun || !hasMany) ? 1.0
+        : (isActive ? 1.0 : 0.55);
       c.strokeStyle = s.color || PALETTE_BIG[idx % PALETTE_BIG.length];
-      c.lineWidth = s.dashed ? 1.4 : 1.8;
+      c.lineWidth = isActive ? 2.8 : (s.dashed ? 1.4 : 1.8);
       if (s.dashed) c.setLineDash([4, 3]); else c.setLineDash([]);
       let pen = false;
       c.beginPath();
@@ -2367,17 +2416,46 @@ class BucketChart {
         if (!pen) { c.moveTo(px, py); pen = true; } else c.lineTo(px, py);
       }
       c.stroke(); c.setLineDash([]);
-    });
+    };
+    // Draw inactive lines first, active line last (so it's on top)
+    const inactiveIdx = [], activeIdx = [];
+    ser.forEach((s, i) => (activeRun && s.run_id === activeRun ? activeIdx : inactiveIdx).push(i));
+    inactiveIdx.forEach(i => drawSeries(ser[i], i));
+    activeIdx.forEach(i => drawSeries(ser[i], i));
+    c.globalAlpha = 1.0;
     // Wipe overlay so we don't leave a stale crosshair
     this._drawOverlay(cursorBus.x);
   }
   _onMove(e) {
     const r = this.overlay.getBoundingClientRect();
     const mx = e.clientX - r.left;
+    const my = e.clientY - r.top;
     if (!this._lastDraw) return;
-    const { xlo, xhi, pad, w } = this._lastDraw;
+    const { xlo, xhi, pad, w, ser, smoothed, Ylo, Yhi, log, h } = this._lastDraw;
     const xv = xlo + (mx - pad.l) / (w - pad.l - pad.r) * (xhi - xlo);
     cursorBus.set(xv, this.xKey);
+    // Pick the series whose nearest point is closest to (mx, my) in
+    // screen pixels — that's the line the user is "hovering over".
+    const tf = v => log ? Math.log10(v) : v;
+    const Y = v => pad.t + (1 - (tf(v) - Ylo) / (Yhi - Ylo))
+      * (h - pad.t - pad.b);
+    const X = v => pad.l + (v - xlo) / (xhi - xlo) * (w - pad.l - pad.r);
+    let bestRun = null, bestDist = Infinity;
+    ser.forEach((s, idx) => {
+      const ys = smoothed[idx];
+      for (let i = 0; i < s.x.length; i++) {
+        if (s.x[i] == null || ys[i] == null || isNaN(ys[i])) continue;
+        const px = X(s.x[i]);
+        const py = Y(ys[i]);
+        const dx = px - mx, dy = py - my;
+        const d = dx*dx + dy*dy;
+        if (d < bestDist) { bestDist = d; bestRun = s.run_id; }
+      }
+    });
+    // Only treat as "hovered" within 60 px of a real point (so empty
+    // chart area doesn't emit spurious hovers).
+    if (bestDist <= 60*60) hoverBus.set(bestRun);
+    else hoverBus.set(null);
   }
   _drawOverlay(xv) {
     const o = this.overlay.getContext('2d');
@@ -2859,6 +2937,9 @@ function renderAnaTable(c) {
   runs.slice(0, 1000).forEach(r => {
     const isViz = AnaState.selected.has(r.id);
     const tr = el('tr', isViz ? 'sel' : '');
+    tr.dataset.rid = r.id;
+    tr.onmouseenter = () => hoverBus.set(r.id);
+    tr.onmouseleave = () => hoverBus.set(null);
     const isBase = r.id === AnaState.baseline;
     const m = r.headline_metric == null ? '—' : fmt(r.headline_metric, 4);
     // Each row gets a stable color so the eye dot matches the plot line.
@@ -3352,6 +3433,29 @@ async function _renderEmptyPanelLegend(legend, p, runIds, c) {
 
 function refreshAllPanels() {
   AnaState.panels.forEach(p => refreshPanel(p));
+}
+
+// Debounced refresh for SSE-driven updates. Multiple metrics_changed events
+// (e.g. 2 running runs alternating at 2Hz each = 4Hz total) used to fire
+// 4 full refreshAllPanels per second, which made the chart lines visibly
+// flicker as new data arrived and x ranges shifted. Coalesce all dirty
+// runs into a single refresh at most once every 1.2s.
+const _dirtyRuns = new Set();
+let _refreshTimer = null;
+function scheduleLiveRefresh(run_id) {
+  if (run_id) _dirtyRuns.add(run_id);
+  if (_refreshTimer) return;
+  _refreshTimer = setTimeout(() => {
+    _refreshTimer = null;
+    const runs = Array.from(_dirtyRuns);
+    _dirtyRuns.clear();
+    // Only invalidate cache for the runs that actually changed.
+    runs.forEach(r => invalidateBucketsForRun(r));
+    if (S.view !== 'analysis' || !AnaState || !AnaState.charts) return;
+    // Repaint only if at least one dirty run is currently visualized.
+    const anySelected = runs.some(r => AnaState.selected.has(r));
+    if (anySelected) refreshAllPanels();
+  }, 1200);
 }
 
 let _saveTimer = null;
