@@ -1,7 +1,7 @@
 [project]
 name = "autoresearcherui"
-version = "0.2.0"
-description = "A self-hosted web cockpit for autonomous AI research."
+version = "0.0.1"
+description = "Autoresearcher + wandb + datadog + overleaf + claude code. All local, all free, no API keys."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -13,6 +13,15 @@ dependencies = [
     "python-multipart>=0.0.9",
     "psutil>=5.9",
     "matplotlib>=3.7",
+    # httpx is needed by starlette.testclient (used by /api/* endpoints'
+    # built-in test client). Including it in the base deps means a fresh
+    # `pip install -e .` is enough to run tests/unit/ + tests/e2e_full.py.
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
 ]
 
 [project.scripts]
