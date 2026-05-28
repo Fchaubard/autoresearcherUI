@@ -117,36 +117,77 @@ arXiv + Semantic Scholar. Flip back to Research at any time.
 
 ## Screens
 
+![Onboarding / Settings](docs/screenshots/onboarding-settings.png)
+**Onboarding & Settings** — one form is the entire config surface. Email
+for alerts, optional GitHub creds for repo sync, optional Claude / Gemini /
+OpenAI tokens (Claude unlocks the agents; Gemini + OpenAI unlock the
+council), the project's research question, seed ideas, validation metric,
+baseline, the dangerously-skip-permissions toggle, and the agent's raw
+`program.md`. Everything is editable later from the Settings modal.
+
 ![Dashboard](docs/screenshots/dashboard.png)
-**Dashboard** — headline metric vs. baseline, live GPU strip, reorderable
-idea queue, and the agent rail (Research Agent terminal + Summary feed of
-kept runs with council verdicts).
+**Dashboard** — the live cockpit. Headline metric vs. baseline plotted
+across every experiment ever run, a per-GPU heat strip up top, the
+running-best vs. baseline summary cards, a sortable / filterable table of
+all runs, and the right-rail Research Agent terminal so you can see what
+Claude is actually thinking. The amber banner is fired when the research
+agent is intentionally paused (paper mode).
 
 ![Analysis](docs/screenshots/analysis.png)
-**Analysis** — W&B-style multi-run charts with shared-hover, eye-toggle
-column, filter modal, two-way row↔line hover, and expand-to-pane panels.
-Click any row → per-run drawer with all plots, logs, and council review.
+**Analysis** — W&B-style multi-run charts. Eye-toggle column to control
+which runs are drawn, filter modal (status / metric / config), shared-hover
+across every panel, two-way row↔line hover, smoothing slider, log toggle,
+and expand-any-panel-to-full-pane. Click a row to open the per-run drawer
+with every plot, the raw logs, and the council's review.
 
-![Write the paper](docs/screenshots/write-paper.png)
-**Write the paper** — Paper Plan, Today, Critical Path, Decision Queue,
-Related Work, Sections, Figures, Compile, Rebuttal. Live PDF preview;
-one-click recompile.
+![Lessons learned](docs/screenshots/lessons-learned.png)
+**Lessons learned** — auto-written by the Council after each strategic
+review. Every entry summarizes a batch of runs ("twelfth batch in a row
+repeats the same y=5 bf16 diffusion jobs…"), names what to do next, and
+links the run ids it's reasoning over. The Research Agent reads these on
+every tick — it's how the system avoids re-trying ideas that already
+failed.
 
-![Critical Path](docs/screenshots/critical-path.png)
-**Critical Path** — real Gantt over the planned ablation set with claim
-coverage and section-health pills.
+![Tmux Sessions](docs/screenshots/tmux-sessions.png)
+**Sessions** — live tmux output for any training run, the research agent,
+or the author agent. Useful for the times when a specific run is
+misbehaving and you want raw stdout/stderr instead of the aggregated
+metric view.
 
-![Decision Queue](docs/screenshots/decision-queue.png)
-**Decision Queue** — color-chipped strategic decisions (claim wording,
-baselines, citations). `j`/`k`/`Enter`/`R`/`D` shortcuts, bulk actions.
+![Write the paper](docs/screenshots/write-the-paper.png)
+**Write the paper (Paper Mode)** — flip the toggle and the Research Agent
+pauses, the Author Agent starts. Live LaTeX PDF preview on the left,
+sub-tabs across the bottom (Today, Claim Coverage, Paper Plan, Critical
+Path, Related Work, Versions, Rebuttal, Share), and the Author Agent
+terminal on the right showing it integrating finished ablations into the
+draft in real time.
+
+![Send the paper / share link](docs/screenshots/send-the-paper.png)
+**Read-only share link** at `/p/<token>` — mint it from the Share tab,
+send it to a co-author. They see the latest PDF, the claims (with
+evidence-strength chips), and the section-status pills — no login, no
+write access, no risk of someone editing your in-flight LaTeX.
 
 ![System Stats](docs/screenshots/system-stats.png)
-**System Stats** — disk / RAM / GPU at a glance, plus two **Purge** buttons:
-*Purge old run logs* and *Keep SOTA only*.
+**System Stats** — per-GPU utilization + VRAM + temperature, host CPU /
+RAM / disk-free, API latency. Two **Maintenance** buttons that have saved
+my pod twice this week: *Purge old run logs* (configurable age + bottom-%)
+and *Keep SOTA only* (aggressive — drops every checkpoint except the
+project-best run).
 
-![Daily email](docs/screenshots/email.png)
-**Daily email** — embedded progress chart, ranked runs, ETAs, what's next on
-deck, system-stats block (disk warning when low).
+![Research-mode email](docs/screenshots/email-researcher.png)
+**Research-mode email digest** — hourly by default (configurable
+`immediate` / `1h` / `4h` / `12h` / `24h` / `off`). Headline progress
+chart, what beat baseline, what's training now with ETAs, what's next on
+deck. The "node health" block at the bottom (not shown here) shows disk
+and RAM with a warning chip if anything is low.
+
+![Paper-mode email](docs/screenshots/email-author.png)
+**Paper-mode email digest** — daily. Different content: claims completed,
+days to deadline, decisions waiting on you, citations the Lit Agent
+pulled, ablations finished and integrated, author-agent commits. The
+forward-to-co-author button drops them straight onto the read-only share
+view.
 
 ## Emails
 
@@ -212,7 +253,7 @@ support services. `arui/` is the tracker SDK.
 
 ## License
 
-MIT. (Add a `LICENSE` file before tagging the release.)
+MIT — see [LICENSE](LICENSE).
 
 ## Credits
 
