@@ -22,7 +22,11 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
+    "pytest-asyncio>=0.23",   # tests/unit/test_auth.py marks middleware coroutines
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
 [project.scripts]
 autoresearcherui = "backend.main:run"
