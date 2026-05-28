@@ -265,6 +265,190 @@ def _apply_decision_side_effects(db, d: PaperDecision) -> None:
             cl.killed_reason = d.resolution_note or "user approved kill"
 
 
+# ── populate from proposal ────────────────────────────────────────────────
+
+
+def populate_claims_from_proposal(proposal_id: str = "") -> int:
+    """Convert the council's per-reviewer claims into PaperClaim rows.
+    Picks the proposal by id, or the most recent ready proposal.
+    Idempotent: a claim with the same normalized title is not re-added.
+    Returns the number of NEW claims inserted."""
+    db = SessionLocal()
+    try:
+        q = db.query(PaperProposal)
+        p = (q.filter(PaperProposal.id == proposal_id).first()
+             if proposal_id else
+             q.filter(PaperProposal.status == "ready")
+              .order_by(PaperProposal.created_at.desc()).first())
+        if not p:
+            return 0
+        existing = {(c.title or "").strip().lower()
+                    for c in db.query(PaperClaim).all()}
+        added = 0
+        # Walk reviewer_dict → claims[].  Merge across reviewers.
+        responses = p.council_responses or {}
+        merged: dict[str, dict] = {}
+        for rev, body in responses.items():
+            if not isinstance(body, dict):
+                continue
+            for cl in (body.get("claims") or []):
+                title = (cl.get("title") or "").strip()
+                if not title or len(title) < 8:
+                    continue
+                key = title.lower()
+                if key in merged:
+                    # widen evidence — strongest wins
+                    rank = {"anecdotal":1,"suggestive":2,"strong":3,"unclear":0}
+                    if rank.get(cl.get("evidence_strength"),0) > \
+                       rank.get(merged[key].get("evidence_strength"),0):
+                        merged[key]["evidence_strength"] = cl.get(
+                            "evidence_strength","unclear")
+                    merged[key]["council_provenance"] += f",{rev}"
+                else:
+                    merged[key] = {
+                        "title": title,
+                        "summary_md": cl.get("summary") or "",
+                        "evidence_strength":
+                            cl.get("evidence_strength") or "unclear",
+                        "novelty": (body.get("novelty") or "unclear"),
+                        "council_provenance": rev,
+                        "rationale_md": body.get("rationale_md") or "",
+                    }
+        for idx, (k, cl) in enumerate(merged.items()):
+            if k in existing:
+                continue
+            cid = "pc-" + os.urandom(4).hex()
+            db.add(PaperClaim(
+                id=cid, idx=idx, title=cl["title"],
+                summary_md=cl["summary_md"],
+                evidence_strength=cl["evidence_strength"],
+                novelty=cl["novelty"],
+                council_provenance=cl["council_provenance"],
+                rationale_md=cl["rationale_md"],
+                status="active"))
+            added += 1
+        if added:
+            db.commit()
+        return added
+    finally:
+        db.close()
+
+
+def _default_run_cmd_for_project(role: str, suffix: str, seed: int,
+                                  claim_title: str) -> str:
+    """Build a runnable shell command for a paper-ablation row. v1 uses
+    a heuristic based on the project's program.md / claim title. The
+    Author Agent can override by editing the run's config.cmd.
+    Returns "" if we can't sensibly default — the caller will then file
+    an add_ablation DECISION instead of a queued run, so the user can
+    fill in the cmd before approval."""
+    # Look at the workspace's program.md for a sample invocation.
+    folder = paper_folder()
+    if not folder:
+        return ""
+    prog = folder.parent / "program.md"
+    if not prog.exists():
+        return ""
+    try:
+        text = prog.read_text(errors="ignore").lower()
+    except OSError:
+        return ""
+    # Heuristic: if program.md / train.py exists, default to a sensible
+    # invocation. The Author Agent can override config['cmd'] per run.
+    train_py = folder.parent / "train.py"
+    if not train_py.exists() and "train.py" not in text:
+        return ""
+    title = claim_title.lower()
+    mode = ("diff" if any(w in title for w in
+                          ("diffusion", "ensemble", "mdm", "discrete diff"))
+            else "ar")
+    # Resolve the repo root so we can set PYTHONPATH the same way agent.py
+    # does for the research agent — without it the project's `import arui`
+    # in train.py raises ModuleNotFoundError and the run crashes immediately.
+    from .config import ROOT
+    repo_root = str(ROOT)
+    workspace = str(folder.parent)
+    return (f"cd {workspace} && "
+            f"PYTHONPATH={repo_root}:${{PYTHONPATH:-}} "
+            f"ARUI_INGEST_URL=http://127.0.0.1:8000/api/track "
+            f"ARUI_PROJECT={folder.parent.name} "
+            f"python train.py --mode {mode} "
+            f"--name pr_{suffix}_s{seed} --seed {seed}")
+
+
+def queue_ablations_for_claims(default_seeds: int = 3) -> int:
+    """For every active claim that has no paper_runs yet, queue a default
+    set of ablation runs: 1 headline + 2 ablations × N seeds, each with
+    a real shell command derived from program.md. The Paper Runner picks
+    them off the queue onto idle GPUs one at a time.
+    Idempotent. Returns the number of NEW Run rows inserted."""
+    from .models import Run
+    db = SessionLocal()
+    try:
+        added = 0
+        for c in db.query(PaperClaim).filter(
+                PaperClaim.status == "active").all():
+            existing = db.query(Run).filter(
+                Run.context == "paper",
+                Run.paper_claim_id == c.id).count()
+            if existing:
+                continue
+            for role, name_suffix in [("headline", "headline"),
+                                       ("ablation", "ablation_a"),
+                                       ("ablation", "ablation_b")]:
+                for s in range(1, default_seeds + 1):
+                    rid = f"pr-{c.id[-6:]}-{name_suffix}-s{s}"
+                    if db.query(Run).filter(Run.id == rid).first():
+                        continue
+                    cmd = _default_run_cmd_for_project(
+                        role, name_suffix, s, c.title)
+                    db.add(Run(
+                        id=rid,
+                        run_name=f"{c.title[:30]} · {name_suffix} · s{s}",
+                        status="queued",
+                        context="paper",
+                        paper_claim_id=c.id,
+                        paper_role=role,
+                        n_seeds=1,
+                        config={"seed": s, "claim": c.title[:80],
+                                "role": role, "ablation": name_suffix,
+                                "cmd": cmd},
+                        gpus_required=1,
+                        est_time_sec=int(c.summary_md and 7200 or 3600),
+                    ))
+                    added += 1
+        if added:
+            db.commit()
+        try:
+            write_projections()
+        except Exception:
+            pass
+        return added
+    finally:
+        db.close()
+
+
+def kickoff_lit_discover() -> int:
+    """One-shot call into the Lit Agent if it hasn't run yet and claims exist.
+    Returns the number of cite_paper decisions filed."""
+    try:
+        from . import lit_agent
+        # Skip if we already have some citations
+        db = SessionLocal()
+        try:
+            n_existing = db.query(PaperCitation).count()
+            n_claims = db.query(PaperClaim).filter(
+                PaperClaim.status == "active").count()
+        finally:
+            db.close()
+        if n_existing >= 5 or n_claims == 0:
+            return 0
+        return lit_agent.auto_discover_for_claims(max_per_claim=4)
+    except Exception as e:                       # noqa: BLE001
+        print(f"[paper] lit auto-discover failed: {e}", flush=True)
+        return 0
+
+
 # ── markdown projections ─────────────────────────────────────────────────
 
 

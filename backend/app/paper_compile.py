@@ -24,7 +24,15 @@ _LAST_BUILD: dict = {
 
 
 def status() -> dict:
-    return dict(_LAST_BUILD)
+    s = dict(_LAST_BUILD)
+    # Always reflect ground-truth PDF presence, even if no build has happened
+    # this process lifetime (e.g. backend just restarted, PDF on disk from
+    # last run). This lets the UI render the iframe immediately.
+    p = _pdf_path()
+    s["pdf_exists"] = bool(p and p.exists() and p.stat().st_size > 0)
+    if s["pdf_exists"] and not s.get("ok"):
+        s["has_warnings"] = True
+    return s
 
 
 def _have_latexmk() -> bool:
@@ -122,14 +130,24 @@ def build(force: bool = False) -> dict:
                    "Install TeX Live or use the Docker image.")
             ok = False
         elapsed = (dt.datetime.now(dt.timezone.utc) - t0).total_seconds()
+        # latexmk returns exit code 1 on undefined refs / cite-key misses
+        # even when it produces a valid PDF. Treat the build as usable
+        # whenever a PDF actually exists; surface compile warnings in the
+        # log for the user to triage.
+        pdf_path = folder / "build" / "main.pdf"
+        pdf_exists = pdf_path.exists() and pdf_path.stat().st_size > 0
         _LAST_BUILD = {
             "at": dt.datetime.now(dt.timezone.utc).isoformat(),
-            "ok": bool(ok), "stale": False,
+            "ok": bool(ok),
+            "pdf_exists": pdf_exists,
+            "has_warnings": pdf_exists and not ok,
+            "stale": False,
             "log": log[-30000:],
             "elapsed_sec": round(elapsed, 1),
         }
         bus.publish("paper", "build_finished",
-                    {"ok": ok, "elapsed_sec": _LAST_BUILD["elapsed_sec"]})
+                    {"ok": ok, "pdf_exists": pdf_exists,
+                     "elapsed_sec": _LAST_BUILD["elapsed_sec"]})
         return dict(_LAST_BUILD)
 
 

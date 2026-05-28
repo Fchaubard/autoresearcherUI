@@ -343,21 +343,91 @@ const VIEWS = [
 ];
 const VIEW_TITLE = Object.fromEntries(VIEWS.map(v => [v[0], v[1]]));
 
+/* ── URL routing ────────────────────────────────────────────────────────── */
+// Map internal view IDs ↔ URL paths. The internal id "latex" is kept for
+// back-compat with code paths; the URL prefers /write-paper because it's
+// what the user sees in the burger menu.
+const VIEW_TO_PATH = {
+  dashboard: '/dashboard',
+  analysis: '/analysis',
+  lessons: '/lessons',
+  latex: '/write-paper',
+  system: '/system-stats',          // "System stats" — NOT "Settings"
+  authkeys: '/authkeys',
+};
+const PATH_TO_VIEW = (() => {
+  const m = {};
+  for (const [v, p] of Object.entries(VIEW_TO_PATH)) m[p] = v;
+  // aliases
+  m['/'] = 'dashboard';
+  m['/paper'] = 'latex';
+  m['/writepaper'] = 'latex';
+  m['/write_paper'] = 'latex';
+  m['/system'] = 'system';
+  m['/systemstats'] = 'system';
+  m['/authorized-keys'] = 'authkeys';
+  m['/authorized_keys'] = 'authkeys';
+  // NOTE: /settings is intentionally NOT mapped — Settings is a modal
+  // (openSettings()) that overlays on any view, not its own page.
+  return m;
+})();
+function viewFromPath(pathname) {
+  const p = (pathname || '/').replace(/\/+$/, '') || '/';
+  return PATH_TO_VIEW[p] || null;
+}
+function pushView(viewId) {
+  const path = VIEW_TO_PATH[viewId] || '/';
+  if (window.location.pathname !== path) {
+    try { history.pushState({ view: viewId }, '', path); } catch (e) {}
+  }
+}
+// Public helper used everywhere a view changes — replaces S.view = X; render();
+function setView(viewId) {
+  if (S.view === viewId) return;
+  S.view = viewId;
+  pushView(viewId);
+  render();
+}
+window.addEventListener('popstate', () => {
+  const v = viewFromPath(window.location.pathname);
+  if (v && S.view !== v) { S.view = v; render(); }
+});
+
 function render() {
   clearViewTimers(); stopTermPoll();
   const app = document.getElementById('app');
   app.innerHTML = '';
-  if (S.view !== 'dashboard') {
+  // Write-the-paper in paper mode also gets the right rail so the user
+  // can chat with the Author Agent while looking at the draft. Other
+  // views (Analysis, Settings, Lessons, …) stay solo.
+  const isPaperView = (S.view === 'latex'
+    && S.mode && S.mode.mode === 'paper');
+  if (S.view !== 'dashboard' && !isPaperView) {
     app.className = 'app solo';
     app.append(header(), viewPane());
     return;
   }
   app.className = 'app';
-  app.append(header(), left(), rail(), el('button', 'fab', '✉'));
+  if (isPaperView) {
+    // Default the rail to the Author Agent on first visit to this view.
+    if (!S._railTabSetForPaper) {
+      S.railTab = 'author';
+      S._railTabSetForPaper = true;
+    }
+    // viewPane() renders Write-the-paper into the LEFT column. We use
+    // .paper-left (NOT .left) so the paper-wrap can own its own flex
+    // layout — .left has a fixed 3-row grid that clipped the sub-tabs.
+    const main = viewPane();
+    main.classList.add('paper-left');
+    app.append(header(), main, rail(), el('button', 'fab', '✉'));
+  } else {
+    app.append(header(), left(), rail(), el('button', 'fab', '✉'));
+  }
   applyRailW();
   document.querySelector('.fab').onclick = () =>
     document.querySelector('.rail').classList.toggle('show');
-  paintHero(); paintStats(); paintTable(); paintRail();
+  if (!isPaperView) { paintHero(); paintStats(); paintTable(); }
+  paintRail();
   pollGpus();
 }
 
@@ -380,33 +450,16 @@ function header() {
   const running = (p.status === 'running' || p.status === 'bootstrapping');
   h.append(el('div', 'pill' + (running ? '' : ' done'),
     `<span class="dot ${running ? 'live' : ''}"></span>${esc(p.status || '—')}`));
-  // Mode toggle pill — Research ↔ Paper. Always visible in the header.
+  // (Mode toggle moved to the Write-the-paper page itself — not in the global
+  // header anymore. The paper meta pill stays in the header for at-a-glance
+  // status while you're on any view.)
   const mode = (S.mode && S.mode.mode) || 'research';
   const meta = (S.mode && S.mode.meta) || null;
-  const modeWrap = el('div', 'mode-toggle');
-  modeWrap.innerHTML =
-    `<button class="mode-btn ${mode==='research'?'on':''}" data-m="research">` +
-      `Research</button>` +
-    `<button class="mode-btn ${mode==='paper'?'on':''}" data-m="paper">` +
-      `Paper</button>`;
-  h.append(modeWrap);
-  modeWrap.querySelectorAll('.mode-btn').forEach(b => {
-    b.onclick = () => {
-      if (b.dataset.m === mode) return;        // already there
-      if (b.dataset.m === 'paper') openPaperProposal();
-      else openRevertModal();
-    };
-  });
-  // Paper meta pill (only in paper mode): venue · days till · GPU-h burn
   if (mode === 'paper' && meta) {
     const days = (S.mode && S.mode.days_till_deadline);
-    const bud = (S.mode && S.mode.budget) || {};
-    const gh = bud.gpu_hours_used || 0;
-    const ghb = bud.gpu_hours_budget || 0;
     h.append(el('div', 'paper-pill',
       `📝 ${esc(meta.venue || 'Paper')}` +
-      (days != null ? ` · ${esc(days.toFixed ? days.toFixed(1) : days)}d` : '') +
-      (ghb ? ` · ${gh.toFixed(0)}/${ghb.toFixed(0)} GPU-h` : '')));
+      (days != null ? ` · ${esc(days.toFixed ? days.toFixed(1) : days)}d` : '')));
   }
   h.append(el('div', 'spacer'));
   const strip = el('div', 'gpu-strip'); strip.id = 'gpus';
@@ -610,10 +663,9 @@ async function openPaperOnboard(proposalId) {
     `<div class="onb-field"><label class="onb-lbl">Author affiliation</label>` +
     `<input class="onb-in" id="po-author-aff" placeholder="Stanford"/></div>` +
     `<div class="onb-field"><label class="onb-check"><input type="checkbox" id="po-anon" checked/> Anonymize for review</label></div>` +
-    `<div class="onb-field"><label class="onb-lbl">GPU budget (hours)</label>` +
-    `<input class="onb-in" type="number" id="po-gpu" value="800"/></div>` +
-    `<div class="onb-field"><label class="onb-lbl">Daily LLM budget (USD, Author Agent)</label>` +
-    `<input class="onb-in" type="number" id="po-llm" value="20"/></div>` +
+    `<div class="onb-note" style="color:var(--muted);font-size:11px;margin:6px 0 10px">` +
+      `The ablation runs needed are the ablation runs needed — we run until the paper is publishable. ` +
+      `No GPU-hour cap.</div>` +
     `<div class="modal-actions">` +
     `<button class="btn" id="po-cancel">Cancel</button>` +
     `<button class="btn pri" id="po-go">Save & start →</button></div>`;
@@ -629,16 +681,13 @@ async function openPaperOnboard(proposalId) {
       anonymize: m.querySelector('#po-anon').checked,
       authors: [{ name: m.querySelector('#po-author-name').value,
                   affiliation: m.querySelector('#po-author-aff').value }],
-      gpu_budget_hours: parseFloat(m.querySelector('#po-gpu').value || '800'),
-      llm_budget_daily_usd: parseFloat(m.querySelector('#po-llm').value || '20'),
     };
     const r = await post('/paper/enter', { meta, proposal_id: proposalId });
     if (r.status === 'entered_paper_mode' || r.status === 'already_in_paper_mode') {
       sc.remove();
       // Reload to pick up new mode + paper tab
       try { S.mode = await api('/mode'); } catch (e) {}
-      S.view = 'latex';
-      render();
+      setView('latex');
     } else {
       await aruiAlert('Could not enter paper mode: ' + (r.detail || ''));
     }
@@ -673,8 +722,7 @@ async function openRevertModal() {
     if (r.status === 'reverted') {
       sc.remove();
       try { S.mode = await api('/mode'); } catch (e) {}
-      S.view = 'dashboard';
-      render();
+      setView('dashboard');
     } else {
       await aruiAlert('Could not revert: ' + (r.detail || ''));
     }
@@ -696,7 +744,7 @@ function toggleMenu() {
   VIEWS.forEach(([k, label, ic]) => {
     const it = el('button', 'menu-item' + (S.view === k ? ' on' : ''),
       `<span class="menu-ic">${ic}</span><span>${label}</span>`);
-    it.onclick = () => { closeMenu(); if (S.view !== k) { S.view = k; render(); } };
+    it.onclick = () => { closeMenu(); setView(k); };
     m.append(it);
   });
   m.append(el('div', 'menu-spacer'));
@@ -811,8 +859,18 @@ function rail() {
   mountRailResize(grip);
   r.append(grip);
   const tabs = el('div', 'rail-tabs');
-  [['summary', 'Summary'], ['live', 'Research agent'],
-   ['sessions', 'Sessions']].forEach(([k, lbl]) => {
+  // Rail tab set is driven by the VIEW, not the mode:
+  //   Dashboard view      → Research agent only (no Author agent)
+  //   Write-the-paper view → Author agent only (no Research agent)
+  // Other views (Analysis, Lessons, …) don't get a rail at all.
+  const isPaperView = (S.view === 'latex');
+  const TABS = isPaperView
+    ? [['summary','Summary'], ['author','Author agent'], ['sessions','Sessions']]
+    : [['summary','Summary'], ['live','Research agent'], ['sessions','Sessions']];
+  // Keep S.railTab valid for the current view (so a stale 'live' on the
+  // paper view, or stale 'author' on the dashboard, falls back to summary).
+  if (!TABS.some(([k]) => k === S.railTab)) S.railTab = TABS[0][0];
+  TABS.forEach(([k, lbl]) => {
     const b = el('button', 'rail-tab' + (S.railTab === k ? ' on' : ''), lbl);
     b.dataset.tab = k;
     b.onclick = () => { S.railTab = k; paintRail(); };
@@ -906,6 +964,11 @@ function ideaDesc(ideaRowId) {
 }
 
 function paintTable() {
+  // Guard: when we're not on the dashboard view (e.g. user is on Write-the-paper,
+  // Analysis, Settings, etc.), #tscroll doesn't exist and the old code would
+  // throw "Cannot set properties of null (setting 'innerHTML')". SSE events fire
+  // regardless of active view so this guard is required.
+  if (!document.getElementById('tscroll')) return;
   let rows = tableRows();
   if (S.filter !== 'all') {
     const f = S.filter;
@@ -1077,7 +1140,9 @@ function paintRail() {
     b.classList.toggle('on', b.dataset.tab === S.railTab));
   const c = document.getElementById('railcontent');
   if (!c) return;
-  if (S.railTab === 'live') {
+  if (S.railTab === 'author') {
+    if (!document.getElementById('authorterm')) { stopTermPoll(); renderAuthorLive(c); }
+  } else if (S.railTab === 'live') {
     if (!document.getElementById('term')) { stopTermPoll(); renderLive(c); }
   } else if (S.railTab === 'sessions') {
     if (!c.querySelector('.sess-wrap')) { stopTermPoll(); renderSessions(c); }
@@ -1093,8 +1158,72 @@ function paintRail() {
   }
 }
 
+/* ── Author Agent rail (paper mode) ─────────────────────────────────────── */
+function renderAuthorLive(c) {
+  c.innerHTML =
+    '<div class="author-rail-hd">' +
+      '<span>📝 Author Agent</span>' +
+      '<span class="author-rail-status" id="author-status">checking…</span>' +
+      '<button class="btn xs" id="author-restart" title="Kill the author tmux and spawn a fresh one">↻ restart</button>' +
+    '</div>' +
+    '<div class="rail-agent-desc">' +
+      '<b>What it does:</b> autonomous Claude Code loop that owns the paper ' +
+      'end-to-end — plans cross-dataset ablations, queues runs (via ' +
+      '<code>/paper/runs/queue</code>), kills divergers, integrates each ' +
+      'finished run into <code>main.tex</code> automatically, maintains ' +
+      '<code>claims.md</code> + <code>refs.bib</code>, recompiles the PDF. ' +
+      'Files <i>strategic</i> decisions only — citations, kill_claim, ' +
+      'approve_text, approve_figure. Ablation runs do NOT need your ' +
+      'approval. The <b>PI agent</b> watches it every hour and nudges if it ' +
+      'drifts (idle GPUs, unintegrated results, stalled sections). Type ' +
+      'below to steer it.' +
+    '</div>' +
+    '<pre class="term author-term" id="authorterm">connecting to the author session…</pre>';
+  const term = document.getElementById('authorterm');
+  const stat = document.getElementById('author-status');
+  document.getElementById('author-restart').onclick = async () => {
+    const ok = await aruiConfirm('Restart the Author Agent tmux? Anything mid-response will be lost.',
+      { title: 'Restart Author Agent' });
+    if (!ok) return;
+    stat.textContent = 'restarting…';
+    await post('/paper/author/restart', {});
+    stat.textContent = 'restarted';
+  };
+  const poll = async () => {
+    try {
+      const d = await api('/paper/author/terminal');
+      const atBottom = term.scrollHeight - term.scrollTop - term.clientHeight < 80;
+      term.textContent = (d.text || '').replace(/[ \t\r\n]+$/, '') || '(no output yet)';
+      stat.textContent = d.running ? '● running' : '○ not running';
+      stat.style.color = d.running ? 'var(--ok)' : 'var(--muted)';
+      if (atBottom) term.scrollTop = term.scrollHeight;
+    } catch (e) { /* keep last frame */ }
+  };
+  poll();
+  _termTimer = setInterval(poll, 2500);
+}
+
 function renderLive(c) {
-  c.innerHTML = '<pre class="term" id="term">connecting to the agent ' +
+  const isPaperMode = (S.mode && S.mode.mode === 'paper');
+  const pausedBanner = isPaperMode ? (
+    '<div class="rail-paused-banner">' +
+      '⏸ <b>Research agent is paused</b> because you\'re in paper mode. ' +
+      'Showing the last tmux scrollback below for reference. ' +
+      'Flip to Research mode (toggle on Write-the-paper page) to resume.' +
+    '</div>'
+  ) : '';
+  c.innerHTML =
+    '<div class="rail-agent-desc">' +
+      '<b>What it does:</b> autonomous Claude Code loop that reads ' +
+      '<code>ideas.md</code>, decides what to try next, launches training ' +
+      'runs, kills divergers, and writes <code>lessons.md</code>. The ' +
+      '<b>PI agent</b> watches it every hour and types short nudges into ' +
+      'this tmux when GPUs go idle, runs diverge, or it ignores the ' +
+      'council. Type below to steer it. ' +
+      '<b>Job: discovery</b>; pauses automatically when you flip to paper mode.' +
+    '</div>' +
+    pausedBanner +
+    '<pre class="term" id="term">connecting to the agent ' +
     'session…</pre>';
   const term = document.getElementById('term');
   const poll = async () => {
@@ -1112,7 +1241,15 @@ function renderLive(c) {
 }
 
 function renderSessions(c) {
-  c.innerHTML = '<div class="sess-wrap">' +
+  c.innerHTML =
+    '<div class="rail-agent-desc">' +
+      '<b>What this is:</b> live tmux output for any individual training run ' +
+      '(research <code>diff_*</code> or paper <code>pr-*</code>). Pick a ' +
+      'session above to tail its log — useful when a specific run is ' +
+      'misbehaving and you want raw stdout/stderr instead of the aggregated ' +
+      'metric view.' +
+    '</div>' +
+    '<div class="sess-wrap">' +
     '<div class="sess-tabs" id="sesstabs"></div>' +
     '<pre class="term" id="sessterm">loading run sessions…</pre></div>';
   const tabsEl = c.querySelector('#sesstabs');
@@ -1190,6 +1327,52 @@ function updateBrief() {
   const kept = runs.filter(r => r._frontier);
   const fail = S.runs.filter(r => r.status === 'crashed').length;
   const top = kept[kept.length - 1];
+  // ── Paper-mode brief takes precedence when we're in paper mode ──────
+  const inPaper = (S.mode && S.mode.mode === 'paper');
+  if (inPaper) {
+    const meta = (S.mode.meta) || {};
+    const days = S.mode.days_till_deadline;
+    const paperRuns = S.runs.filter(r => r.context === 'paper');
+    const pQ = paperRuns.filter(r => r.status === 'queued').length;
+    const pR = paperRuns.filter(r => r.status === 'running').length;
+    const pD = paperRuns.filter(r =>
+      ['kept','success','done'].includes(r.status)).length;
+    const pX = paperRuns.filter(r =>
+      ['crashed','failed','error'].includes(r.status)).length;
+    let alert = '';
+    if (pX && !pD && (pX >= paperRuns.length * 0.6)) {
+      alert = `<div class="brief-alert">⚠ <b>${pX} of ${paperRuns.length} ablation runs crashed.</b> ` +
+        `<a href="#" id="brief-rescaffold">Patch their commands & re-queue →</a></div>`;
+    }
+    let breakdown = '';
+    if (paperRuns.length) {
+      breakdown = `<p><span class="big">${pD}</span> done, ` +
+        `<span class="big">${pR}</span> running, ` +
+        `<span class="big">${pQ}</span> queued` +
+        (pX ? `, <span class="big" style="color:var(--bad)">${pX}</span> crashed` : '') +
+        ` <span style="color:var(--muted);font-size:11px">across ${paperRuns.length} paper ablations</span></p>`;
+    } else {
+      breakdown = `<p style="color:var(--muted);font-size:12px">No paper ablations queued yet. ` +
+        `Open <b>Paper Plan</b> and click <b>Re-scaffold</b> to populate.</p>`;
+    }
+    brief.innerHTML =
+      `<h3><span class="dot live" style="color:#A78BFA"></span>📝 Paper mode — ${esc(meta.venue || 'Paper')}</h3>` +
+      `<p style="color:var(--text-2);font-size:12px;margin:2px 0 8px">` +
+        `Switched from research to paper mode` +
+        (days != null ? ` · <b>${days.toFixed ? days.toFixed(1) : days}d</b> till deadline` : '') +
+        `.</p>` +
+      breakdown +
+      alert;
+    const rs = document.getElementById('brief-rescaffold');
+    if (rs) rs.onclick = async (e) => {
+      e.preventDefault();
+      const r = await post('/paper/scaffold', {});
+      aruiAlert(`Patched & re-queued ${r.requeued_crashed || 0} crashed runs ` +
+                `(${r.backfilled_cmd || 0} cmds backfilled).`,
+                { title: 'Re-queued' });
+    };
+    return;
+  }
   if (!runs.length) {
     brief.innerHTML = `<h3><span class="dot" style="color:#6366F1"></span>` +
       `Research brief</h3>` +
@@ -1376,6 +1559,14 @@ function ideaCard(run) {
 
 function renderSummary(c) {
   c.innerHTML = '';
+  const inPaperMode = (S.mode && S.mode.mode === 'paper');
+  const otherTab = inPaperMode ? '<b>Author agent</b>' : '<b>Research agent</b>';
+  const desc = el('div', 'rail-agent-desc',
+    '<b>What this is:</b> at-a-glance project status — current mode, ' +
+    'frontier results, recent agent activity. Not an agent — no chat here. ' +
+    `Use the ${otherTab} tab to steer the live agent, or the ` +
+    '<b>Sessions</b> tab to inspect any single run\'s logs.');
+  c.append(desc);
   const brief = el('div', 'brief'); brief.id = 'brief';
   c.append(brief);
   updateBrief();
@@ -1722,6 +1913,16 @@ function closeDrawer() {
 async function sendChat(text) {
   text = (text || '').trim(); if (!text) return;
   const inp = document.getElementById('chatin'); if (inp) inp.value = '';
+  // Route to the Author Agent when the rail is on its tab; otherwise to
+  // the research agent (existing behavior).
+  if (S.railTab === 'author') {
+    const r = await post('/paper/author/send', { text });
+    if (r && r.ok === false) {
+      aruiAlert('Could not deliver to Author Agent: ' + (r.detail || 'unknown'),
+        { title: 'Author Agent unreachable' });
+    }
+    return;
+  }
   // Show the user's message in the conversation panel IMMEDIATELY — don't
   // wait for the SSE round-trip — so the user gets confirmation it went.
   const userMsg = { id: 'tmp-' + Date.now(), role: 'researcher',
@@ -1931,6 +2132,18 @@ const OB_FIELDS = [
     + 'first — see authorized_keys panel).',
     'area', 'root@gpu-node-2:22\nuser@10.0.0.7'],
   ['sec', 'PI agent — periodic oversight'],
+  ['help', 'pi_help',
+    'The PI ("Principal Investigator") is a small LLM that wakes up on a ' +
+    'schedule, reads the project state, and types short nudges into the ' +
+    'live agent\'s tmux when something looks off. In RESEARCH mode it ' +
+    'nudges the research agent ("GPU 3 idle — launch the top idea", "kill ' +
+    'pr-x42, it\'s diverging", "you\'re ignoring the council\'s rerank"). ' +
+    'In PAPER mode it switches to nudging the AUTHOR agent ("5 runs ' +
+    'finished but no commits — integrate them", "claim 2 has 0 queued ' +
+    'runs", "you\'ve only used 1 dataset — top-tier papers need ≥3", ' +
+    '"build is stale — recompile"). It does NOT run experiments, edit ' +
+    'LaTeX, or kill runs itself; it just types messages. Be sparing on ' +
+    'cadence — each nudge interrupts the agent.'],
   ['pi_agent_enabled', 'Run the PI agent on a schedule', 'check', ''],
   ['pi_agent_model', 'PI agent model', 'select',
     'gemini-2.5-pro|gemini-2.5-flash|gpt-5|gpt-5-mini|claude-opus-4-6|'
@@ -1958,6 +2171,13 @@ function buildSettingsForm({ initial = {}, hideFields = [] } = {}) {
     if (f[0] === 'sec') { form.append(el('div', 'onb-sec', f[1])); return; }
     const [k, label, type, extra] = f;
     if (hide.has(k)) return;
+    if (type === 'help') {
+      // Static descriptive paragraph (no input). Useful for explaining
+      // what a section / agent does in the onboarding + settings form.
+      const help = el('div', 'onb-help', extra);
+      form.append(help);
+      return;
+    }
     const row = el('div', 'onb-field');
     if (type === 'check') {
       const cb = el('input'); cb.type = 'checkbox'; cb.checked = true;
@@ -2313,7 +2533,7 @@ async function renderLessons(c) {
         r.id === target || r.run_name === target);
       if (run) {
         // we need to navigate back to dashboard for the drawer to render over it
-        S.view = 'dashboard'; render();
+        setView('dashboard');
         setTimeout(() => openDrawer(run.id), 80);
       }
     };
@@ -2339,21 +2559,38 @@ async function renderLatex(c) {
     c.innerHTML =
       '<div class="latex-soon"><div class="latex-ic">📝</div>' +
       '<h2>Write the paper</h2>' +
-      '<p>You\'re currently in <b>Research</b> mode. When the council says ' +
-      'your work has enough evidence to write up, flip the toggle in the ' +
-      'header to <b>Paper</b>. Then this tab becomes a paper-writing ' +
-      'mission-control: claims, ablations, figures, reviewer simulation, ' +
-      'and the final submission bundle.</p>' +
-      '<button class="btn pri" id="paper-cta">Start the Paper Proposal →</button>' +
+      '<p>You\'re currently in <b>Research</b> mode — the autonomous research ' +
+      'agent is exploring ideas. When the council says your work has enough ' +
+      'evidence to write up, flip to <b>Paper</b> mode. This page then ' +
+      'becomes a paper-writing mission-control: claims, ablations, figures, ' +
+      'a Gantt of remaining runs, reviewer simulation, and the submission ' +
+      'bundle.</p>' +
+      '<div class="mode-flip-row">' +
+        '<div class="mode-toggle big">' +
+          '<button class="mode-btn on" data-m="research">Research</button>' +
+          '<button class="mode-btn" data-m="paper">Paper</button>' +
+        '</div>' +
+        '<button class="btn pri" id="paper-cta">Start the Paper Proposal →</button>' +
+      '</div>' +
       '</div>';
     const cta = c.querySelector('#paper-cta');
     if (cta) cta.onclick = openPaperProposal;
+    c.querySelectorAll('.mode-btn').forEach(b => {
+      b.onclick = () => {
+        if (b.dataset.m === 'research') return;     // already here
+        openPaperProposal();
+      };
+    });
     return;
   }
   c.innerHTML =
     '<div class="paper-wrap">' +
       '<div class="paper-hero">' +
         '<div class="paper-hero-bar">' +
+          '<div class="mode-toggle small">' +
+            '<button class="mode-btn" data-m="research" title="Revert to research mode">Research</button>' +
+            '<button class="mode-btn on" data-m="paper">Paper</button>' +
+          '</div>' +
           '<div class="paper-viewer-toggle">' +
             '<button class="pv-btn on" data-pv="pdf">PDF</button>' +
             '<button class="pv-btn" data-pv="tex">LaTeX</button>' +
@@ -2363,7 +2600,8 @@ async function renderLatex(c) {
           '<a class="btn paper-download" href="/api/paper/pdf" download="paper.pdf">⤓ PDF</a>' +
         '</div>' +
         '<div class="paper-viewer" id="paper-viewer">' +
-          '<iframe id="paper-pdf" src="/api/paper/pdf" frameborder="0"></iframe>' +
+          '<div class="paper-empty"><div class="paper-empty-ic">📄</div>' +
+            '<div class="paper-empty-title">loading…</div></div>' +
         '</div>' +
       '</div>' +
       '<div class="paper-tabs">' +
@@ -2373,6 +2611,8 @@ async function renderLatex(c) {
         '<button class="paper-tab" data-t="path">Critical Path</button>' +
         '<button class="paper-tab" data-t="refs">Related Work</button>' +
         '<button class="paper-tab" data-t="versions">Versions</button>' +
+        '<button class="paper-tab" data-t="rebuttal" id="paper-tab-rebuttal" style="display:none">Rebuttal</button>' +
+        '<button class="paper-tab" data-t="share" id="paper-tab-share">Share</button>' +
       '</div>' +
       '<div class="paper-tab-body" id="paper-tab-body">loading…</div>' +
     '</div>';
@@ -2382,6 +2622,13 @@ async function renderLatex(c) {
       c.querySelectorAll('.pv-btn').forEach(x => x.classList.toggle(
         'on', x === b));
       paintPaperViewer(c, b.dataset.pv);
+    };
+  });
+  // Wire the in-page mode toggle (flip back to research).
+  c.querySelectorAll('.mode-toggle.small .mode-btn').forEach(b => {
+    b.onclick = () => {
+      if (b.dataset.m === 'paper') return;          // already here
+      openRevertModal();
     };
   });
   c.querySelector('#paper-rebuild').onclick = async () => {
@@ -2407,6 +2654,7 @@ async function renderLatex(c) {
   // Load + paint
   await loadPaperState();
   paintBuildStatus(c);
+  paintPaperViewer(c, 'pdf');   // resolves to iframe OR empty state
   paintPaperTab(c);
 }
 
@@ -2423,8 +2671,39 @@ async function paintBuildStatus(c) {
   if (!el_) return;
   try {
     const b = await api('/paper/build_log');
-    if (!b || !b.at) { el_.textContent = 'never built'; return; }
-    if (!b.ok) {
+    if (!b) { el_.textContent = '—'; return; }
+    // A PDF on disk after a backend restart has empty `at`. Don't lie to
+    // the user by saying "never built" — the PDF the iframe is showing
+    // came from somewhere. Just label it.
+    if (!b.at) {
+      if (b.pdf_exists) {
+        el_.innerHTML = `<span style="color:var(--muted)">PDF on disk (no fresh build this session)</span>`;
+      } else {
+        el_.textContent = 'never built';
+      }
+      return;
+    }
+    const log = (b.log || '').toLowerCase();
+    // "no main.tex yet" is the not-yet-scaffolded state, NOT a build failure.
+    // Without this carve-out the header lies (says "build failed") while the
+    // empty-state body says "Author Agent is scaffolding" — confusing.
+    const scaffolding = !b.ok && (
+      log.indexOf('no main.tex') >= 0 ||
+      log.indexOf("hasn't scaffolded") >= 0);
+    // Missing TeX Live is an environment problem, not a LaTeX compile error.
+    const noTex = !b.ok && (
+      log.indexOf('neither latexmk nor pdflatex') >= 0 ||
+      log.indexOf('install tex live') >= 0);
+    if (scaffolding) {
+      el_.innerHTML = `<span style="color:var(--muted)">○ scaffolding…</span>`;
+    } else if (noTex) {
+      el_.innerHTML = `<span style="color:var(--warn)">⚠ TeX Live not installed</span>`;
+    } else if (b.has_warnings && b.pdf_exists) {
+      // PDF compiled but with unresolved refs/cites — still useful, just
+      // warn the user instead of slapping "build failed" on the header.
+      el_.innerHTML = `<span style="color:var(--warn)">⚠ compiled with warnings</span> ` +
+        `<span style="color:var(--muted);font-size:10px">${b.elapsed_sec}s</span>`;
+    } else if (!b.ok) {
       el_.innerHTML = `<span style="color:var(--bad)">⚠ build failed</span>`;
     } else if (b.stale) {
       el_.innerHTML = `<span style="color:var(--warn)">stale</span>`;
@@ -2439,11 +2718,53 @@ async function paintPaperViewer(c, kind) {
   const v = c.querySelector('#paper-viewer');
   if (!v) return;
   if (kind === 'pdf') {
-    v.innerHTML = `<iframe id="paper-pdf" src="/api/paper/pdf?ts=${Date.now()}" frameborder="0"></iframe>`;
-    // trigger rebuild if stale
-    try { await post('/paper/recompile', {}); paintBuildStatus(c);
-          v.querySelector('#paper-pdf').src = '/api/paper/pdf?ts=' + Date.now();
-    } catch(e) {}
+    // Check build status first — only render an iframe if there's actually
+    // a PDF to show. Otherwise the iframe ends up displaying the raw
+    // JSON error response, which looks broken.
+    let bs = null;
+    try { bs = await api('/paper/build_log'); } catch(e) {}
+    // A PDF on disk is enough to render — latexmk routinely exits with
+    // code 1 (unresolved \cite, undefined \ref) while still producing
+    // a usable PDF. `pdf_exists` is the ground truth; `ok` is whether
+    // the LaTeX build was warning-free.
+    const havePdf = !!(bs && bs.pdf_exists);
+    if (havePdf) {
+      v.innerHTML = `<iframe id="paper-pdf" src="/api/paper/pdf?ts=${Date.now()}" frameborder="0"></iframe>`;
+    } else {
+      // Friendly empty state. Common cases:
+      //   • Author Agent not yet spawned / scaffolded   (no main.tex)
+      //   • LaTeX compile failure                       (build_status.ok==false)
+      //   • Rebuild required after a change             (stale==true)
+      const log = (bs && bs.log) || '';
+      const lowLog = log.toLowerCase();
+      let title = 'PDF not built yet';
+      let body  = 'The Author Agent will scaffold main.tex and request the first build shortly.';
+      if (lowLog.indexOf('no main.tex') >= 0 ||
+          lowLog.indexOf("hasn't scaffolded") >= 0) {
+        title = 'Author Agent is scaffolding';
+        body  = 'The Author Agent is being spawned. As soon as it writes main.tex the PDF will appear here.';
+      } else if (lowLog.indexOf('neither latexmk nor pdflatex') >= 0 ||
+                 lowLog.indexOf('install tex live') >= 0) {
+        title = 'TeX Live is not installed on this node';
+        body  = 'Paper Mode needs latexmk/pdflatex to compile. SSH in and run: ' +
+                'apt-get update && apt-get install -y texlive-latex-extra texlive-fonts-recommended latexmk';
+      } else if (bs && bs.ok === false && bs.at) {
+        title = 'Build failed';
+        body  = (log || '').slice(-600) || 'See LaTeX log for details.';
+      } else if (bs && bs.stale) {
+        title = 'PDF is stale';
+        body  = 'Click Rebuild to recompile the latest LaTeX.';
+      }
+      v.innerHTML =
+        '<div class="paper-empty">' +
+          '<div class="paper-empty-ic">📄</div>' +
+          `<div class="paper-empty-title">${esc(title)}</div>` +
+          `<div class="paper-empty-body">${esc(body)}</div>` +
+          (log ? `<pre class="paper-empty-log">${esc(log.slice(-1200))}</pre>` : '') +
+        '</div>';
+    }
+    // Always try a recompile so the next paint picks up new artifacts.
+    try { await post('/paper/recompile', {}); paintBuildStatus(c); } catch(e) {}
   } else {
     v.innerHTML = '<div class="paper-tex"><div class="empty2">loading…</div></div>';
     try {
@@ -2476,6 +2797,14 @@ function paintPaperTab(c) {
   else if (tab === 'path') paintCriticalPath(body);
   else if (tab === 'refs') paintRelatedWork(body);
   else if (tab === 'versions') paintVersions(body);
+  else if (tab === 'rebuttal') paintRebuttal(body);
+  else if (tab === 'share') paintShare(body);
+  // Conditionally show Rebuttal tab based on phase.
+  const meta = (PaperState.state && PaperState.state.meta) || {};
+  const rebTab = document.getElementById('paper-tab-rebuttal');
+  if (rebTab) {
+    rebTab.style.display = (meta.phase === 'rebuttal' || meta.phase === 'submission') ? '' : 'none';
+  }
 }
 
 /* ── Today view (the heartbeat) ──────────────────────────────────────── */
@@ -2493,6 +2822,22 @@ function paintToday(b) {
   const gh = bud.gpu_hours_used || 0;
   const ghb = bud.gpu_hours_budget || 0;
   const ghPct = ghb ? Math.min(100, Math.round(gh/ghb*100)) : 0;
+  // Twin progress bars: days-to-deadline + GPU-hours used.
+  // Days bar fills as the deadline approaches — pinned at 100% past deadline.
+  const totalProjDays = (() => {
+    try {
+      const d0 = new Date(meta.created_at || meta.updated_at || Date.now());
+      const dDead = meta.deadline_iso ? new Date(meta.deadline_iso) : null;
+      if (!dDead) return 0;
+      return Math.max(1, (dDead - d0) / 86400000);
+    } catch (e) { return 0; }
+  })();
+  const daysUsed = totalProjDays && days != null
+    ? Math.max(0, totalProjDays - Math.max(0, days)) : 0;
+  const daysPct = totalProjDays
+    ? Math.min(100, Math.round(daysUsed / totalProjDays * 100)) : 0;
+  // Overshoot warning: GPU burn rate > days burn rate by 10pp ⇒ on track to overrun.
+  const overshoot = ghb && totalProjDays && ghPct > daysPct + 10 && days != null && days > 0;
   const claims = (st.claims || []).length;
   const figs = (st.figures || []).length;
   const queued = (st.paper_runs||[]).filter(r=>r.status==='queued').length;
@@ -2502,15 +2847,31 @@ function paintToday(b) {
     <div class="td-summary">
       <h2>Today · ${esc(meta.venue || 'Paper')}</h2>
       <div class="td-stats">
-        <div class="td-stat"><b>${days != null ? (days.toFixed ? days.toFixed(1) : days) : '—'}</b><span>days till deadline</span></div>
-        <div class="td-stat"><b>${gh.toFixed(0)}/${ghb.toFixed(0)}</b><span>GPU-h burned</span><div class="td-bar"><i style="width:${ghPct}%"></i></div></div>
+        <div class="td-stat"><b>${days != null ? (days.toFixed ? days.toFixed(1) : days) : '—'}</b><span>days till deadline</span><div class="td-bar td-bar-days"><i style="width:${daysPct}%"></i></div></div>
         <div class="td-stat"><b>${claims}</b><span>claims</span></div>
-        <div class="td-stat"><b>${doneN}/${doneN+queued+running.length}</b><span>runs done</span></div>
+        <div class="td-stat"><b>${doneN}/${doneN+queued+running.length}</b><span>runs done</span><div class="td-bar td-bar-runs"><i style="width:${doneN+queued+running.length ? Math.round(100*doneN/(doneN+queued+running.length)) : 0}%"></i></div></div>
+        <div class="td-stat"><b>${running.length}</b><span>running now</span></div>
       </div>
+      ${(claims === 0) ? `<div class="td-warn td-empty-warn">
+        ⚠ No claims yet. Click <button class="btn xs inline" id="td-scaffold-now">⚡ Scaffold now</button> to import them from the council's pre-flip assessment.
+      </div>` : ''}
     </div>
 
-    <div class="td-section-h">Decision queue <span class="td-h-sub">${decs.length} pending</span></div>
-    <div class="td-decisions">${decs.length ? decs.map(d => decisionCard(d)).join('')
+    <div class="td-section-h">Roadmap to ship</div>
+    <div class="td-roadmap" id="td-roadmap"></div>
+
+    <div class="td-section-h">Decision queue <span class="td-h-sub">${decs.length} pending</span>
+      ${decs.length ? `<div class="dq-bulk">
+        <button class="btn xs dq-bulk-approve" data-kind="cite_paper" title="Approve all citation suggestions (j/k to navigate, Enter approves)">Approve all cites</button>
+        <button class="btn xs dq-bulk-approve" data-kind="approve_text">Approve all text</button>
+        <button class="btn xs dq-bulk-approve" data-kind="add_ablation">Approve all ablations</button>
+        <button class="btn xs ghost dq-undo" disabled>Undo bulk</button>
+        <span class="dq-kbd" title="j/k navigate · Enter approve · R reject · D defer">
+          ⌨ <span class="mono">j/k · Enter · R · D</span>
+        </span>
+      </div>` : ''}
+    </div>
+    <div class="td-decisions" id="td-decisions" tabindex="0">${decs.length ? decs.map((d,i) => decisionCard(d, i===0)).join('')
       : '<div class="empty2">No decisions pending. The Author Agent will file new ones as ablations complete.</div>'}</div>
 
     <div class="td-section-h">Section health</div>
@@ -2531,6 +2892,52 @@ function paintToday(b) {
         <span class="td-commit-au">${esc(c.author)} · ${esc(ago_(c.at))}</span></div>`).join('')
       : '<div class="empty2">No commits in paper/ yet.</div>'}</div>
   `;
+  // Render the compact roadmap chips (Today's top section).
+  const rm = b.querySelector('#td-roadmap');
+  if (rm) {
+    const pr = (st.paper_runs || []);
+    const datasets = new Set();
+    for (const r of pr) {
+      const cfg = r.config || {};
+      const d = cfg.dataset || (cfg.cmd || '').match(/--dataset[ =]([\w_.-]+)/)?.[1] || 'default';
+      if (d) datasets.add(d);
+    }
+    const doneN_p = pr.filter(r => ['kept','success','done'].includes(r.status)).length;
+    const claimsReady = (st.claims || []).filter(c => c.ready).length;
+    const sectionsReady = sections.filter(s => s.status === 'ready').length;
+    const cites = (st.citations || []).filter(c => c.user_approved_at).length;
+    const milestones = [
+      { name: 'Claims',     state: (st.claims||[]).length ? 'done' : 'todo',
+        detail: `${claimsReady}/${(st.claims||[]).length} ready` },
+      { name: 'Datasets',   state: datasets.size >= 3 ? 'done' : datasets.size ? 'wip' : 'todo',
+        detail: `${datasets.size}/3 (${Array.from(datasets).join(', ') || '—'})` },
+      { name: 'Ablations',  state: doneN_p ? 'wip' : 'todo',
+        detail: `${doneN_p} done` },
+      { name: 'Sections',   state: sections.length && sectionsReady === sections.length ? 'done' : sectionsReady ? 'wip' : 'todo',
+        detail: `${sectionsReady}/${sections.length||0} ready` },
+      { name: 'Citations',  state: cites >= 10 ? 'done' : cites ? 'wip' : 'todo',
+        detail: `${cites}/10 cited` },
+      { name: 'Reviewer sim', state: (st.reviewer_sims||[]).length ? 'done' : 'todo', detail: '' },
+    ];
+    rm.innerHTML = milestones.map(m => {
+      const icon = m.state === 'done' ? '✓' : m.state === 'wip' ? '◷' : '☐';
+      return `<div class="rm-chip rm-${m.state}" title="${esc(m.detail)}">
+        <span class="rm-icon">${icon}</span>
+        <span class="rm-name">${esc(m.name)}</span>
+        ${m.detail ? `<span class="rm-detail">${esc(m.detail)}</span>` : ''}
+      </div>`;
+    }).join('');
+  }
+  // Inline "Scaffold now" CTA if there are no claims.
+  const sb = b.querySelector('#td-scaffold-now');
+  if (sb) sb.onclick = async () => {
+    sb.disabled = true; sb.textContent = 'scaffolding…';
+    const r = await post('/paper/scaffold', {});
+    await loadPaperState();
+    paintPaperTab(document.querySelector('.paper-wrap').parentElement);
+    aruiAlert(`Scaffold: +${r.claims_added} claims, +${r.runs_added} runs queued.`,
+              { title: 'Scaffolded' });
+  };
   // Wire decision actions
   b.querySelectorAll('.dec-action').forEach(btn => {
     btn.onclick = async () => {
@@ -2541,9 +2948,89 @@ function paintToday(b) {
       paintPaperTab(document.querySelector('.paper-wrap').parentElement);
     };
   });
+  // Bulk approve by kind. Stash the affected IDs into __dqUndo so a one-shot
+  // undo can re-open them. Pattern matches the spec's safety net.
+  b.querySelectorAll('.dq-bulk-approve').forEach(btn => {
+    btn.onclick = async () => {
+      const kind = btn.dataset.kind;
+      const targets = decs.filter(d => d.kind === kind).map(d => d.id);
+      if (!targets.length) { aruiAlert(`No pending decisions of kind "${kind}"`); return; }
+      const ok = await aruiConfirm(
+        `Approve all ${targets.length} pending decisions of kind "${kind}"?`,
+        { title: 'Bulk approve' });
+      if (!ok) return;
+      btn.disabled = true; btn.textContent = `Approving ${targets.length}…`;
+      for (const did of targets) {
+        try { await post('/paper/decisions/' + did + '/resolve', { action: 'approve' }); }
+        catch (e) { /* keep going */ }
+      }
+      window.__dqUndo = targets;
+      await loadPaperState();
+      paintPaperTab(document.querySelector('.paper-wrap').parentElement);
+    };
+  });
+  const undoBtn = b.querySelector('.dq-undo');
+  if (undoBtn && window.__dqUndo && window.__dqUndo.length) {
+    undoBtn.disabled = false;
+    undoBtn.textContent = `Undo bulk (${window.__dqUndo.length})`;
+    undoBtn.onclick = async () => {
+      const targets = window.__dqUndo || [];
+      window.__dqUndo = null;
+      for (const did of targets) {
+        try { await post('/paper/decisions/' + did + '/resolve', { action: 'defer' }); }
+        catch (e) {}
+      }
+      await loadPaperState();
+      paintPaperTab(document.querySelector('.paper-wrap').parentElement);
+    };
+  }
+  // Keyboard shortcuts: j/k navigate · Enter approve · R reject · D defer.
+  // Bind on the #td-decisions container so we don't clash with global typing
+  // in inputs/textareas. Focus on first card by default.
+  const list = b.querySelector('#td-decisions');
+  if (list && decs.length) {
+    if (!list.dataset.kbBound) {
+      list.dataset.kbBound = '1';
+      window.__paperKb = true;  // for tests
+      list.addEventListener('keydown', async (e) => {
+        if (['INPUT','TEXTAREA'].includes(document.activeElement?.tagName)) return;
+        const cards = Array.from(list.querySelectorAll('.dec-card'));
+        let idx = cards.findIndex(c => c.classList.contains('dec-focus'));
+        if (idx < 0) idx = 0;
+        const setFocus = (i) => {
+          cards.forEach((c, ci) => c.classList.toggle('dec-focus', ci === i));
+          cards[i]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        };
+        if (e.key === 'j' || e.key === 'ArrowDown') {
+          e.preventDefault(); setFocus(Math.min(cards.length - 1, idx + 1));
+        } else if (e.key === 'k' || e.key === 'ArrowUp') {
+          e.preventDefault(); setFocus(Math.max(0, idx - 1));
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          const did = cards[idx]?.dataset.did;
+          if (did) { await post('/paper/decisions/' + did + '/resolve', { action: 'approve' });
+            await loadPaperState();
+            paintPaperTab(document.querySelector('.paper-wrap').parentElement); }
+        } else if (e.key === 'r' || e.key === 'R') {
+          e.preventDefault();
+          const did = cards[idx]?.dataset.did;
+          if (did) { await post('/paper/decisions/' + did + '/resolve', { action: 'reject' });
+            await loadPaperState();
+            paintPaperTab(document.querySelector('.paper-wrap').parentElement); }
+        } else if (e.key === 'd' || e.key === 'D') {
+          e.preventDefault();
+          const did = cards[idx]?.dataset.did;
+          if (did) { await post('/paper/decisions/' + did + '/resolve', { action: 'defer' });
+            await loadPaperState();
+            paintPaperTab(document.querySelector('.paper-wrap').parentElement); }
+        }
+      });
+    }
+    list.focus({ preventScroll: true });
+  }
 }
 
-function decisionCard(d) {
+function decisionCard(d, isFocused) {
   const kindLabel = ({
     cite_paper: 'Cite paper', kill_claim: 'Drop claim',
     add_ablation: 'Add ablation', approve_text: 'Approve text rewrite',
@@ -2554,18 +3041,30 @@ function decisionCard(d) {
     reviewer_sim: 'Reviewer sim', system: 'System', user: 'You',
   }[d.source] || d.source);
   const isDefaultApprove = d.default_action === 'approve';
+  // Color chips per spec — green for recommended approve, red for recommended
+  // reject, grey when there is no opinion. Lets a researcher in flow mode
+  // triage in 1 click without reading the body.
+  const chipColor = isDefaultApprove ? 'rec-approve'
+    : (d.default_action === 'reject' ? 'rec-reject' : 'rec-neutral');
+  const focusedCls = isFocused ? ' dec-focus' : '';
+  const cost = d.est_cost_md ? `<span class="dec-cost">${esc(d.est_cost_md)}</span>` : '';
   return `
-    <div class="dec-card">
+    <div class="dec-card${focusedCls}" data-did="${esc(d.id)}" data-kind="${esc(d.kind||'')}">
       <div class="dec-hd">
         <span class="dec-kind">${esc(kindLabel)}</span>
         <span class="dec-source">via ${esc(sourceLabel)}</span>
+        <span class="dec-chip ${chipColor}" title="Recommended: ${esc(d.default_action || 'no opinion')}">${
+          isDefaultApprove ? '✓ approve'
+            : (d.default_action === 'reject' ? '✗ reject' : '○ neutral')
+        }</span>
+        ${cost}
       </div>
       <div class="dec-title">${esc(d.title || '')}</div>
       <div class="dec-body">${esc(d.body_md || '').replace(/\n/g,'<br>')}</div>
       <div class="dec-actions">
-        <button class="dec-action ${isDefaultApprove?'pri':''}" data-did="${esc(d.id)}" data-act="approve">Approve</button>
-        <button class="dec-action ${!isDefaultApprove?'pri':''}" data-did="${esc(d.id)}" data-act="reject">Reject</button>
-        <button class="dec-action" data-did="${esc(d.id)}" data-act="defer">Defer</button>
+        <button class="dec-action ${isDefaultApprove?'pri rec-approve':''}" data-did="${esc(d.id)}" data-act="approve">Approve <span class="kbd">↵</span></button>
+        <button class="dec-action ${d.default_action==='reject'?'pri rec-reject':''}" data-did="${esc(d.id)}" data-act="reject">Reject <span class="kbd">R</span></button>
+        <button class="dec-action" data-did="${esc(d.id)}" data-act="defer">Defer <span class="kbd">D</span></button>
       </div>
     </div>`;
 }
@@ -2630,68 +3129,436 @@ function paintCoverage(b) {
     </table>`;
 }
 
-/* ── Paper Plan (figure-first, with run subrows) ──────────────────────── */
+/* ── Paper Plan (ordered ablation checklist, grouped by claim) ───────── */
 function paintPlan(b) {
-  const st = PaperState.state || {};
-  const figs = st.figures || [];
-  const runs = st.paper_runs || [];
-  if (!figs.length) {
-    b.innerHTML = '<div class="empty2">No figures planned yet.</div>';
-    return;
-  }
-  b.innerHTML = figs.map(f => {
-    const fr = runs.filter(r => r.paper_figure_id === f.id);
-    return `<div class="plan-fig">
-      <div class="plan-fig-hd">
-        <span class="chip s-${f.status}">${esc(f.status)}</span>
-        <b>${esc(f.title || f.id)}</b>
-        <span style="color:var(--muted);font-size:11px">${esc(f.kind)} · ${fr.length} runs</span>
-      </div>
-      <table class="plan-runs">${fr.map(r => `
-        <tr><td><span class="chip s-${r.status}">${esc(r.status)}</span></td>
-          <td class="mono">${esc(r.run_name || r.id)}</td>
-          <td>${esc((r.config && r.config.dataset) || '')}</td>
-          <td>${esc((r.config && r.config.model) || '')}</td>
-          <td class="mono">n=${r.n_seeds}</td>
-          <td class="mono">${r.headline_metric != null ? fmt(r.headline_metric, 4) : '—'}</td>
-          <td><span class="cov-${r.integration_status === 'integrated' ? 'ok' : 'part'}">${esc(r.integration_status)}</span></td>
-        </tr>`).join('')}</table>
-    </div>`;
-  }).join('');
-}
-
-/* ── Critical Path (per-claim ETA) ─────────────────────────────────────── */
-function paintCriticalPath(b) {
   const st = PaperState.state || {};
   const claims = st.claims || [];
   const runs = st.paper_runs || [];
-  const gpuCount = (S.gpus || []).length || 1;
-  if (!claims.length) {
-    b.innerHTML = '<div class="empty2">No claims yet — nothing to plan against.</div>';
+  const figs = st.figures || [];
+
+  if (!claims.length && !runs.length && !figs.length) {
+    b.innerHTML =
+      '<div class="empty2" style="padding:18px 0">' +
+      'Paper plan is empty. The council\'s claims should have been ' +
+      'imported on paper-mode entry. If they weren\'t, click <b>Scaffold ' +
+      'now</b> to populate claims and queue the default ablation set.' +
+      '</div>' +
+      '<button class="btn pri" id="plan-scaffold">⚡ Scaffold now</button>';
+    b.querySelector('#plan-scaffold').onclick = async () => {
+      const r = await post('/paper/scaffold', {});
+      await loadPaperState();
+      paintPaperTab(document.querySelector('.paper-wrap').parentElement);
+      aruiAlert(`Scaffold complete — ${r.claims_added} new claims, ` +
+                `${r.runs_added} new runs queued.`,
+                { title: 'Scaffolded' });
+    };
     return;
   }
-  b.innerHTML = '<div class="cp-h">Submission blockers (by claim, ranked by ETA)</div>' +
-    claims.map(c => {
-      const cr = runs.filter(r => r.paper_claim_id === c.id);
-      const unfinished = cr.filter(r => !['kept','success','done'].includes(r.status));
-      // Sum estimated time of unfinished runs / gpus = parallel ETA
-      const totalSec = unfinished.reduce((a, r) => a + (r.est_time_sec || 3600), 0);
-      const eta_p50 = totalSec / gpuCount / 3600;     // hours
-      const eta_p90 = eta_p50 * 1.8;
-      const blockerNames = unfinished.slice(0, 3).map(r => r.run_name || r.id);
-      return `<div class="cp-claim">
-        <div class="cp-claim-h"><b>${esc(c.title || c.id)}</b>
-          ${c.ready ? '<span style="color:var(--ok)">★ ready</span>' : ''}</div>
-        <div class="cp-claim-eta">
-          ⏱ p50 <b>${eta_p50.toFixed(1)}h</b> / p90 <b>${eta_p90.toFixed(1)}h</b>
-          · ${unfinished.length} unfinished
+
+  // Build the checklist: per-claim group with headline → ablations → seeds.
+  const byClaim = {};
+  for (const c of claims) byClaim[c.id] = { claim: c, runs: [] };
+  byClaim['_orphan'] = { claim: { id: '_orphan',
+    title: '(unassigned to a claim)' }, runs: [] };
+  for (const r of runs) {
+    const k = byClaim[r.paper_claim_id] ? r.paper_claim_id : '_orphan';
+    byClaim[k].runs.push(r);
+  }
+  const groupHTML = Object.values(byClaim).map(grp => {
+    if (!grp.runs.length && grp.claim.id !== '_orphan') {
+      return `<div class="plan-group">
+        <div class="plan-group-hd">
+          <b>${esc(grp.claim.title)}</b>
+          <span class="plan-group-counts">0 runs</span>
         </div>
-        <div class="cp-claim-blockers">blocked on: ${blockerNames.length
-          ? blockerNames.map(n => `<code>${esc(n)}</code>`).join(' ')
-          : '<span style="color:var(--muted)">nothing</span>'}</div>
+        <div class="empty2" style="padding:10px 0">No ablations queued.
+          <button class="btn xs plan-queue" data-cid="${esc(grp.claim.id)}">Queue default set</button>
+        </div>
       </div>`;
-    }).join('');
+    }
+    if (!grp.runs.length) return '';
+    // Bucket runs by status
+    const order = { running: 0, queued: 1, kept: 2, success: 2, done: 2,
+                    crashed: 3, failed: 3, discarded: 4 };
+    grp.runs.sort((a,b) => (order[a.status] ?? 9) - (order[b.status] ?? 9) ||
+                            (a.run_name || '').localeCompare(b.run_name||''));
+    const queued = grp.runs.filter(r => r.status === 'queued').length;
+    const running = grp.runs.filter(r => r.status === 'running').length;
+    const done = grp.runs.filter(r => ['kept','success','done'].includes(r.status)).length;
+    return `<div class="plan-group">
+      <div class="plan-group-hd">
+        <b>${esc(grp.claim.title)}</b>
+        <span class="plan-group-counts">
+          <span class="chip s-running">${running} running</span>
+          <span class="chip s-queued">${queued} queued</span>
+          <span class="chip s-kept">${done} done</span>
+        </span>
+      </div>
+      <table class="plan-runs">
+        <thead><tr><th>✓</th><th>Status</th><th>Run</th><th>Role</th>
+          <th>Dataset</th><th>Seed</th><th>Metric</th><th>Started</th></tr></thead>
+        <tbody>${grp.runs.map(r => {
+          const cfg = r.config || {};
+          const ds = cfg.dataset
+            || (cfg.cmd || '').match(/--dataset[ =]([\w_.-]+)/)?.[1]
+            || 'default';
+          const m = r.headline_metric != null
+            ? fmt(r.headline_metric, 4) : '—';
+          const isDone = ['kept','success','done'].includes(r.status);
+          return `<tr class="plan-run-row ${r.status}">
+            <td>${isDone ? '☑' : (r.status==='running' ? '◷' : '☐')}</td>
+            <td><span class="chip s-${r.status}">${esc(r.status)}</span></td>
+            <td class="mono">${esc(r.run_name || r.id)}</td>
+            <td>${esc(r.paper_role || cfg.role || '')}</td>
+            <td><span class="ds-chip">${esc(ds)}</span></td>
+            <td class="mono">${esc(String(cfg.seed ?? r.n_seeds ?? '—'))}</td>
+            <td class="mono">${m}</td>
+            <td class="mono" style="color:var(--muted);font-size:11px">${r.started_at ? esc(ago(r.started_at)) : '—'}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>
+    </div>`;
+  }).join('');
+  b.innerHTML = `
+    <div class="plan-bar">
+      <button class="btn xs" id="plan-rescaffold" title="Re-import claims from the council and queue any missing ablations">⚡ Re-scaffold</button>
+      <span style="color:var(--muted);font-size:11px;margin-left:8px">
+        ${runs.length} total runs · ${runs.filter(r=>r.status==='queued').length} queued · ${runs.filter(r=>r.status==='running').length} running · ${runs.filter(r=>['kept','success','done'].includes(r.status)).length} done
+      </span>
+    </div>
+    ${groupHTML}`;
+  b.querySelector('#plan-rescaffold').onclick = async () => {
+    const r = await post('/paper/scaffold', {});
+    await loadPaperState();
+    paintPaperTab(document.querySelector('.paper-wrap').parentElement);
+    aruiAlert(`Scaffold: +${r.claims_added} claims, +${r.runs_added} runs queued.`,
+              { title: 'Re-scaffolded' });
+  };
+  b.querySelectorAll('.plan-queue').forEach(btn => {
+    btn.onclick = async () => {
+      await post('/paper/scaffold', {});
+      await loadPaperState();
+      paintPaperTab(document.querySelector('.paper-wrap').parentElement);
+    };
+  });
 }
+
+/* ── Critical Path: Milestones (primary) + per-run Gantt (collapsible) ── */
+function paintCriticalPath(b) {
+  const st = PaperState.state || {};
+  const claims = st.claims || [];
+  const runs = (st.paper_runs || []).slice();
+  const sections = (PaperState.today || {}).sections || [];
+  const citations = st.citations || [];
+  const versions = st.versions || [];
+  const meta = st.meta || {};
+  const buildStatus = st.build_status || {};
+  const days = (PaperState.today || {}).days_till_deadline;
+  if (!claims.length && !runs.length) {
+    b.innerHTML = '<div class="empty2">No claims yet — click <b>Re-scaffold</b> on Paper Plan to populate.</div>';
+    return;
+  }
+
+  // Derive the "datasets we've used" set from run configs.
+  const datasets = (() => {
+    const seen = new Set();
+    for (const r of runs) {
+      const cfg = r.config || {};
+      const d = cfg.dataset || (cfg.cmd || '').match(/--dataset[ =]([\w_.-]+)/)?.[1] || 'default';
+      if (d) seen.add(d);
+    }
+    return Array.from(seen);
+  })();
+
+  // Build the milestone roadmap.
+  const done = (n) => n > 0 ? '✓' : '☐';
+  const inProgress = (q,r,d) => (r > 0 || (d > 0 && q > 0)) ? '◷' : (d > 0 ? '✓' : '☐');
+  const totalRuns = runs.length;
+  const runningRuns = runs.filter(r => r.status === 'running').length;
+  const queuedRuns = runs.filter(r => r.status === 'queued').length;
+  const doneRuns = runs.filter(r => ['kept','success','done'].includes(r.status)).length;
+  const crashedRuns = runs.filter(r => ['crashed','failed','error'].includes(r.status)).length;
+  const claimsReady = claims.filter(c => c.ready).length;
+  const sectionsReady = sections.filter(s => s.status === 'ready').length;
+  const approvedCites = citations.filter(c => c.user_approved_at).length;
+  const versionsPinned = versions.length;
+  const hasReviewerSim = (st.reviewer_sims || []).length > 0;
+
+  // Per-dataset coverage per claim — the heart of "great paper" thinking.
+  const datasetCoverage = claims.map(c => {
+    const cRuns = runs.filter(r => r.paper_claim_id === c.id);
+    const datasetsCovered = new Set();
+    for (const r of cRuns) {
+      if (['kept','success','done'].includes(r.status)) {
+        const ds = (r.config || {}).dataset || 'default';
+        datasetsCovered.add(ds);
+      }
+    }
+    return {
+      claim: c,
+      datasets_done: Array.from(datasetsCovered),
+      total_runs: cRuns.length,
+      done: cRuns.filter(r => ['kept','success','done'].includes(r.status)).length,
+      running: cRuns.filter(r => r.status === 'running').length,
+      queued: cRuns.filter(r => r.status === 'queued').length,
+    };
+  });
+
+  const milestones = [
+    { name: 'Claims imported from council',
+      status: claims.length ? 'done' : 'todo',
+      detail: claims.length ? `${claims.length} active` : 'awaiting scaffold' },
+    { name: 'Headline result per claim',
+      status: claimsReady === claims.length && claims.length > 0 ? 'done' :
+              doneRuns > 0 ? 'in_progress' : 'todo',
+      detail: `${claimsReady}/${claims.length} claims marked ready` },
+    { name: 'Cross-dataset validation (≥3 datasets)',
+      status: datasets.length >= 3 ? 'done' :
+              datasets.length > 0 ? 'in_progress' : 'todo',
+      detail: datasets.length ? `${datasets.length} dataset${datasets.length>1?'s':''}: ${datasets.join(', ')}` : 'single-dataset only — author should expand' },
+    { name: 'Ablation depth (≥3 seeds × ≥2 ablations per claim)',
+      status: doneRuns >= claims.length * 6 ? 'done' :
+              doneRuns > 0 ? 'in_progress' : 'todo',
+      detail: `${doneRuns} done · ${runningRuns} running · ${queuedRuns} queued${crashedRuns?` · ${crashedRuns} crashed`:''}` },
+    { name: 'Related Work — ≥10 cited papers',
+      status: approvedCites >= 10 ? 'done' :
+              approvedCites > 0 ? 'in_progress' : 'todo',
+      detail: `${approvedCites} approved citations` },
+    { name: 'Sections drafted',
+      status: sectionsReady === sections.length && sections.length > 0 ? 'done' :
+              sectionsReady > 0 ? 'in_progress' : 'todo',
+      detail: `${sectionsReady}/${sections.length} sections ready` },
+    { name: 'PDF compiles cleanly',
+      status: buildStatus.pdf_exists ? (buildStatus.ok ? 'done' : 'in_progress') : 'todo',
+      detail: buildStatus.pdf_exists
+        ? (buildStatus.ok ? 'no warnings' : 'compiles with warnings')
+        : 'no PDF yet' },
+    { name: 'Reviewer simulation run',
+      status: hasReviewerSim ? 'done' : 'todo',
+      detail: hasReviewerSim ? 'simulator output saved' : 'run from Versions tab before submitting' },
+    { name: 'Pin v-submitted',
+      status: versionsPinned > 0 ? 'done' : 'todo',
+      detail: versionsPinned ? `${versionsPinned} version(s) pinned` : 'no versions pinned' },
+    { name: meta.deadline_iso ? `Deadline: ${meta.deadline_iso.slice(0,10)}` : 'No deadline set',
+      status: (days != null && days < 7) ? 'urgent' :
+              (days != null && days < 30) ? 'in_progress' : 'todo',
+      detail: days != null ? `${days.toFixed(1)} days remaining` : '—' },
+  ];
+
+  // Render the milestone list.
+  const milestoneHTML = milestones.map(m => {
+    const icon = m.status === 'done' ? '✓'
+              : m.status === 'urgent' ? '⚠'
+              : m.status === 'in_progress' ? '◷' : '☐';
+    return `<div class="ms-row ms-${m.status}">
+      <span class="ms-icon">${icon}</span>
+      <div class="ms-body">
+        <div class="ms-name">${esc(m.name)}</div>
+        <div class="ms-detail">${esc(m.detail)}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Per-claim cross-dataset coverage grid (compact).
+  const coverageHTML = !claims.length ? '' : `
+    <div class="cp-h" style="margin-top:18px">Per-claim cross-dataset coverage</div>
+    <div class="empty2" style="margin-bottom:6px">
+      ≥3 datasets per claim is the rough bar for a top-tier paper.
+    </div>
+    <table class="cov-table dataset-matrix">
+      <thead><tr><th>Claim</th><th>Datasets done</th><th>Done / Running / Queued</th></tr></thead>
+      <tbody>${datasetCoverage.map(dc => `
+        <tr>
+          <td><div class="cov-title">${esc((dc.claim.title||'').slice(0,80))}</div></td>
+          <td>${dc.datasets_done.length
+              ? dc.datasets_done.map(d => `<span class="ds-chip">${esc(d)}</span>`).join('')
+              : '<span style="color:var(--bad)">no datasets done</span>'}
+              <span style="color:var(--muted);font-size:11px">${dc.datasets_done.length}/3 target</span></td>
+          <td class="mono">${dc.done} / ${dc.running} / ${dc.queued}</td>
+        </tr>`).join('')}</tbody>
+    </table>`;
+
+  b.innerHTML = `
+    <div class="cp-h">
+      <b>Milestones to ship</b>
+      <span style="color:var(--muted);font-size:12px;margin-left:8px">
+        ${milestones.filter(m=>m.status==='done').length}/${milestones.length} complete
+      </span>
+    </div>
+    <div class="ms-list">${milestoneHTML}</div>
+    ${coverageHTML}
+    <details class="cp-gantt-details" style="margin-top:22px">
+      <summary>Per-run schedule (Gantt) — secondary view</summary>
+      <div id="cp-gantt-inner"></div>
+    </details>
+  `;
+  // Render the gantt inside the collapsible <details>.
+  const gantt = b.querySelector('#cp-gantt-inner');
+  if (gantt) _paintGantt(gantt, runs, claims);
+}
+
+
+function _paintGantt(b, runs, claims) {
+  const gpuCount = Math.max(1, (S.gpus || []).length || 1);
+  // Estimate per-run duration. Use the MEDIAN of historical completed
+  // runs as the default — beats the old hardcoded 5400s which made
+  // queued bars look 30× longer than actual ones.
+  const NOW = Date.now();
+  const HOUR = 3600000;
+  const observedDurations = runs
+    .filter(r => r.started_at && r.ended_at &&
+                 ['kept','success','done'].includes(r.status))
+    .map(r => (+new Date(r.ended_at) - +new Date(r.started_at)) / 1000)
+    .filter(d => d > 0 && d < 86400)
+    .sort((a, b) => a - b);
+  const medianSec = observedDurations.length
+    ? observedDurations[Math.floor(observedDurations.length / 2)]
+    : 600;     // 10min fallback only if zero historical data
+  const estSec = r => r.est_time_sec || (r.config && r.config.est_time_sec) || medianSec;
+  // 1) Place completed/running runs at their real time.
+  const placed = [];
+  for (const r of runs) {
+    if (['running','kept','success','done','crashed','failed'].includes(r.status) && r.started_at) {
+      const start = +new Date(r.started_at);
+      const end = r.ended_at ? +new Date(r.ended_at)
+        : (r.status === 'running' ? NOW + estSec(r) * 1000 * 0.5 : NOW);
+      placed.push({ run: r, start, end });
+    }
+  }
+  // 2) Bin-pack queued runs onto N GPU lanes after now.
+  const laneEnds = Array(gpuCount).fill(NOW);
+  for (const r of runs) {
+    if (r.status === 'queued') {
+      const lane = laneEnds.indexOf(Math.min(...laneEnds));
+      const start = laneEnds[lane];
+      const end = start + estSec(r) * 1000;
+      laneEnds[lane] = end;
+      placed.push({ run: r, start, end, queued: true, lane });
+    }
+  }
+  if (!placed.length) {
+    b.innerHTML = '<div class="empty2">No paper runs to schedule. Click <b>Re-scaffold</b> on Paper Plan.</div>';
+    return;
+  }
+  const minT = Math.min(NOW - 2*HOUR, ...placed.map(p => p.start));
+  const maxT = Math.max(NOW + 4*HOUR, ...placed.map(p => p.end));
+  const span = Math.max(HOUR, maxT - minT);
+  // Build per-claim rows (each claim is a horizontal row containing its bars).
+  const claimsWithRuns = claims.filter(c =>
+    placed.some(p => p.run.paper_claim_id === c.id));
+  const rows = (claimsWithRuns.length ? claimsWithRuns : claims).concat(
+    placed.some(p => !p.run.paper_claim_id) ?
+      [{ id: '_orphan', title: '(orphan runs)' }] : []);
+  if (!rows.length) {
+    b.innerHTML = '<div class="empty2">No scheduled runs to chart.</div>';
+    return;
+  }
+  const ROW_H = 38;
+  const LBL_W = 220;
+  const WIDTH = 1100;
+  const chartW = WIDTH - LBL_W - 24;
+  const xs = t => LBL_W + (t - minT) / span * chartW;
+  // Render
+  const ticks = [];
+  for (let t = minT; t <= maxT; t += Math.max(HOUR, span/8)) {
+    ticks.push(t);
+  }
+  // build SVG
+  const nowX = xs(NOW);
+  const totalH = rows.length * ROW_H + 60;
+  const colorFor = st => ({
+    running: '#FBBF24', queued: '#7DD3FC',
+    kept: '#34D399', success: '#34D399', done: '#34D399',
+    crashed: '#F87171', failed: '#F87171', discarded: '#9BA1A8',
+  }[st] || '#A78BFA');
+  let svg = `<svg viewBox="0 0 ${WIDTH} ${totalH}" class="cp-gantt"
+    xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMinYMin meet">`;
+  // gridlines + tick labels
+  svg += `<g class="cp-grid">`;
+  for (const t of ticks) {
+    const x = xs(t);
+    const lbl = new Date(t);
+    const ms = (t - NOW) / 3600000;
+    const txt = (Math.abs(ms) < 0.5 ? 'now'
+      : (ms > 0 ? `+${ms.toFixed(1)}h` : `${ms.toFixed(1)}h`));
+    svg += `<line x1="${x}" y1="20" x2="${x}" y2="${totalH-10}" stroke="rgba(255,255,255,.06)"/>`;
+    svg += `<text x="${x}" y="14" text-anchor="middle" fill="#9BA1A8" font-size="10" font-family="ui-monospace,monospace">${txt}</text>`;
+  }
+  svg += `</g>`;
+  // now line
+  svg += `<line x1="${nowX}" y1="20" x2="${nowX}" y2="${totalH-10}" stroke="#6366F1" stroke-width="1.5" stroke-dasharray="3 3"/>`;
+  // rows
+  rows.forEach((row, i) => {
+    const y = 30 + i * ROW_H;
+    svg += `<rect x="0" y="${y-2}" width="${WIDTH}" height="${ROW_H}" fill="${i%2?'rgba(255,255,255,.02)':'transparent'}"/>`;
+    const tit = (row.title || row.id || '').slice(0, 30);
+    svg += `<text x="8" y="${y + ROW_H/2 + 3}" fill="#E5E7EB" font-size="12" font-weight="600">${esc(tit)}${row.ready?' ★':''}</text>`;
+    // bars
+    placed.filter(p => (p.run.paper_claim_id || '_orphan') === row.id).forEach(p => {
+      const x0 = Math.max(LBL_W, xs(p.start));
+      const x1 = Math.max(x0 + 4, xs(p.end));
+      const w = x1 - x0;
+      const color = colorFor(p.run.status);
+      const alpha = p.queued ? .55 : .9;
+      svg += `<g class="cp-bar"><title>${esc(p.run.run_name || p.run.id)} · ${esc(p.run.status)}</title>` +
+        `<rect x="${x0}" y="${y + 6}" width="${w}" height="${ROW_H-12}" rx="3" fill="${color}" opacity="${alpha}"/>` +
+        (w > 60 ? `<text x="${x0 + 6}" y="${y + ROW_H/2 + 4}" font-size="10" fill="#0B0D10" font-family="ui-monospace,monospace">${esc((p.run.run_name || p.run.id).slice(0, Math.max(4, w/7)))}</text>` : '') +
+        `</g>`;
+    });
+  });
+  svg += `</svg>`;
+  // ETA summary
+  const allEnd = Math.max(...placed.map(p => p.end));
+  const etaHrs = Math.max(0, (allEnd - NOW) / HOUR);
+  b.innerHTML =
+    `<div class="cp-h">
+      <b>Critical Path</b>
+      <span style="color:var(--muted);font-size:12px;margin-left:8px">
+        ${gpuCount} GPU lane${gpuCount>1?'s':''} ·
+        projected completion in <b>${etaHrs.toFixed(1)}h</b>
+        (${rows.length} claim${rows.length>1?'s':''}, ${placed.length} bar${placed.length>1?'s':''})
+      </span>
+    </div>
+    <div class="cp-legend">
+      <span><i style="background:#FBBF24"></i>running</span>
+      <span><i style="background:#7DD3FC"></i>queued</span>
+      <span><i style="background:#34D399"></i>done</span>
+      <span><i style="background:#F87171"></i>crashed</span>
+    </div>
+    <div class="cp-svg-wrap">${svg}</div>`;
+}
+
+/* ── one citation card (compact, expandable, with relevance + Approve) ── */
+function citationCard(c, approved) {
+  // Truncate the author list — research papers can have 1000+ authors.
+  const authors = (c.authors || '').split(',').map(s => s.trim()).filter(Boolean);
+  const shortA = authors.slice(0, 3).join(', ');
+  const moreA = authors.length > 3 ? `, +${authors.length - 3} more` : '';
+  // Source link (prefer arxiv, then DOI, then Semantic Scholar)
+  let link = '';
+  if (c.arxiv_id) link = `https://arxiv.org/abs/${esc(c.arxiv_id)}`;
+  else if (c.doi) link = `https://doi.org/${esc(c.doi)}`;
+  else if (c.semantic_scholar_id)
+    link = `https://www.semanticscholar.org/paper/${esc(c.semantic_scholar_id)}`;
+  const abs = (c.abstract_md || '').trim();
+  const relev = (c.relevance_md || '').trim();
+  return `<div class="rw-card${approved ? ' rw-approved' : ''}">
+    <div class="rw-card-hd">
+      <a class="rw-title" ${link ? `href="${link}" target="_blank" rel="noopener"` : ''}>${esc(c.title || c.key || '(untitled)')}</a>
+      <span class="rw-year">${esc(c.year || '')}</span>
+    </div>
+    <div class="rw-authors">${esc(shortA)}<span class="rw-more-au">${esc(moreA)}</span></div>
+    ${relev ? `<div class="rw-relev">${esc(relev)}</div>` : ''}
+    ${abs ? `<div class="rw-abs"><div class="rw-abs-text">${esc(abs)}</div></div>` : ''}
+    <div class="rw-actions">
+      ${abs.length > 240 ? `<button class="btn xs ghost rw-toggle">more</button>` : ''}
+      ${link ? `<a class="btn xs ghost" href="${link}" target="_blank" rel="noopener">↗ open</a>` : ''}
+      ${approved ? `<span class="rw-approved-mark">✓ cited</span>`
+                  : `<button class="btn xs pri rw-approve" data-key="${esc(c.key)}">✓ Cite</button>`}
+    </div>
+  </div>`;
+}
+
 
 /* ── Related Work ──────────────────────────────────────────────────────── */
 function paintRelatedWork(b) {
@@ -2699,6 +3566,15 @@ function paintRelatedWork(b) {
   const cites = st.citations || [];
   const approved = cites.filter(c => c.user_approved_at);
   const discovered = cites.filter(c => !c.user_approved_at);
+  // Auto-kick lit discovery once if nothing has been found yet. Idempotent
+  // on the backend (skips if ≥5 citations already exist).
+  if (!cites.length && !window.__litAutoFired) {
+    window.__litAutoFired = true;
+    post('/paper/lit/auto_discover', {}).then(async () => {
+      await loadPaperState();
+      paintPaperTab(document.querySelector('.paper-wrap').parentElement);
+    }).catch(() => {});
+  }
   b.innerHTML = `
     <div class="rw-search">
       <input id="rw-q" placeholder="search arxiv (e.g. diffusion ensembles for language)"/>
@@ -2707,16 +3583,47 @@ function paintRelatedWork(b) {
     </div>
     <div class="td-section-h">Approved citations (${approved.length})</div>
     <div class="rw-list">${approved.length ? approved.map(c =>
-      `<div class="rw-row"><div><b>${esc(c.title || c.key)}</b> <span style="color:var(--muted)">${esc(c.year)}</span></div>` +
-      `<div style="color:var(--text-2);font-size:11px">${esc(c.authors)}</div></div>`).join('')
+      citationCard(c, /*approved=*/true)).join('')
       : '<div class="empty2">No approved citations yet.</div>'}</div>
     <div class="td-section-h">Discovered (Lit Agent — awaiting your approval)</div>
-    <div class="rw-list">${discovered.slice(0,15).map(c =>
-      `<div class="rw-row"><div><b>${esc(c.title || c.key)}</b> <span style="color:var(--muted)">${esc(c.year)}</span></div>` +
-      `<div style="color:var(--text-2);font-size:11px">${esc(c.authors)}</div>` +
-      `<div style="color:var(--muted);font-size:11px">${esc((c.abstract_md||'').slice(0,240))}…</div></div>`).join('')
+    <div class="rw-list">${discovered.slice(0,25).map(c =>
+      citationCard(c, /*approved=*/false)).join('')
       || '<div class="empty2">No discovered citations yet — try the search box or auto-discover.</div>'}</div>
+    <div class="td-section-h">Differentiation matrix</div>
+    <div class="empty2" style="margin-bottom:8px">
+      For each approved citation, the agent should note: <i>what's the same / different vs our paper?</i>
+      This becomes the heart of the Related Work section.
+    </div>
+    ${approved.length ? `
+      <table class="diff-matrix">
+        <thead><tr><th>Paper</th><th>Same as ours</th><th>Different / our contribution</th></tr></thead>
+        <tbody>${approved.map(c => `
+          <tr>
+            <td><b>${esc((c.title || c.key || '').slice(0,80))}</b><br>
+                <span style="color:var(--muted);font-size:11px">${esc(c.authors || '')} · ${esc(c.year||'')}</span></td>
+            <td><textarea class="diff-cell" data-key="${esc(c.key)}" data-fld="same" placeholder="(empty)">${esc(c.same_md||'')}</textarea></td>
+            <td><textarea class="diff-cell" data-key="${esc(c.key)}" data-fld="diff" placeholder="(empty)">${esc(c.diff_md||'')}</textarea></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    ` : '<div class="empty2">Approve some citations first to populate the matrix.</div>'}
   `;
+  // Wire per-citation Approve / Ignore.
+  b.querySelectorAll('.rw-approve').forEach(btn => {
+    btn.onclick = async () => {
+      btn.disabled = true; btn.textContent = '…';
+      await post('/paper/citations/' + encodeURIComponent(btn.dataset.key) + '/approve', {});
+      await loadPaperState();
+      paintPaperTab(document.querySelector('.paper-wrap').parentElement);
+    };
+  });
+  b.querySelectorAll('.rw-toggle').forEach(btn => {
+    btn.onclick = () => {
+      const card = btn.closest('.rw-card');
+      card.classList.toggle('expanded');
+      btn.textContent = card.classList.contains('expanded') ? 'less' : 'more';
+    };
+  });
   b.querySelector('#rw-go').onclick = async () => {
     const q = b.querySelector('#rw-q').value;
     if (!q) return;
@@ -2747,12 +3654,15 @@ function paintVersions(b) {
     </div>
     <div class="td-section-h">Pinned versions (${vs.length})</div>
     <div class="versions-list">${vs.length ? vs.map(v =>
-      `<div class="ver-row">
+      `<div class="ver-row" data-vid="${esc(v.id)}">
         <div><b>${esc(v.label)}</b> <span class="mono" style="color:var(--accent)">${esc((v.latex_commit_sha||'').slice(0,8))}</span></div>
         <div style="color:var(--muted);font-size:11px">${esc(ago(v.created_at))} · ${
           (v.snapshot_json && v.snapshot_json.claims) ? v.snapshot_json.claims.length : 0
         } claims · ${(v.snapshot_json && v.snapshot_json.figures)
           ? v.snapshot_json.figures.length : 0} figures</div>
+        <div class="ver-actions">
+          <button class="btn xs ver-diff" data-vid="${esc(v.id)}">Diff vs…</button>
+        </div>
       </div>`).join('')
       : '<div class="empty2">No versions pinned yet. Pin one when you reach a milestone (v0 draft, v1 internal review, v2 submitted, etc.).</div>'}</div>
     <div id="ver-revsim-result"></div>
@@ -2781,44 +3691,257 @@ function paintVersions(b) {
       'next 2-5 minutes.</div>';
   };
   b.querySelector('#ver-submit').onclick = openSubmitHelper;
+  // Wire per-row diff buttons.
+  b.querySelectorAll('.ver-diff').forEach(btn => {
+    btn.onclick = () => openVersionDiffModal(btn.dataset.vid, vs);
+  });
+}
+
+
+async function openVersionDiffModal(vid, allVersions) {
+  // Pick the "against" version.
+  const others = allVersions.filter(v => v.id !== vid);
+  if (!others.length) {
+    return aruiAlert('Need at least 2 pinned versions to diff. Pin another version first.');
+  }
+  const sc = el('div', 'mscrim');
+  const m = el('div', 'modal modal-wide');
+  m.innerHTML =
+    `<div class="modal-hd"><h2>Version diff</h2>` +
+    `<button class="iconbtn" id="vdx">✕</button></div>` +
+    `<div class="modal-sub">A: <b>${esc(allVersions.find(v=>v.id===vid)?.label||vid)}</b>  vs.  ` +
+    `B: <select id="vd-against" style="margin-left:6px">` +
+    others.map(o => `<option value="${esc(o.id)}">${esc(o.label)}</option>`).join('') +
+    `</select> <span style="color:var(--muted);font-size:11px;margin-left:6px">(or HEAD if nothing selected)</span>` +
+    `<button class="btn xs" id="vd-go" style="margin-left:10px">Diff</button></div>` +
+    `<div id="vd-out" class="vd-out"><div class="empty2">Pick a version, then Diff.</div></div>` +
+    `<div class="modal-actions"><button class="btn" id="vd-close">Close</button></div>`;
+  sc.append(m); document.body.append(sc);
+  sc.onclick = e => { if (e.target === sc) sc.remove(); };
+  m.querySelector('#vdx').onclick = () => sc.remove();
+  m.querySelector('#vd-close').onclick = () => sc.remove();
+  m.querySelector('#vd-go').onclick = async () => {
+    const out = m.querySelector('#vd-out');
+    out.innerHTML = '<div class="empty2">computing diff…</div>';
+    const against = m.querySelector('#vd-against').value;
+    const r = await api(`/paper/versions/${vid}/diff?against=${against}`);
+    if (!r.ok) { out.innerHTML = `<div class="empty2">Diff failed: ${esc(r.detail||'?')}</div>`; return; }
+    if (!r.files.length) { out.innerHTML = '<div class="empty2">No changes between these versions.</div>'; return; }
+    out.innerHTML = r.files.map(f =>
+      `<div class="vd-file"><div class="vd-file-h">${esc(f.path)}</div>` +
+      `<pre class="vd-file-body">${esc(f.diff).split('\n').map(ln => {
+        const col = ln.startsWith('+') ? 'var(--ok)'
+                    : ln.startsWith('-') ? 'var(--bad)'
+                    : ln.startsWith('@@') ? 'var(--accent)' : 'var(--text-2)';
+        return `<span style="color:${col}">${ln}</span>`;
+      }).join('\n')}</pre></div>`).join('');
+  };
+}
+
+
+/* ── Rebuttal sub-tab (Phase 7) ──────────────────────────────────────────── */
+function paintRebuttal(b) {
+  const meta = (PaperState.state && PaperState.state.meta) || {};
+  if (meta.phase !== 'rebuttal' && meta.phase !== 'submission') {
+    b.innerHTML =
+      `<div class="empty2" style="padding:20px 0">` +
+      `The Rebuttal sub-tab unlocks after you've submitted the paper. ` +
+      `Use the <b>Submission helper</b> in Versions to flip the phase, ` +
+      `OR click below to enter rebuttal mode manually.</div>` +
+      `<div style="margin-top:14px"><button class="btn pri" id="reb-start">Start rebuttal mode</button></div>`;
+    b.querySelector('#reb-start').onclick = async () => {
+      const ok = await aruiConfirm(
+        'Switch paper_phase to "rebuttal"? This unlocks the rebuttal tools (paste reviews → ' +
+        'auto-file decisions → rebuttal.tex draft). You can switch back any time.',
+        { title: 'Enter rebuttal mode' });
+      if (!ok) return;
+      await post('/paper/rebuttal/start', {});
+      await loadPaperState();
+      paintPaperTab(document.querySelector('.paper-wrap').parentElement);
+    };
+    return;
+  }
+  b.innerHTML = `
+    <div class="td-section-h">Paste reviewer reviews</div>
+    <div class="empty2" style="margin-bottom:8px">
+      One textarea per reviewer. The council reads each and files one decision
+      per actionable concern (max 6 per reviewer).
+    </div>
+    <div class="reb-list" id="reb-list">
+      <textarea class="reb-input" placeholder="Reviewer 1 — paste the full review here"></textarea>
+      <textarea class="reb-input" placeholder="Reviewer 2 — paste the full review here"></textarea>
+      <textarea class="reb-input" placeholder="Reviewer 3 — paste the full review here"></textarea>
+    </div>
+    <div style="margin-top:10px">
+      <button class="btn" id="reb-add">+ another reviewer</button>
+      <button class="btn pri" id="reb-parse">Parse with council → file decisions</button>
+    </div>
+    <div id="reb-result" style="margin-top:14px"></div>
+  `;
+  b.querySelector('#reb-add').onclick = () => {
+    const ta = document.createElement('textarea');
+    ta.className = 'reb-input';
+    ta.placeholder = 'Reviewer N — paste the full review here';
+    b.querySelector('#reb-list').appendChild(ta);
+  };
+  b.querySelector('#reb-parse').onclick = async () => {
+    const reviews = Array.from(b.querySelectorAll('.reb-input'))
+      .map(t => t.value.trim()).filter(s => s.length > 30);
+    if (!reviews.length) {
+      return aruiAlert('Paste at least one substantive review (>30 chars).');
+    }
+    const out = b.querySelector('#reb-result');
+    out.innerHTML = '<div class="empty2">Parsing — this may take ~30s per reviewer…</div>';
+    const r = await post('/paper/rebuttal/parse', { reviews });
+    if (r.ok) {
+      out.innerHTML = `<div style="color:var(--ok)">Filed ${r.filed} decisions ` +
+        `from ${reviews.length} reviews. Open the Today tab to triage.</div>`;
+    } else {
+      out.innerHTML = `<div style="color:var(--bad)">Failed: ${esc(r.detail || '?')}</div>`;
+    }
+  };
+}
+
+
+/* ── Share sub-tab (read-only collaborator link) ─────────────────────────── */
+async function paintShare(b) {
+  b.innerHTML = `
+    <div class="td-section-h">Read-only share link</div>
+    <div class="empty2" style="margin-bottom:10px">
+      Generates a token-gated URL your advisor can open without an account.
+      Shows the current PDF + Claim Coverage + Decision Queue (read-only).
+      Anyone with the URL can read; rotate the token to revoke.
+    </div>
+    <div class="share-row">
+      <input id="share-url" class="share-url mono" readonly value="(no token yet)" />
+      <button class="btn" id="share-copy">Copy</button>
+      <button class="btn pri" id="share-gen">Generate / rotate</button>
+      <button class="btn ghost" id="share-revoke">Revoke</button>
+    </div>
+    <div id="share-status" class="empty2" style="margin-top:10px"></div>
+  `;
+  b.querySelector('#share-gen').onclick = async () => {
+    const r = await post('/paper/share/token', {});
+    if (r.token) {
+      const full = window.location.origin + r.url;
+      b.querySelector('#share-url').value = full;
+      b.querySelector('#share-status').innerHTML =
+        `<span style="color:var(--ok)">✓ token generated. Share this URL.</span>`;
+    }
+  };
+  b.querySelector('#share-copy').onclick = () => {
+    const u = b.querySelector('#share-url').value;
+    if (!u || u.startsWith('(')) { aruiAlert('Generate a token first.'); return; }
+    navigator.clipboard.writeText(u);
+    b.querySelector('#share-status').innerHTML =
+      `<span style="color:var(--ok)">✓ copied to clipboard.</span>`;
+  };
+  b.querySelector('#share-revoke').onclick = async () => {
+    const ok = await aruiConfirm('Revoke the share link? Existing URL will stop working.',
+      { title: 'Revoke share token', danger: true });
+    if (!ok) return;
+    await fetch('/api/paper/share/token', { method: 'DELETE' });
+    b.querySelector('#share-url').value = '(no token yet)';
+    b.querySelector('#share-status').innerHTML =
+      `<span style="color:var(--muted)">Token revoked.</span>`;
+  };
 }
 
 async function openSubmitHelper() {
   const sc = el('div', 'mscrim');
-  const m = el('div', 'modal');
+  const m = el('div', 'modal submit-helper');
   m.innerHTML =
     `<div class="modal-hd"><h2>Submission helper</h2>` +
     `<button class="iconbtn" id="sbx">✕</button></div>` +
     `<div class="modal-sub">Pre-submission checks before you upload to ` +
-    `OpenReview / CMT. v1 covers anonymization scan, page-count, and ` +
-    `bundle generation. arXiv upload is manual for now.</div>` +
-    `<div style="margin-top:12px">` +
-    `<div class="ver-row" style="margin-bottom:6px"><b>1. Anonymization scan</b><br>` +
-    `<span style="color:var(--muted);font-size:11px">Scans paper/ for author ` +
-    `names, affiliations, GitHub URLs. v1 is a simple grep against the ` +
-    `authors_json in PaperMeta.</span></div>` +
-    `<div class="ver-row" style="margin-bottom:6px"><b>2. Reproducibility checklist</b><br>` +
-    `<span style="color:var(--muted);font-size:11px">Author Agent will ` +
-    `generate this section if not present. Review before submit.</span></div>` +
-    `<div class="ver-row" style="margin-bottom:6px"><b>3. Bundle to .zip</b><br>` +
-    `<span style="color:var(--muted);font-size:11px">PDF + tex source + ` +
-    `figures + supplementary + code-link.</span></div>` +
+    `OpenReview / CMT. arXiv upload is manual for now.</div>` +
+    `<div class="sb-check" id="sb-anon">` +
+      `<div class="sb-check-h"><span class="sb-num">1</span><b>Anonymization scan</b>` +
+        `<span class="sb-status" id="sb-anon-st">checking…</span></div>` +
+      `<div class="sb-check-bd" id="sb-anon-bd">scanning paper/ for author names, ` +
+        `affiliations, GitHub URLs, \\thanks blocks, ORCID…</div>` +
     `</div>` +
-    `<div class="modal-actions"><button class="btn" id="sb-cancel">Close</button>` +
-    `<button class="btn pri" id="sb-pin">Pin v-submitted + download bundle</button></div>`;
+    `<div class="sb-check" id="sb-pages">` +
+      `<div class="sb-check-h"><span class="sb-num">2</span><b>Page count</b>` +
+        `<span class="sb-status" id="sb-pages-st">checking…</span></div>` +
+      `<div class="sb-check-bd" id="sb-pages-bd">counting pages in current PDF…</div>` +
+    `</div>` +
+    `<div class="sb-check" id="sb-pdf">` +
+      `<div class="sb-check-h"><span class="sb-num">3</span><b>PDF compiled?</b>` +
+        `<span class="sb-status" id="sb-pdf-st">checking…</span></div>` +
+      `<div class="sb-check-bd" id="sb-pdf-bd">…</div>` +
+    `</div>` +
+    `<div class="modal-actions">` +
+      `<button class="btn" id="sb-cancel">Close</button>` +
+      `<button class="btn pri" id="sb-bundle" disabled>Bundle .zip & pin v-submitted</button>` +
+    `</div>`;
   sc.append(m); document.body.append(sc);
   sc.onclick = e => { if (e.target === sc) sc.remove(); };
   m.querySelector('#sbx').onclick = () => sc.remove();
   m.querySelector('#sb-cancel').onclick = () => sc.remove();
-  m.querySelector('#sb-pin').onclick = async () => {
-    await post('/paper/versions/pin', { label: 'v-submitted' });
-    await aruiAlert(
-      'Version pinned as "v-submitted". The bundle endpoint is wired up ' +
-      'but the ZIP packager itself is a v1.5 item — for now, download the ' +
-      'PDF via the header button and grab the source from paper/ on the ' +
-      'node directly.',
-      { title: 'Version pinned' });
-    sc.remove();
+  // Fire the three checks in parallel.
+  const setCheck = (id, status, text) => {
+    const st = m.querySelector(`#${id}-st`); const bd = m.querySelector(`#${id}-bd`);
+    if (st) st.className = `sb-status ${status}`;
+    if (st) st.textContent = { ok: '✓ pass', warn: '⚠ warn', fail: '✗ fail', running: '…' }[status] || status;
+    if (bd) bd.innerHTML = text;
+  };
+  const blocking = { anon: true, pages: false, pdf: true };  // bundle gated by these
+  const results = {};
+  await Promise.all([
+    (async () => {
+      try {
+        const r = await post('/paper/submit/anonymize_check', {});
+        results.anon = r;
+        if (r.ok) setCheck('sb-anon', 'ok', `No de-anon findings (${r.files_scanned||0} files scanned).`);
+        else setCheck('sb-anon', 'fail',
+          `<b>${r.findings.length} de-anon findings</b> across ${r.files_scanned} files. ` +
+          `<details><summary>Show first 12</summary>` +
+          r.findings.slice(0,12).map(f => `<div class="mono" style="font-size:11px;color:var(--text-2)">${esc(f.path)}:${f.line} — ${esc(f.kind)} → <span style="color:var(--bad)">${esc(f.match)}</span></div>`).join('') +
+          `</details>`);
+      } catch (e) { results.anon = {ok:false}; setCheck('sb-anon','fail','anonymize_check failed: '+e); }
+    })(),
+    (async () => {
+      try {
+        const r = await api('/paper/submit/page_count');
+        results.pages = r;
+        const n = r.pages || 0;
+        if (!n) setCheck('sb-pages','warn','Could not determine page count (pdfinfo missing?).');
+        else if (n > 12) setCheck('sb-pages','warn',`${n} pages — most venues require 9-10 main + refs.`);
+        else setCheck('sb-pages','ok',`${n} pages.`);
+      } catch (e) { setCheck('sb-pages','warn','page count check skipped'); }
+    })(),
+    (async () => {
+      try {
+        const r = await api('/paper/build_log');
+        results.pdf = r;
+        if (r && r.pdf_exists) setCheck('sb-pdf','ok','PDF on disk and ready.');
+        else setCheck('sb-pdf','fail','No PDF compiled. Click Rebuild on the viewer first.');
+      } catch (e) { setCheck('sb-pdf','fail','/paper/build_log failed'); }
+    })(),
+  ]);
+  const canBundle = (results.anon && results.anon.ok) && (results.pdf && results.pdf.pdf_exists);
+  const bundleBtn = m.querySelector('#sb-bundle');
+  bundleBtn.disabled = !canBundle;
+  bundleBtn.title = canBundle ? '' : 'Fix the failing checks first.';
+  bundleBtn.onclick = async () => {
+    bundleBtn.disabled = true; bundleBtn.textContent = 'Bundling…';
+    try {
+      const r = await post('/paper/submit/bundle', {});
+      if (r.ok) {
+        await aruiAlert(
+          `Bundle written to ${r.zip} (${(r.size_bytes/1024).toFixed(0)} KB). ` +
+          `Version pinned: ${r.version_id}. Download from the node: paper/${r.zip}`,
+          { title: 'Submission bundled' });
+        sc.remove();
+      } else {
+        bundleBtn.disabled = false; bundleBtn.textContent = 'Bundle .zip & pin v-submitted';
+        aruiAlert('Bundle failed: ' + (r.detail || 'unknown'), { title: 'Bundle error' });
+      }
+    } catch (e) {
+      bundleBtn.disabled = false; bundleBtn.textContent = 'Bundle .zip & pin v-submitted';
+      aruiAlert('Bundle failed: ' + e, { title: 'Bundle error' });
+    }
   };
 }
 
@@ -2851,16 +3974,252 @@ function renderSystem(c) {
       ['Uptime', d.uptime_sec != null ? fmtUptime(d.uptime_sec) : '—'],
       ['API latency', latency + ' ms'],
     ];
+    const warns = d.warnings || [];
+    const warnsHtml = warns.length
+      ? '<div class="sys-warns">' + warns.map(w =>
+          `<div class="sys-warn sys-warn-${esc(w.severity)}">` +
+          `<b>${esc(w.severity)}</b> ${esc(w.msg)}</div>`).join('') +
+        '</div>'
+      : '';
     c.querySelector('.sys-wrap').innerHTML =
+      warnsHtml +
       `<div class="sys-sec">GPUs (${gpus.length})</div>` +
       `<div class="sys-gpus">${gpuCards ||
         '<div class="empty2">no GPU data</div>'}</div>` +
       `<div class="sys-sec">Host</div><div class="sys-cards">` +
       cards.map(([k, v]) => `<div class="sys-card"><div class="k">${k}` +
-        `</div><div class="v">${esc(v)}</div></div>`).join('') + '</div>';
+        `</div><div class="v">${esc(v)}</div></div>`).join('') + '</div>' +
+      '<div class="sys-sec">Maintenance</div>' +
+      '<div class="sys-maint">' +
+      '<p class="sys-maint-help">' +
+      'Reclaim disk by deleting stdout/stderr logs and checkpoints for runs ' +
+      'older than 2 days AND in the bottom half by your metric. Run rows, ' +
+      'headline metrics, and council reviews stay intact.</p>' +
+      '<button class="btn pri" id="sys-purge">Purge old run logs…</button>' +
+      '<span class="sys-purge-status"></span>' +
+      '</div>' +
+      '<div class="sys-maint">' +
+      '<p class="sys-maint-help">' +
+      '<b>Aggressive:</b> keep only the SOTA (best-metric) run\'s ' +
+      'checkpoint, delete every other run\'s artifacts (logs + .pt files). ' +
+      'Run rows + headline metrics + reviews stay — only the bulky ' +
+      'on-disk state goes away. Use when disk is critical.</p>' +
+      '<button class="btn pri" id="sys-purge-sota">Keep SOTA only…</button>' +
+      '<span class="sys-purge-sota-status"></span>' +
+      '</div>';
+    const pb = c.querySelector('#sys-purge');
+    if (pb) pb.onclick = () => openPurgeOldRunLogs(c);
+    const pbs = c.querySelector('#sys-purge-sota');
+    if (pbs) pbs.onclick = () => openPurgeKeepSotaOnly(c);
   };
   tick();
   addTimer(setInterval(tick, 4000));
+}
+
+/* Modal: preview which runs would be purged, confirm, then run cleanup.
+ * Lives on the System Stats page since that's where the user notices the
+ * disk-full pain first. The age + bottom-percent sliders let the user
+ * relax the filter when the default 2-day rule frees nothing because all
+ * their runs are recent. */
+async function openPurgeOldRunLogs(sysContainer) {
+  const sc = el('div', 'mscrim');
+  const m  = el('div', 'modal');
+  m.innerHTML = '<div class="skel" style="height:240px"></div>';
+  sc.append(m); document.body.append(sc);
+  sc.onclick = e => { if (e.target === sc) sc.remove(); };
+  const state = { age: 2, pct: 0.5, preview: null };
+  const mb = b => (b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB'
+    : (b / 1e6).toFixed(1) + ' MB');
+  const render = () => {
+    const p = state.preview;
+    const rows = !p ? '' : (p.runs || []).slice(0, 30).map(r =>
+      `<tr><td class="mono">${esc(r.name)}</td>` +
+      `<td>${esc(r.status)}</td>` +
+      `<td class="r">${r.headline_metric != null
+        ? r.headline_metric.toFixed(4) : '—'}</td>` +
+      `<td class="r mono">${mb(r.log_bytes)}</td></tr>`).join('');
+    const more = p && (p.runs || []).length > 30
+      ? `<p class="modal-sub">…and ${(p.runs || []).length - 30} more.</p>`
+      : '';
+    const tbl = !p
+      ? '<div class="skel" style="height:120px"></div>'
+      : (rows
+          ? `<table class="modal-tbl">` +
+            `<thead><tr><th>Run</th><th>Status</th><th>Metric</th>` +
+            `<th>Reclaim</th></tr></thead>` +
+            `<tbody>${rows}</tbody></table>` + more
+          : '<div class="empty2">Nothing eligible at these thresholds. ' +
+            'Try lowering the days threshold.</div>');
+    const headline = !p
+      ? '<p class="modal-sub">computing…</p>'
+      : `<p class="modal-sub">Would delete artifacts for <b>${p.eligible}</b> ` +
+        `run${p.eligible === 1 ? '' : 's'}, freeing about ` +
+        `<b>${mb(p.bytes_freeable)}</b>. ` +
+        'Run rows, headline metrics, and council reviews are KEPT — only ' +
+        'on-disk artifacts (stdout, checkpoints, sample dirs) are removed.</p>';
+    m.innerHTML =
+      '<div class="modal-hd"><h2>Purge old run logs &amp; checkpoints</h2>' +
+      '<button class="iconbtn" id="pp-x">✕</button></div>' +
+      headline +
+      '<div class="pp-controls">' +
+        '<label class="pp-ctrl">Min age: ' +
+        `<select id="pp-age">` +
+          [0.5, 1, 2, 3, 7, 14, 30].map(v =>
+            `<option value="${v}"${v === state.age ? ' selected' : ''}>` +
+            `${v < 1 ? (v * 24) + 'h' : v + 'd'}</option>`).join('') +
+        '</select></label>' +
+        '<label class="pp-ctrl">Bottom: ' +
+        `<select id="pp-pct">` +
+          [0.25, 0.5, 0.75, 0.9].map(v =>
+            `<option value="${v}"${v === state.pct ? ' selected' : ''}>` +
+            `${Math.round(v * 100)}%</option>`).join('') +
+        '</select></label>' +
+      '</div>' +
+      tbl +
+      '<div class="modal-actions">' +
+      `<button class="btn pri" id="pp-go"${p && p.eligible ? '' : ' disabled'}>` +
+      (p ? `Delete ${p.eligible} run${p.eligible === 1 ? '' : 's'} · ` +
+            `${mb(p.bytes_freeable)}` : 'Delete') + '</button>' +
+      '<button class="btn" id="pp-cancel">Cancel</button>' +
+      '<span class="set-status" id="pp-st"></span>' +
+      '</div>';
+    m.querySelector('#pp-x').onclick      = () => sc.remove();
+    m.querySelector('#pp-cancel').onclick = () => sc.remove();
+    m.querySelector('#pp-age').onchange   = e => {
+      state.age = parseFloat(e.target.value); loadPreview(); };
+    m.querySelector('#pp-pct').onchange   = e => {
+      state.pct = parseFloat(e.target.value); loadPreview(); };
+    const go = m.querySelector('#pp-go');
+    if (go && !go.disabled) {
+      go.onclick = async () => {
+        const confirmed = await aruiConfirm(
+          `Permanently delete on-disk artifacts (logs + checkpoints) for ` +
+          `${p.eligible} runs? Reclaims about ${mb(p.bytes_freeable)}. ` +
+          `Headline metrics and reviews are kept.`,
+          { title: 'Purge old run artifacts?', danger: true,
+            okText: `Delete ${p.eligible} runs` });
+        if (!confirmed) return;
+        go.disabled = true; go.textContent = 'Deleting…';
+        const st = m.querySelector('#pp-st');
+        try {
+          const r = await post('/runs/cleanup',
+            { min_age_days: state.age, bottom_pct: state.pct });
+          st.textContent = `  freed ${mb(r.bytes_freed || 0)} ` +
+            `(${r.deleted} run${r.deleted === 1 ? '' : 's'})  ✓`;
+          st.style.color = 'var(--ok)';
+          go.textContent = 'Done';
+          const sps = sysContainer
+            && sysContainer.querySelector('.sys-purge-status');
+          if (sps) {
+            sps.textContent = `  freed ${mb(r.bytes_freed || 0)}`;
+            sps.style.color = 'var(--ok)';
+          }
+          setTimeout(() => sc.remove(), 1700);
+        } catch (e) {
+          st.textContent = '  failed: ' + esc(e);
+          st.style.color = 'var(--bad)';
+          go.disabled = false; go.textContent = 'Retry';
+        }
+      };
+    }
+  };
+  const loadPreview = async () => {
+    state.preview = null;
+    render();
+    try {
+      state.preview = await api(
+        `/runs/cleanup/preview?min_age_days=${state.age}` +
+        `&bottom_pct=${state.pct}`);
+    } catch (e) {
+      m.innerHTML = '<p>Preview failed: ' + esc(e) + '</p>';
+      return;
+    }
+    render();
+  };
+  loadPreview();
+}
+
+/* Modal: keep ONLY the SOTA (best-metric) run's checkpoint, blow away
+ * every other run's on-disk state. The DB row + metric + reviews stay,
+ * so Analysis / Lessons keep working. This is the "I'm out of disk
+ * NOW" button. */
+async function openPurgeKeepSotaOnly(sysContainer) {
+  const sc = el('div', 'mscrim');
+  const m  = el('div', 'modal');
+  m.innerHTML = '<div class="skel" style="height:240px"></div>';
+  sc.append(m); document.body.append(sc);
+  sc.onclick = e => { if (e.target === sc) sc.remove(); };
+  const mb = b => (b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB'
+    : (b / 1e6).toFixed(1) + ' MB');
+  let p;
+  try { p = await api('/runs/cleanup/preview_sota'); }
+  catch (e) { m.innerHTML = '<p>Preview failed: ' + esc(e) + '</p>'; return; }
+  const kept = (p.kept_run_ids || []).slice(0, 4).join(', ') +
+               (p.kept_run_ids && p.kept_run_ids.length > 4
+                 ? ', …' : '');
+  const rows = (p.runs || []).slice(0, 30).map(r =>
+    `<tr><td class="mono">${esc(r.name)}</td>` +
+    `<td>${esc(r.status)}</td>` +
+    `<td class="r">${r.headline_metric != null
+      ? r.headline_metric.toFixed(4) : '—'}</td>` +
+    `<td class="r mono">${mb(r.log_bytes)}</td></tr>`).join('');
+  const more = (p.runs || []).length > 30
+    ? `<p class="modal-sub">…and ${(p.runs || []).length - 30} more.</p>` : '';
+  m.innerHTML =
+    '<div class="modal-hd"><h2>Keep SOTA only · purge the rest</h2>' +
+    '<button class="iconbtn" id="ps-x">✕</button></div>' +
+    `<p class="modal-sub">Would delete artifacts for <b>${p.eligible}</b> ` +
+    `run${p.eligible === 1 ? '' : 's'}, freeing about ` +
+    `<b>${mb(p.bytes_freeable)}</b>. ` +
+    'Run rows, metrics, and reviews are kept — only on-disk artifacts ' +
+    '(stdout, .pt checkpoints, output dirs) are removed. ' +
+    `Kept runs: <code>${esc(kept || 'none yet')}</code>.</p>` +
+    (rows ? `<table class="modal-tbl">` +
+      `<thead><tr><th>Run</th><th>Status</th><th>Metric</th>` +
+      `<th>Reclaim</th></tr></thead>` +
+      `<tbody>${rows}</tbody></table>` + more
+      : '<div class="empty2">Nothing on disk except the SOTA. Trim!</div>') +
+    '<div class="modal-actions">' +
+    `<button class="btn pri" id="ps-go"${p.eligible ? '' : ' disabled'}>` +
+    `Delete ${p.eligible} run${p.eligible === 1 ? '' : 's'} · ` +
+    `${mb(p.bytes_freeable)}</button>` +
+    '<button class="btn" id="ps-cancel">Cancel</button>' +
+    '<span class="set-status" id="ps-st"></span>' +
+    '</div>';
+  m.querySelector('#ps-x').onclick      = () => sc.remove();
+  m.querySelector('#ps-cancel').onclick = () => sc.remove();
+  const go = m.querySelector('#ps-go');
+  if (go && !go.disabled) {
+    go.onclick = async () => {
+      const confirmed = await aruiConfirm(
+        `Permanently delete on-disk artifacts (logs + checkpoints) for ` +
+        `${p.eligible} runs, keeping only the SOTA? Reclaims about ` +
+        `${mb(p.bytes_freeable)}. Metrics and reviews are preserved.`,
+        { title: 'Keep SOTA only?', danger: true,
+          okText: `Yes, purge ${p.eligible} runs` });
+      if (!confirmed) return;
+      go.disabled = true; go.textContent = 'Deleting…';
+      const st = m.querySelector('#ps-st');
+      try {
+        const r = await post('/runs/cleanup_sota', {});
+        st.textContent = `  freed ${mb(r.bytes_freed || 0)} ` +
+          `(${r.deleted} run${r.deleted === 1 ? '' : 's'})  ✓`;
+        st.style.color = 'var(--ok)';
+        go.textContent = 'Done';
+        const sps = sysContainer
+          && sysContainer.querySelector('.sys-purge-sota-status');
+        if (sps) {
+          sps.textContent = `  freed ${mb(r.bytes_freed || 0)}`;
+          sps.style.color = 'var(--ok)';
+        }
+        setTimeout(() => sc.remove(), 1700);
+      } catch (e) {
+        st.textContent = '  failed: ' + esc(e);
+        st.style.color = 'var(--bad)';
+        go.disabled = false; go.textContent = 'Retry';
+      }
+    };
+  }
 }
 
 /* ── authorized_keys ──────────────────────────────────────────────────── */
@@ -4413,15 +5772,128 @@ function openEditPanelModal(c, p) {
 }
 
 /* ── boot ─────────────────────────────────────────────────────────────── */
+
+/* Read-only paper share viewer. Rendered when the URL is /p/<token>. */
+async function renderShareViewer(token) {
+  const app = document.getElementById('app');
+  app.innerHTML = '<div class="skel" style="margin:20px;height:80vh"></div>';
+  let d;
+  try { d = await fetch('/api/paper/share/' + encodeURIComponent(token))
+    .then(r => r.json()); }
+  catch (e) { app.innerHTML =
+    '<div class="empty2" style="margin:40px">Share viewer error: ' +
+    esc(e) + '</div>'; return; }
+  if (!d || !d.ok) {
+    app.innerHTML =
+      '<div class="share-wrap"><div class="share-hd">' +
+      '<div class="share-brand">autoresearcher<span>UI</span></div>' +
+      '<div class="share-sub">read-only paper share</div></div>' +
+      '<div class="empty2" style="margin:30px 18px">' +
+      esc((d && d.detail) || 'invalid or revoked share link') + '</div></div>';
+    return;
+  }
+  const claimsHtml = (d.claims || []).map(c =>
+    '<div class="share-claim"><div class="share-claim-hd">' +
+    '<span class="share-claim-st share-claim-st-' + esc(c.status) + '">' +
+    esc(c.status) + '</span><b>' + esc(c.title) + '</b></div>' +
+    (c.summary_md
+      ? '<div class="share-claim-body">' + esc(c.summary_md) + '</div>'
+      : '') + '</div>').join('') ||
+    '<div class="empty2">no claims yet</div>';
+  const decsHtml = (d.decisions || []).slice(0, 12).map(x =>
+    '<div class="share-dec"><span class="share-dec-kind">' +
+    esc((x.kind || '').replace(/_/g, ' ')) + '</span>' +
+    '<span class="share-dec-src">' + esc(x.source || '') + '</span>' +
+    '<div class="share-dec-title">' + esc(x.title || '') + '</div></div>'
+  ).join('') || '<div class="empty2">inbox zero — author is working</div>';
+  const secsHtml = (d.sections || []).map(s =>
+    '<div class="share-sec"><span class="share-sec-st share-sec-st-' +
+    esc(s.status) + '">' + esc(s.status) + '</span>' +
+    esc(s.title || s.slug) + '</div>').join('') ||
+    '<div class="empty2">no sections drafted yet</div>';
+  app.innerHTML =
+    '<div class="share-wrap">' +
+    '<div class="share-hd">' +
+    '<div class="share-brand">autoresearcher<span>UI</span></div>' +
+    '<div class="share-sub">' + esc(d.venue || 'paper share') +
+    (d.days_till_deadline != null
+      ? ' · ' + d.days_till_deadline.toFixed(1) + ' days to deadline'
+      : '') + '</div>' +
+    '</div>' +
+    (d.has_pdf
+      ? '<div class="share-pdf"><iframe src="/api/paper/share/' +
+        encodeURIComponent(token) + '/pdf" frameborder="0"></iframe>' +
+        '<a class="btn pri" href="/api/paper/share/' +
+        encodeURIComponent(token) + '/pdf" download>Download PDF</a></div>'
+      : '<div class="empty2" style="margin:20px 0">PDF not built yet</div>') +
+    '<div class="share-sec-hd">Claims</div>' + claimsHtml +
+    '<div class="share-sec-hd">Decisions waiting on the author</div>' +
+    decsHtml +
+    '<div class="share-sec-hd">Section status</div>' + secsHtml +
+    '<div class="share-foot">read-only · powered by ' +
+    '<b>autoresearcher<span style="color:#6366F1">UI</span></b></div>' +
+    '</div>';
+}
+
+/* Login screen — rendered when the backend says a passcode is set
+ * and the current request is not authenticated. */
+function renderLogin() {
+  const app = document.getElementById('app');
+  app.innerHTML =
+    '<div class="login-wrap">' +
+    '<div class="login-card">' +
+    '<div class="login-brand">autoresearcher<span>UI</span></div>' +
+    '<div class="login-sub">enter your passcode</div>' +
+    '<input id="login-pc" type="password" class="login-input" ' +
+    'autocomplete="current-password" placeholder="passcode">' +
+    '<button class="btn pri" id="login-go">Unlock</button>' +
+    '<div class="login-err" id="login-err"></div>' +
+    '</div></div>';
+  const inp = app.querySelector('#login-pc');
+  const err = app.querySelector('#login-err');
+  const go  = app.querySelector('#login-go');
+  inp.focus();
+  const submit = async () => {
+    err.textContent = '';
+    go.disabled = true; go.textContent = 'Checking…';
+    try {
+      const r = await fetch('/api/passcode/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ passcode: inp.value }) }).then(r => r.json());
+      if (r && r.ok) { location.reload(); return; }
+      err.textContent = (r && r.detail) || 'wrong passcode';
+    } catch (e) { err.textContent = String(e); }
+    go.disabled = false; go.textContent = 'Unlock';
+  };
+  go.onclick = submit;
+  inp.onkeydown = e => { if (e.key === 'Enter') submit(); };
+}
+
 async function boot() {
   document.getElementById('app').innerHTML =
     '<div class="skel" style="margin:20px;height:90vh"></div>';
+  // Share-viewer URL takes precedence over everything else (no login).
+  if (window.location.pathname.startsWith('/p/')) {
+    const tok = window.location.pathname.split('/').filter(Boolean)[1] || '';
+    renderShareViewer(tok); return;
+  }
+  // Passcode gate
+  try {
+    const pc = await fetch('/api/passcode/check').then(r => r.json());
+    if (pc && pc.enabled && !pc.authed) { renderLogin(); return; }
+  } catch (e) { /* gate down → fall through */ }
   const project = await api('/project');
   if (!project || !project.name) { onboarding(); return; }
   const [runs, ideas, events, chat, gpus, mode] = await Promise.all([
     api('/runs'), api('/ideas'), api('/events'), api('/chat'),
     api('/gpus'), api('/mode').catch(() => ({ mode: 'research' }))]);
   Object.assign(S, { project, runs, ideas, events, chat, gpus, mode });
+  // Honor the URL on first paint: /write-paper → 'latex', etc.
+  const startView = viewFromPath(window.location.pathname);
+  if (startView) S.view = startView;
+  // Make sure the URL matches the view we ended up on (so back-button works).
+  try { history.replaceState({ view: S.view }, '',
+    VIEW_TO_PATH[S.view] || '/'); } catch (e) {}
   render(); streams();
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') closeDrawer();

@@ -250,21 +250,211 @@ def _call(model: str, system: str, user: str) -> str:
     raise RuntimeError(f"unknown provider {prov}")
 
 
-def _send_to_agent(text: str) -> bool:
-    """Type a line into the agent's tmux session (same as user chat)."""
+def _send_to_agent(text: str, session: str = "agent") -> bool:
+    """Type a line into the agent's tmux session (same as user chat).
+    `session` lets paper-mode nags target the author tmux instead."""
     try:
-        subprocess.run(["tmux", "send-keys", "-t", "agent", "-l", text],
+        subprocess.run(["tmux", "send-keys", "-t", session, "-l", text],
                        capture_output=True, timeout=8)
-        subprocess.run(["tmux", "send-keys", "-t", "agent", "Enter"],
+        subprocess.run(["tmux", "send-keys", "-t", session, "Enter"],
                        capture_output=True, timeout=8)
         return True
     except Exception:
         return False
 
 
+# ── paper-mode context + system prompt ────────────────────────────────
+
+
+def _build_paper_context() -> dict:
+    """Snapshot what the author agent SHOULD be working on right now."""
+    from . import paper as _paper
+    db = SessionLocal()
+    try:
+        from .models import (PaperClaim, PaperMeta, PaperDecision)
+        meta = db.query(PaperMeta).first()
+        claims = [c.dict() for c in db.query(PaperClaim).all()]
+        # All paper runs grouped by status
+        prs = db.query(Run).filter(Run.context == "paper").all()
+        by_status: dict[str, int] = {}
+        for r in prs:
+            by_status[r.status] = by_status.get(r.status, 0) + 1
+        # Last few finished — with metric
+        recent_done = []
+        for r in sorted([r for r in prs if r.status in
+                         ("kept", "success", "done", "crashed")],
+                        key=lambda x: x.ended_at or "", reverse=True)[:8]:
+            recent_done.append({
+                "id": r.id, "name": r.run_name, "status": r.status,
+                "metric": r.headline_metric,
+                "ended_at": r.ended_at,
+                "claim_id": r.paper_claim_id,
+                "dataset": (r.config or {}).get("dataset", "?")
+                            if isinstance(r.config, dict) else "?",
+            })
+        # GPU state
+        gpus = db.query(Gpu).order_by(Gpu.index).all()
+        idle_gpus = sum(1 for g in gpus
+                         if (g.util_pct or 0) < 5 and (g.vram_used_mb or 0) < 600)
+        # Author terminal tail (so PI can see what author is doing)
+        try:
+            ar = subprocess.run(
+                ["tmux", "capture-pane", "-t", "author", "-p", "-S", "-80"],
+                capture_output=True, text=True, timeout=8)
+            author_tail = (ar.stdout or "").strip()[-3000:]
+        except Exception:
+            author_tail = ""
+        # Decisions pending
+        decisions = db.query(PaperDecision).filter(
+            PaperDecision.status == "pending").count()
+        # Recent paper events
+        cutoff = (dt.datetime.now(dt.timezone.utc)
+                  - dt.timedelta(hours=4)).isoformat()
+        evs = (db.query(Event)
+               .filter(Event.created_at >= cutoff,
+                       Event.type.in_(("run_started", "run_finished",
+                                       "run_failed", "build_finished",
+                                       "decision_added", "claim_updated")))
+               .order_by(Event.created_at.desc()).limit(30).all())
+        recent_events = [{"type": e.type, "msg": e.message, "at": e.created_at}
+                          for e in evs]
+        # Build status (LaTeX)
+        from . import paper_compile
+        bs = paper_compile.status() or {}
+    finally:
+        db.close()
+    return {
+        "now": _iso(),
+        "mode": "paper",
+        "venue": (meta.venue if meta else ""),
+        "deadline_iso": (meta.deadline_iso if meta else ""),
+        "days_till_deadline": _paper.days_till_deadline(),
+        "phase": (meta.phase if meta else ""),
+        "n_claims": len(claims),
+        "claims": [{
+            "id": c["id"], "title": c["title"],
+            "status": c.get("status"),
+            "evidence_strength": c.get("evidence_strength"),
+            "ready": c.get("ready"),
+        } for c in claims],
+        "paper_runs_by_status": by_status,
+        "recent_finished_runs": recent_done,
+        "gpus_total": len(gpus),
+        "gpus_idle": idle_gpus,
+        "pending_decisions": decisions,
+        "build_status": {
+            "pdf_exists": bs.get("pdf_exists"),
+            "ok": bs.get("ok"),
+            "log_tail": (bs.get("log") or "")[-300:],
+        },
+        "recent_paper_events": recent_events,
+        "author_tail": author_tail,
+    }
+
+
+SYSTEM_PAPER = """You are the PI for an autonomous paper-writing project.
+The Author Agent (an autonomous Claude Code loop in tmux 'author') is
+driving the paper to submission — queueing ablation runs, killing
+divergers, integrating results, writing LaTeX. You wake up periodically,
+read what's happening, and nudge the Author Agent if it's drifting.
+
+You do NOT run experiments. You do NOT touch LaTeX. You type SHORT,
+ACTIONABLE messages into the author's tmux.
+
+NUDGE the Author Agent if you see:
+  - Paper runs finished in the last hour but no commits to paper/ →
+    "integrate the new results from run X into section Y and recompile".
+  - A claim has 0 supporting runs queued or completed →
+    "queue ablations for claim Z (use /paper/runs/queue)".
+  - GPUs idle in paper mode (no queued runs) →
+    "queue more ablations — N GPUs sitting idle".
+  - Crashed paper runs not investigated →
+    "investigate why pr-XXX crashed; either fix the cmd and re-queue
+     or kill the underlying claim".
+  - Single dataset only — the project supports multiple but author only
+    used one → "expand validation to dataset Y for claim Z".
+  - Latex hasn't compiled in N hours / build is stale →
+    "fix the compile error and recompile".
+  - Deadline is close and main.tex still has placeholder content →
+    "draft a real section for X before EOD".
+  - Recent ensemble result is strong but author has not yet built the
+    follow-up combination → "try the n=3 ensemble (s5+s2+s37)".
+
+DO NOT nudge if everything looks healthy. Be sparing.
+
+Return JSON ONLY, no markdown:
+{
+  "concerns": "<1-3 sentence summary, or 'OK.'>",
+  "messages": ["<one-line nudge>", ...]  // 0-3 items
+}
+Each nudge must be concrete — name the run id, the claim id, the
+section, the specific action. Vague nudges get ignored."""
+
+
+def cycle_paper(force: bool = False) -> dict | None:
+    """PI cycle for paper mode — nags the author agent."""
+    cfg = _settings()
+    if not cfg.get("pi_agent_enabled", True) and not force:
+        return None
+    model = (cfg.get("pi_agent_model") or DEFAULTS["pi_agent_model"]).strip()
+    if not _provider_for(model):
+        print(f"[pi/paper] no API key for {model}; skipping", flush=True)
+        return None
+    ctx = _build_paper_context()
+    user = ("Current state of the paper-writing project. Decide if the "
+            "author agent needs a nudge. JSON only.\n\n"
+            + json.dumps(ctx, indent=2, default=str))
+    try:
+        text = _call(model, SYSTEM_PAPER, user)
+    except Exception as e:
+        print(f"[pi/paper] call failed: {e}", flush=True)
+        return None
+    out = council._safe_parse(text)
+    if not out:
+        return None
+    concerns = (out.get("concerns") or "").strip()
+    messages = [m for m in (out.get("messages") or []) if m]
+    sent = 0
+    for m in messages[:3]:
+        if _send_to_agent(m, session="author"):
+            sent += 1
+            time.sleep(0.5)
+    db = SessionLocal()
+    try:
+        db.add(ChatMessage(
+            id="cm-" + os.urandom(4).hex(),
+            role="agent",
+            content=("[PI · " + model + " · paper-mode]  " + concerns +
+                     (("\n\nNudges to author:\n  • "
+                       + "\n  • ".join(messages))
+                      if messages else "")),
+            created_at=_iso()))
+        db.add(Event(
+            id="ev-" + os.urandom(4).hex(),
+            type="pi_intervention", severity="info",
+            actor="pi:paper:" + model,
+            message=(concerns or "PI checked in (paper)")[:280],
+            created_at=_iso()))
+        db.commit()
+    finally:
+        db.close()
+    try: bus.publish("events", "runs_changed", {})
+    except Exception: pass
+    print(f"[pi/paper] {concerns!r}  sent={sent}", flush=True)
+    return {"mode": "paper", "concerns": concerns,
+            "messages_sent": sent, "model": model}
+
+
 def cycle(force: bool = False) -> dict | None:
-    """Run one PI cycle. Returns the decision dict, or None if disabled /
-    failed."""
+    """Run one PI cycle. Branches on project mode — paper mode delegates
+    to cycle_paper() which nags the author agent instead."""
+    # Mode check: if we're in paper mode, take the paper-mode branch.
+    try:
+        from . import paper as _paper
+        if _paper.project_mode() == "paper":
+            return cycle_paper(force=force)
+    except Exception:
+        pass
     cfg = _settings()
     if not cfg.get("pi_agent_enabled", True) and not force:
         return None

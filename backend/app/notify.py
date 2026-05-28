@@ -546,9 +546,20 @@ def _run_cards_html(runs, metric_name: str, baseline: float | None) -> str:
 def digest_email(window_hours: float):
     """Build the full (subject, text, html, images) for a periodic digest.
 
-    Rebuilt to surface Summary-style content: per-finished-run cards with
-    status icon, what/why, the council's learning, and metric vs baseline.
-    A fresh progress chart is rendered AT SEND TIME from current DuckDB."""
+    Branches on the project's current mode: paper-mode authors get a
+    DIFFERENT digest (claims, decisions waiting, draft status) instead of
+    the research-mode "what we tried" feed. Either way, the system-stats
+    block (disk / RAM / GPU + warnings like low disk) is appended at the
+    bottom so the user sees infra issues without opening the UI."""
+    try:
+        from . import paper as _paper
+        if _paper.project_mode() == "paper":
+            return _paper_digest_email(window_hours)
+    except Exception as e:                              # noqa: BLE001
+        # If paper mode lookup fails for any reason, fall back to the
+        # research digest — never lose the digest entirely.
+        print(f"[notify] paper mode check failed, "
+              f"defaulting to research digest: {e}", flush=True)
     subject, text = summary_text(window_hours)
     if not subject:
         return None, None, None, None
@@ -608,6 +619,8 @@ def digest_email(window_hours: float):
     body += _section("Next on deck", ideas[:8])
     if "losses" in images:
         body += _img("losses", "Recent training curves")
+    body += _system_stats_block()
+    text += "\n\n" + _system_stats_text()
     html = _shell(f"{window_hours:g}h digest — {pname}", body,
                   _dashboard_url(_cfg()))
     return subject, text, html, images
@@ -621,6 +634,469 @@ def send_digest_now() -> bool:
     if not subject:
         return False
     return send(subject, text, html, images)
+
+
+# ─────────────────────── system stats block (both modes) ──────────────────
+
+
+_SEV_COLOR = {"critical": "#F43F5E", "warning": "#F59E0B", "info": "#6366F1"}
+
+
+def _system_snapshot() -> tuple[dict, list[dict]]:
+    """Pull the cached host stats + active warnings from monitor/maintenance.
+    Safe for both modes; returns ({stats}, [warnings])."""
+    try:
+        from . import monitor, maintenance
+        return monitor.system_stats(), maintenance.system_warnings()
+    except Exception as e:                              # noqa: BLE001
+        print(f"[notify] system snapshot unavailable: {e}", flush=True)
+        return {}, []
+
+
+def _system_stats_text() -> str:
+    """Plain-text version of the host snapshot for the email's text/plain
+    alternative."""
+    s, warns = _system_snapshot()
+    if not s:
+        return ""
+    L = ["== Node ==",
+         f"  CPU:   {s.get('cpu_percent', '?')}%   "
+         f"load {' '.join(str(x) for x in s.get('loadavg', []))}"]
+    ram = s.get("ram") or {}
+    if ram.get("total_gb"):
+        L.append(f"  RAM:   {ram.get('used_gb','?')}/{ram['total_gb']} GB "
+                 f"({ram.get('percent','?')}%)")
+    disk = s.get("disk") or {}
+    if disk.get("total_gb"):
+        L.append(f"  Disk:  {disk.get('used_gb','?')}/{disk['total_gb']} GB "
+                 f"({disk.get('percent','?')}%)   "
+                 f"free {disk.get('free_gb','?')} GB")
+    gpus = s.get("gpus") or []
+    if gpus:
+        L.append(f"  GPUs:  {len(gpus)}  "
+                 + "  ".join(f"#{g.get('index')}:"
+                              f"{int(g.get('util_pct') or 0)}%/"
+                              f"{int(g.get('temp_c') or 0)}°C"
+                              for g in gpus))
+    if warns:
+        L.append("")
+        L.append("⚠ Warnings:")
+        for w in warns:
+            L.append(f"  [{w['severity']}] {w['msg']}")
+    return "\n".join(L)
+
+
+def _system_stats_block() -> str:
+    """Compact HTML block reporting disk / RAM / GPU plus warnings (low disk,
+    hot GPU). Always emitted at the bottom of every digest so the user
+    notices infra issues without opening the UI."""
+    s, warns = _system_snapshot()
+    if not s and not warns:
+        return ""
+    cards = []
+    ram = s.get("ram") or {}
+    disk = s.get("disk") or {}
+    if s.get("cpu_percent") is not None:
+        cards.append(("CPU", f"{int(s['cpu_percent'])}%"))
+    if ram.get("total_gb"):
+        cards.append(("RAM",
+                      f"{ram.get('used_gb','?')} / {ram['total_gb']} GB"))
+    if disk.get("total_gb"):
+        cards.append(("Disk free", f"{disk.get('free_gb','?')} GB"))
+        cards.append(("Disk used", f"{int(disk.get('percent') or 0)}%"))
+    gpus = s.get("gpus") or []
+    if gpus:
+        avg_util = int(sum(g.get("util_pct") or 0 for g in gpus) / len(gpus))
+        max_t = max((int(g.get("temp_c") or 0) for g in gpus), default=0)
+        cards.append((f"GPUs ({len(gpus)})", f"{avg_util}% · {max_t}°C"))
+    block = (
+        '<div style="font-size:11px;color:#6366F1;font-weight:700;'
+        'text-transform:uppercase;letter-spacing:.5px;margin:22px 0 5px;">'
+        'Node health</div>'
+        + _stat_cards(cards))
+    if warns:
+        items = ""
+        for w in warns:
+            col = _SEV_COLOR.get(w["severity"], "#9BA1A8")
+            items += (
+                f'<tr><td style="padding:9px 12px;border-left:3px solid {col};'
+                f'background:#1A1D22;border-radius:5px;">'
+                f'<span style="color:{col};font-weight:700;font-size:11px;'
+                f'text-transform:uppercase;letter-spacing:.4px;'
+                f'margin-right:8px;">'
+                f'{_esc(w["severity"])}</span>'
+                f'<span style="color:#E6E8EB;font-size:12.5px;">'
+                f'{_esc(w["msg"])}</span></td></tr>'
+                f'<tr><td style="height:6px;"></td></tr>')
+        block += (
+            f'<table role="presentation" style="width:100%;'
+            f'border-collapse:collapse;margin-top:8px;">{items}</table>')
+    return block
+
+
+# ─────────────────────────── paper-mode digest ─────────────────────────────
+
+_EMAIL_STATE_KEY = "email_state_paper"
+
+
+def _email_state_get() -> dict:
+    """Last-send snapshot used to compute deltas in the paper digest."""
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(
+            Setting.key == _EMAIL_STATE_KEY).first()
+        if row and isinstance(row.value, dict):
+            return dict(row.value)
+        return {}
+    finally:
+        db.close()
+
+
+def _email_state_set(snap: dict) -> None:
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(
+            Setting.key == _EMAIL_STATE_KEY).first()
+        if row:
+            row.value = snap
+        else:
+            db.add(Setting(key=_EMAIL_STATE_KEY, value=snap))
+        db.commit()
+    finally:
+        db.close()
+
+
+def _paper_snapshot(db) -> dict:
+    """Mini snapshot used for since-last-email diffs."""
+    from .models import (PaperClaim, PaperDecision, PaperVersion, Run)
+    claim_ids = sorted(c.id for c in db.query(PaperClaim).all())
+    return {
+        "at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "claim_ids": claim_ids,
+        "decision_ids_pending": sorted(
+            d.id for d in db.query(PaperDecision).filter(
+                PaperDecision.status == "pending").all()),
+        "decision_ids_resolved": sorted(
+            d.id for d in db.query(PaperDecision).filter(
+                PaperDecision.status.in_(("approved", "rejected"))).all()),
+        "paper_run_ids_done": sorted(
+            r.id for r in db.query(Run).filter(
+                Run.context == "paper",
+                Run.status.in_(("kept", "success", "done",
+                                "crashed", "failed"))).all()),
+        "version_ids": sorted(v.id for v in db.query(PaperVersion).all()),
+    }
+
+
+def _share_url(cfg: dict) -> str | None:
+    """If the user has minted a public share link, surface it in the email
+    so they can forward to co-authors."""
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(
+            Setting.key == "paper_share_token").first()
+    finally:
+        db.close()
+    if not row or not isinstance(row.value, dict):
+        return None
+    tok = row.value.get("token")
+    if not tok:
+        return None
+    base = _dashboard_url(cfg)
+    return f"{base}/p/{tok}" if base else f"/p/{tok}"
+
+
+def _paper_digest_email(window_hours: float):
+    """Compose the paper-mode (subject, text, html, images). Structured
+    around what a paper author actually needs daily: headline progress,
+    what's new since last email, decisions waiting on them, what the
+    author agent did today, top results to integrate, PI nudges, draft
+    section health, blockers, and a share link for co-authors."""
+    from .models import (PaperClaim, PaperDecision, PaperFigure, PaperMeta,
+                         PaperSection, PaperVersion, Project, Run)
+    from . import paper as _paper
+
+    cfg = _cfg()
+    prev = _email_state_get()
+    db = SessionLocal()
+    try:
+        proj = db.query(Project).first()
+        if not proj:
+            return None, None, None, None
+        meta = db.query(PaperMeta).first()
+        pname = proj.name
+        days = _paper.days_till_deadline()
+        claims = db.query(PaperClaim).order_by(PaperClaim.idx).all()
+        n_claims = len(claims)
+        n_ready = sum(1 for c in claims if c.ready)
+        n_killed = sum(1 for c in claims if c.status == "killed")
+        decisions_pending = db.query(PaperDecision).filter(
+            PaperDecision.status == "pending").order_by(
+            PaperDecision.priority.desc(),
+            PaperDecision.created_at.asc()).all()
+        paper_runs = db.query(Run).filter(Run.context == "paper").all()
+        running = [r for r in paper_runs if r.status == "running"]
+        finished_recent = [r for r in paper_runs
+                            if r.status in ("kept", "success", "done",
+                                            "crashed", "failed")]
+        sections = db.query(PaperSection).order_by(PaperSection.slug).all()
+        versions = db.query(PaperVersion).order_by(
+            PaperVersion.created_at.desc()).limit(3).all()
+        snap = _paper_snapshot(db)
+    finally:
+        db.close()
+
+    # Compute deltas since last send
+    prev_claims = set(prev.get("claim_ids") or [])
+    new_claims = [c for c in claims if c.id not in prev_claims]
+    prev_runs_done = set(prev.get("paper_run_ids_done") or [])
+    new_runs_done = [r for r in finished_recent
+                      if r.id not in prev_runs_done]
+    prev_dec_pending = set(prev.get("decision_ids_pending") or [])
+    prev_dec_resolved = set(prev.get("decision_ids_resolved") or [])
+    snap_resolved = set(snap["decision_ids_resolved"])
+    snap_pending = set(snap["decision_ids_pending"])
+    newly_resolved = snap_resolved - prev_dec_resolved
+    newly_filed = snap_pending - prev_dec_pending
+    n_new_versions = len(set(snap["version_ids"])
+                         - set(prev.get("version_ids") or []))
+
+    # Top results: completed paper_runs in this window, best-metric first
+    metric = proj.validation_metric or "metric"
+    maximize = proj.metric_direction == "maximize"
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(
+        hours=window_hours)
+    in_window = [r for r in finished_recent
+                  if (_parse_iso(r.ended_at) or dt.datetime.min.replace(
+                      tzinfo=dt.timezone.utc)) >= cutoff]
+
+    def _key(r):
+        return r.headline_metric if r.headline_metric is not None \
+            else (-1e18 if maximize else 1e18)
+    top_runs = sorted(
+        [r for r in in_window if r.headline_metric is not None],
+        key=_key, reverse=maximize)[:5]
+    crashed = [r for r in in_window if r.status in ("crashed", "failed")]
+
+    # Section health roll-up
+    sec_status = {}
+    for s in sections:
+        sec_status[s.status] = sec_status.get(s.status, 0) + 1
+
+    # Author agent today: last N commits
+    folder = _paper.paper_folder()
+    commits = _paper.list_commits(folder, limit=8) if folder else []
+
+    # ─────────────── HTML body ─────────────────────────────────────────
+    deadline_str = (f" · <b style=\"color:#F59E0B\">{days:.1f} days "
+                    "to deadline</b>" if days is not None else "")
+    headline = (
+        f'<p style="margin:0 0 4px;">Paper status for '
+        f'<b style="color:#E6E8EB;">{_esc(pname)}</b>'
+        f'{deadline_str}</p>'
+        f'<p style="margin:0 0 12px;font-size:13px;color:#9BA1A8;">'
+        f'{n_claims} claims · {n_ready} ready · '
+        f'{len(decisions_pending)} decision'
+        f'{"" if len(decisions_pending) == 1 else "s"} waiting'
+        f' · {len(running)} run{"" if len(running) == 1 else "s"} '
+        f'in flight</p>')
+    cards = [
+        ("claims", str(n_claims)),
+        ("ready", str(n_ready)),
+        ("waiting", str(len(decisions_pending))),
+        ("running", str(len(running))),
+        ("done {}h".format(int(window_hours)), str(len(in_window))),
+    ]
+    if days is not None:
+        cards.append(("deadline", f"{days:.1f}d"))
+
+    body = headline + _stat_cards(cards)
+
+    # What's new since last email
+    if prev.get("at"):
+        whatsnew = []
+        if new_claims:
+            whatsnew.append(f"+{len(new_claims)} new claim"
+                            f"{'s' if len(new_claims) != 1 else ''}: "
+                            + ", ".join(c.title[:60] for c in new_claims[:3]))
+        if new_runs_done:
+            whatsnew.append(f"+{len(new_runs_done)} ablation"
+                            f"{'s' if len(new_runs_done) != 1 else ''} "
+                            "completed")
+        if newly_resolved:
+            whatsnew.append(f"{len(newly_resolved)} decision"
+                            f"{'s' if len(newly_resolved) != 1 else ''} "
+                            "resolved")
+        if newly_filed:
+            whatsnew.append(f"{len(newly_filed)} new decision"
+                            f"{'s' if len(newly_filed) != 1 else ''} filed")
+        if n_new_versions:
+            whatsnew.append(f"{n_new_versions} new paper version"
+                            f"{'s' if n_new_versions != 1 else ''} pinned")
+        body += _section("Since your last email", whatsnew or [
+            "No new claims, runs, or decisions since the last digest."])
+    else:
+        body += _section("Welcome to paper mode", [
+            "This is your first paper-mode digest. From here you'll get one "
+            "summary per day with what's waiting on you."])
+
+    # Decisions waiting — the most important part of the email
+    dec_rows = []
+    for d in decisions_pending[:8]:
+        kind = (d.kind or "?").replace("_", " ")
+        title = (d.title or d.body_md or kind)[:90]
+        prio = "★" * min(int(d.priority or 0), 3) or "·"
+        dec_rows.append(f"{prio} [{kind}]  {title}")
+    if len(decisions_pending) > 8:
+        dec_rows.append(f"… and {len(decisions_pending) - 8} more in the "
+                        "Decision Queue")
+    body += _section(
+        f"⏵ Decisions waiting on you ({len(decisions_pending)})",
+        dec_rows or ["Inbox zero — no decisions queued."])
+
+    # Top results in window
+    if top_runs or crashed:
+        run_lines = []
+        for r in top_runs:
+            hm = (f"{r.headline_metric:.4f}"
+                   if r.headline_metric is not None else "—")
+            cfgr = r.config if isinstance(r.config, dict) else {}
+            tag = (cfgr.get("what") or r.paper_role or "ablation")[:60]
+            run_lines.append(
+                f"{(r.run_name or r.id)[:32]} → {metric}={hm}  ({tag})")
+        if crashed:
+            run_lines.append(
+                f"⚠ {len(crashed)} crashed / failed — see Decision Queue")
+        body += _section(f"Top results in the last {window_hours:g}h",
+                         run_lines)
+
+    # Author agent's day: commits
+    if commits:
+        c_lines = []
+        for c in commits[:6]:
+            msg = (c.get("subject") or c.get("message") or "")[:80]
+            when = (c.get("at") or c.get("date") or "")[:16]
+            c_lines.append(f"{msg}  ({when})")
+        body += _section("Author agent · paper commits", c_lines)
+
+    # Section health
+    if sec_status:
+        sec_lines = [f"{k}: {v}" for k, v in sec_status.items()]
+        body += _section("Draft section health", sec_lines)
+
+    # Blockers
+    blockers = []
+    for s in sections:
+        if s.status == "blocked":
+            why = (f"waiting on claim {s.blocked_on_claim_id}"
+                   if s.blocked_on_claim_id
+                   else (f"waiting on run {s.blocked_on_run_id}"
+                         if s.blocked_on_run_id else "blocked"))
+            blockers.append(f"§ {s.title or s.slug}  —  {why}")
+    if crashed:
+        for r in crashed[:3]:
+            blockers.append(f"run {r.run_name or r.id} crashed — "
+                            "needs author triage")
+    if blockers:
+        body += _section("Blockers", blockers)
+
+    # Versions section (most recent pinned snapshot)
+    if versions:
+        v_lines = [f"{v.label or v.id}  ({v.created_at[:10]})"
+                   for v in versions]
+        body += _section("Recently pinned versions", v_lines)
+
+    # Share link for co-authors — always make this prominent if it exists
+    share = _share_url(cfg)
+    if share:
+        body += (
+            f'<a href="{_esc(share)}" style="display:block;text-align:center;'
+            'background:#A78BFA;color:#0B0D10;text-decoration:none;'
+            'font-weight:700;font-size:13px;padding:11px;border-radius:9px;'
+            'margin:14px 0 4px;">'
+            'Forward read-only paper to a co-author &rarr;'
+            f'</a>'
+            '<p style="margin:0 0 8px;font-size:11px;color:#5C636B;'
+            'text-align:center;">'
+            'No login required for collaborators.</p>')
+
+    # Append the universal system-stats / warnings block
+    body += _system_stats_block()
+
+    # ─────────────── text/plain ────────────────────────────────────────
+    T = [
+        f"autoresearcherUI paper digest - {pname}",
+        f"Window: last {window_hours:g}h  ("
+        f"{dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')})",
+    ]
+    if days is not None:
+        T.append(f"Deadline: {days:.1f} days away  "
+                  f"({(meta.venue if meta else '?')})")
+    T += ["",
+          f"Claims:    {n_claims}   (ready: {n_ready}, killed: {n_killed})",
+          f"Decisions: {len(decisions_pending)} waiting on you",
+          f"Runs:      {len(running)} in flight, "
+          f"{len(in_window)} completed in window",
+          ""]
+    if prev.get("at"):
+        T.append("== Since your last email ==")
+        if new_claims:
+            T.append(f"  +{len(new_claims)} new claim(s)")
+        if new_runs_done:
+            T.append(f"  +{len(new_runs_done)} ablation(s) completed")
+        if newly_resolved:
+            T.append(f"  {len(newly_resolved)} decision(s) resolved")
+        if newly_filed:
+            T.append(f"  {len(newly_filed)} new decision(s) filed")
+        if n_new_versions:
+            T.append(f"  {n_new_versions} new version(s) pinned")
+        if not any([new_claims, new_runs_done, newly_resolved,
+                    newly_filed, n_new_versions]):
+            T.append("  (no changes since last digest)")
+        T.append("")
+    if decisions_pending:
+        T.append(f"== Decisions waiting ({len(decisions_pending)}) ==")
+        for d in decisions_pending[:8]:
+            kind = (d.kind or "?").replace("_", " ")
+            T.append(f"  [{kind:14}] {(d.title or '')[:80]}")
+        T.append("")
+    if top_runs:
+        T.append(f"== Top results in {window_hours:g}h ==")
+        for r in top_runs:
+            hm = (f"{r.headline_metric:.4f}"
+                   if r.headline_metric is not None else "—")
+            T.append(f"  {(r.run_name or r.id)[:24]:24} {metric}={hm}")
+        T.append("")
+    if crashed:
+        T.append(f"== Crashed / failed ({len(crashed)}) ==")
+        for r in crashed[:5]:
+            T.append(f"  {(r.run_name or r.id)[:24]}")
+        T.append("")
+    if blockers:
+        T.append("== Blockers ==")
+        for b in blockers[:6]:
+            T.append(f"  {b}")
+        T.append("")
+    if share:
+        T += ["", f"Co-author share link: {share}", ""]
+    T += ["", "- autoresearcherUI"]
+    text = "\n".join(T) + "\n\n" + _system_stats_text()
+
+    subject = (f"[{pname}] paper digest — "
+               f"{len(decisions_pending)} decision"
+               f"{'' if len(decisions_pending) == 1 else 's'} waiting, "
+               f"{len(in_window)} run"
+               f"{'' if len(in_window) == 1 else 's'} done"
+               + (f", {days:.1f}d to deadline" if days is not None else ""))
+
+    # Update snapshot so next email's deltas are accurate
+    try:
+        _email_state_set(snap)
+    except Exception as e:                              # noqa: BLE001
+        print(f"[notify] failed to persist email_state: {e}", flush=True)
+
+    html = _shell(f"Paper digest — {pname}", body, _dashboard_url(cfg))
+    return subject, text, html, {}
 
 
 # ───────────────────────────── scheduler ───────────────────────────────────

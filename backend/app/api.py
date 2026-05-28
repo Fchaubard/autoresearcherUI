@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import glob
+import json
 import math
 import os
 import random
@@ -28,6 +29,70 @@ from .models import (ChatMessage, Event, Gpu, Idea, JournalEntry,
 
 router = APIRouter(prefix="/api")
 _rng = random.Random()
+
+
+def _poke_author_to_integrate(run_id: str, metric: float | None,
+                                claim_id: str, figure_id: str,
+                                run_name: str) -> None:
+    """Type a concrete integrate-this-run prompt into the author tmux.
+    Called from /api/track/finish whenever a paper-mode run completes.
+    The author agent's standing prompt tells it to monitor results, but
+    this is an immediate kick so integration is real-time, not poll-time."""
+    try:
+        from . import author_agent
+        if not author_agent.is_running():
+            return
+    except Exception:
+        return
+    metric_s = (f"{metric:.4f}" if isinstance(metric, (int, float))
+                else "(no headline metric)")
+    parts = [f"Paper run {run_id} ({run_name or '?'}) finished."]
+    parts.append(f"Headline metric: {metric_s}.")
+    if claim_id:
+        parts.append(f"It supports claim {claim_id}.")
+    if figure_id:
+        parts.append(f"It feeds figure {figure_id}.")
+    parts.append(
+        "Read its result via /paper/runs/results, update the LaTeX "
+        "section/figure that uses it, recompile via /paper/recompile, "
+        "and commit. If this completes a planned ablation set, "
+        "consider queueing the next dataset/seed.")
+    msg = " ".join(parts)
+    try:
+        subprocess.run(["tmux", "send-keys", "-t", "author", "-l", msg],
+                       capture_output=True, timeout=8)
+        subprocess.run(["tmux", "send-keys", "-t", "author", "Enter"],
+                       capture_output=True, timeout=8)
+    except Exception as e:
+        print(f"[paper] poke author tmux failed: {e}", flush=True)
+
+
+def _set_setting(key: str, value) -> None:
+    """Persist a single Settings key (small helper for mode-switch logic)."""
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(Setting.key == "onboarding").first()
+        cfg = dict(row.value) if row and isinstance(row.value, dict) else {}
+        cfg[key] = value
+        if row:
+            row.value = cfg
+        else:
+            db.add(Setting(key="onboarding", value=cfg))
+        db.commit()
+    finally:
+        db.close()
+
+
+async def _safe_json(request: Request) -> dict:
+    """Tolerant body parser: empty body or invalid JSON → {} instead of 500.
+    Useful for endpoints where every field is optional."""
+    try:
+        if not request.headers.get("content-length"):
+            return {}
+        body = await request.json()
+        return body if isinstance(body, dict) else {}
+    except Exception:
+        return {}
 
 
 def _iso() -> str:
@@ -401,6 +466,13 @@ async def track_finish(request: Request):
         db.add(ev)
         db.commit()
         payload = ev.dict()
+        # Snapshot the Run attributes we'll need AFTER closing the session
+        # (touching them post-close triggers a refresh and a
+        # DetachedInstanceError; that's a release-gate bug the e2e catches).
+        run_context = run.context
+        run_paper_claim_id = run.paper_claim_id
+        run_paper_figure_id = run.paper_figure_id
+        run_run_name = run.run_name
         db.close()
         bus.publish("events", "event", payload)
         # immediate email if this run set a new best (notify decides)
@@ -414,6 +486,17 @@ async def track_finish(request: Request):
         from . import council
         council.review_async(run_id)             # gated inside on settings
         council.note_run_finished(run_id)        # batch trigger
+        # Paper-mode auto-integrate: when a paper_run finishes, push a
+        # concrete prompt into the author agent's tmux so it integrates
+        # the result without waiting for its next poll cycle.
+        if run_context == "paper":
+            try:
+                _poke_author_to_integrate(run_id, headline,
+                                          run_paper_claim_id,
+                                          run_paper_figure_id,
+                                          run_run_name)
+            except Exception as e:
+                print(f"[paper] poke author failed: {e}", flush=True)
     else:
         db.close()
     bus.publish("events", "runs_changed", {})
@@ -653,6 +736,51 @@ async def put_settings(request: Request):
     return {"status": "ok"}
 
 
+@router.get("/passcode/check")
+def passcode_check(request: Request):
+    """The login screen polls this to know whether a passcode is set
+    AND whether the current request already presents a valid one.
+
+    enabled=False → no passcode set; UI shows nothing.
+    enabled=True, authed=True → user already has the cookie/header/?p=
+    enabled=True, authed=False → UI shows the password prompt."""
+    from . import auth as _auth
+    enabled = _auth.is_enabled()
+    if not enabled:
+        return {"enabled": False, "authed": True}
+    supplied = _auth._extract_passcode(request)
+    return {"enabled": True,
+            "authed": bool(supplied and supplied == _auth._saved_passcode())}
+
+
+@router.post("/passcode/login")
+async def passcode_login(request: Request):
+    """Validate a passcode. On success, set the auth cookie. UI calls this
+    from the login screen with {"passcode": "..."}."""
+    from fastapi.responses import JSONResponse
+    from . import auth as _auth
+    body = await _safe_json(request)
+    supplied = str(body.get("passcode") or "").strip()
+    ok, msg = _auth.login(request, supplied)
+    resp = JSONResponse({"ok": ok, "detail": msg})
+    if ok and _auth.is_enabled():
+        resp.set_cookie(
+            _auth.COOKIE_NAME, supplied,
+            max_age=60 * 60 * 24 * 30, httponly=True,
+            samesite="lax", path="/")
+    return resp
+
+
+@router.post("/passcode/logout")
+def passcode_logout():
+    """Clear the cookie. The user will be challenged again on next nav."""
+    from fastapi.responses import JSONResponse
+    from . import auth as _auth
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(_auth.COOKIE_NAME, path="/")
+    return resp
+
+
 @router.post("/onboarding")
 async def post_onboarding(request: Request):
     """Save the onboarding config and register the project.
@@ -745,8 +873,50 @@ def run_kill(run_id: str):
 
 @router.get("/system")
 def system():
-    """Cached host telemetry — GPUs, CPU, RAM, disk, uptime."""
-    return monitor.system_stats()
+    """Cached host telemetry — GPUs, CPU, RAM, disk, uptime + any active
+    warnings (low disk, hot GPU, runaway RAM)."""
+    from . import maintenance
+    stats = dict(monitor.system_stats())
+    stats["warnings"] = maintenance.system_warnings()
+    return stats
+
+
+@router.get("/runs/cleanup/preview")
+def runs_cleanup_preview(min_age_days: float = 2.0,
+                         bottom_pct: float = 0.5):
+    """What WOULD be purged by /runs/cleanup. Powers the Settings
+    confirmation modal so the user sees exactly which logs will go."""
+    from . import maintenance
+    return maintenance.preview(min_age_days, bottom_pct)
+
+
+@router.post("/runs/cleanup")
+async def runs_cleanup(request: Request):
+    """Delete stdout/stderr log files for runs older than ``min_age_days``
+    and in the bottom ``bottom_pct`` (per the project's metric direction).
+    Keeps the Run row + its headline metric + council review intact."""
+    from . import maintenance
+    body = await _safe_json(request)
+    age = float(body.get("min_age_days") or 2.0)
+    pct = float(body.get("bottom_pct") or 0.5)
+    return maintenance.purge_old_run_logs(age, pct)
+
+
+@router.get("/runs/cleanup/preview_sota")
+def runs_cleanup_preview_sota():
+    """What WOULD be purged by /runs/cleanup_sota — every non-SOTA run's
+    on-disk artifacts. The SOTA run + baselines are always kept."""
+    from . import maintenance
+    return maintenance.preview_keep_sota_only()
+
+
+@router.post("/runs/cleanup_sota")
+def runs_cleanup_sota():
+    """Aggressive: keep ONLY the project-best (SOTA) run's checkpoint and
+    artifacts. Every other completed run's on-disk state is purged.
+    Run rows + metrics + council reviews stay intact."""
+    from . import maintenance
+    return maintenance.purge_keep_sota_only()
 
 
 @router.post("/clientlog")
@@ -1100,7 +1270,7 @@ async def paper_enter(request: Request):
     from . import paper as _paper
     from . import author_agent
     from . import paper_runner
-    body = await request.json()
+    body = await _safe_json(request)
     meta = body.get("meta") or {}
     proposal_id = body.get("proposal_id") or ""
     if _paper.project_mode() == "paper":
@@ -1141,10 +1311,409 @@ async def paper_enter(request: Request):
     finally:
         db.close()
     _paper.set_project_mode("paper")
+    # Convert council claims → PaperClaim. The Author Agent then OWNS
+    # the ablation queue — we do not seed default ablations here.
+    claims_added = _paper.populate_claims_from_proposal(proposal_id)
+    runs_added   = 0
+    # PAUSE the autonomous research loop so it doesn't keep launching
+    # diff_* experiments and starve the Paper Runner of GPUs. We kill the
+    # tmux session and disable PI's "fill the idle GPUs" nags. In-flight
+    # training runs are NOT killed — they finish naturally and the Paper
+    # Runner picks up GPUs as they free.
+    try:
+        subprocess.run(["tmux", "kill-session", "-t", "agent"],
+                       capture_output=True, timeout=5)
+    except Exception:
+        pass
+    try:
+        subprocess.run(["tmux", "kill-session", "-t", "coord"],
+                       capture_output=True, timeout=5)
+    except Exception:
+        pass
+    # PI stays ENABLED in paper mode — pi.cycle() detects the mode and
+    # switches to nagging the author agent instead of the research one.
+    _set_setting("pi_agent_enabled", True)
+    # Paper mode → switch the email cadence to ONCE A DAY by default. The
+    # research-mode hourly digest is too noisy for writing weeks — daily
+    # is the rhythm authors actually want. Don't override 'off' (user
+    # explicitly disabled email) or anything already 24h+.
+    try:
+        db2 = SessionLocal()
+        try:
+            row = db2.query(Setting).filter(
+                Setting.key == "onboarding").first()
+            cfg2 = dict(row.value) if row and isinstance(row.value, dict) \
+                else {}
+            cur_cad = str(cfg2.get("cadence") or "").strip().lower()
+            if cur_cad in ("", "immediate", "1h", "4h", "12h"):
+                _set_setting("cadence", "24h")
+                print(f"[paper] auto-switched cadence "
+                      f"{cur_cad!r} → '24h' for paper mode", flush=True)
+        finally:
+            db2.close()
+    except Exception as e:                              # noqa: BLE001
+        print(f"[paper] cadence auto-switch skipped: {e}", flush=True)
     # Spawn agent + runner. Author Agent reads the proposal.
     ar = author_agent.start(proposal_id=proposal_id)
     paper_runner.start()
-    return {"status": "entered_paper_mode", "author_agent": ar}
+    # Lit Agent fire-and-forget (network call → don't block enter())
+    import threading as _th
+    _th.Thread(target=_paper.kickoff_lit_discover, daemon=True,
+               name="lit-discover-initial").start()
+    return {"status": "entered_paper_mode", "author_agent": ar,
+            "claims_added": claims_added, "runs_added": runs_added}
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Author-agent autonomous control surface.
+# These endpoints are what the Author Agent calls (via plain HTTP from its
+# Claude Code bash tools) when it wants to queue/kill/inspect ablation
+# runs on its own — no human-in-the-loop approval needed for run mechanics.
+# The decision queue stays reserved for STRATEGIC items only (cite_paper,
+# kill_claim, approve_text, approve_figure).
+# ──────────────────────────────────────────────────────────────────────────
+
+
+@router.post("/paper/runs/queue")
+async def paper_runs_queue(request: Request):
+    """Author-agent calls this to add a paper_run directly. The Paper Runner
+    bin-packs it onto an idle GPU on the next tick.
+
+    Body (all optional except `cmd` or `train_args`):
+      {
+        name:        "headline_v3_s1",        # human label
+        claim_id:    "pc-abcd1234",           # which claim this supports
+        role:        "headline|ablation|baseline|seed",
+        cmd:         "cd … && python train.py …",   # explicit shell command
+        train_args:  "--mode diff --name foo --seed 7 …",  # OR these args;
+                                              # we wrap them in the standard
+                                              # `python train.py` invocation
+        n_seeds:     1,
+        gpus_required: 1,
+        est_time_sec: 5400,
+        depends_on:  ["pr-…", "pr-…"],
+        figure_id:   "pf-…",
+      }
+    """
+    from . import paper as _paper
+    body = await _safe_json(request)
+    name = (body.get("name") or "").strip() or ("auto-" + os.urandom(2).hex())
+    claim_id = body.get("claim_id") or ""
+    figure_id = body.get("figure_id") or ""
+    role = body.get("role") or "ablation"
+    cmd = body.get("cmd") or ""
+    train_args = body.get("train_args") or ""
+    n_seeds = max(1, int(body.get("n_seeds") or 1))
+    gpus_required = max(1, int(body.get("gpus_required") or 1))
+    est_time_sec = int(body.get("est_time_sec") or 5400)
+    depends_on = body.get("depends_on") or []
+    # If no explicit cmd but train_args given, wrap the standard invocation
+    # the same way _default_run_cmd_for_project does — so PYTHONPATH/ARUI
+    # env vars are set and import arui works.
+    if not cmd and train_args:
+        folder = _paper.paper_folder()
+        if folder:
+            from .config import ROOT
+            workspace = str(folder.parent)
+            cmd = (f"cd {workspace} && "
+                   f"PYTHONPATH={ROOT}:${{PYTHONPATH:-}} "
+                   f"ARUI_INGEST_URL=http://127.0.0.1:8000/api/track "
+                   f"ARUI_PROJECT={folder.parent.name} "
+                   f"python train.py {train_args}")
+    if not cmd:
+        return {"ok": False,
+                "detail": "Either cmd or train_args is required"}
+    db = SessionLocal()
+    try:
+        rid = "pr-" + os.urandom(5).hex()
+        db.add(Run(
+            id=rid, run_name=name,
+            status="queued", context="paper",
+            paper_claim_id=claim_id,
+            paper_figure_id=figure_id,
+            paper_role=role,
+            n_seeds=n_seeds,
+            config={"cmd": cmd, "queued_by": "author_agent",
+                    "train_args": train_args},
+            gpus_required=gpus_required,
+            est_time_sec=est_time_sec,
+            depends_on=depends_on if isinstance(depends_on, list) else [],
+        ))
+        db.commit()
+    finally:
+        db.close()
+    bus.publish("paper", "run_queued",
+                {"run_id": rid, "queued_by": "author_agent"})
+    return {"ok": True, "id": rid, "name": name}
+
+
+@router.post("/paper/runs/queue_batch")
+async def paper_runs_queue_batch(request: Request):
+    """Convenience: queue many runs in one call. Body: {runs: [<same shape as queue>, ...]}."""
+    body = await _safe_json(request)
+    runs_in = body.get("runs") or []
+    if not isinstance(runs_in, list):
+        return {"ok": False, "detail": "runs must be a list"}
+    queued = []
+    for r in runs_in:
+        try:
+            req = type("R", (), {})()
+            async def _read(_=r):
+                return _
+            req.json = _read
+            req.headers = {"content-length": "1"}
+            resp = await paper_runs_queue(req)
+            if resp.get("ok"):
+                queued.append(resp["id"])
+        except Exception as e:
+            print(f"[paper_runs_queue_batch] error: {e}", flush=True)
+    return {"ok": True, "queued_ids": queued, "n": len(queued)}
+
+
+@router.get("/paper/runs/results")
+def paper_runs_results(since: str = "", status: str = "",
+                        db: Session = Depends(get_session)):
+    """List paper_runs with their headline metric — used by the Author
+    Agent to inspect what finished and decide what to queue next.
+    Query: ?since=<iso>&status=running|queued|kept|crashed|all (default all).
+    """
+    q = db.query(Run).filter(Run.context == "paper")
+    if status and status != "all":
+        statuses = status.split(",")
+        q = q.filter(Run.status.in_(statuses))
+    if since:
+        q = q.filter((Run.ended_at >= since) | (Run.started_at >= since))
+    rows = q.order_by(Run.started_at.desc()).limit(500).all()
+    out = []
+    for r in rows:
+        cfg = r.config if isinstance(r.config, dict) else {}
+        out.append({
+            "id": r.id, "name": r.run_name, "status": r.status,
+            "claim_id": r.paper_claim_id, "figure_id": r.paper_figure_id,
+            "role": r.paper_role, "seed": cfg.get("seed"),
+            "started_at": r.started_at, "ended_at": r.ended_at,
+            "gpu_index": r.gpu_index,
+            "headline_metric": r.headline_metric,
+            "cmd": cfg.get("cmd", ""),
+        })
+    return {"runs": out}
+
+
+@router.post("/paper/decisions")
+async def paper_decision_create(request: Request):
+    """Author Agent files a strategic decision via this endpoint.
+
+    Only these `kind` values are appropriate now (ablation launches are
+    no longer routed through here — author agent queues runs directly):
+        cite_paper, kill_claim, approve_text, approve_figure
+
+    Body:
+      {
+        kind: "cite_paper",
+        title: "Cite Lou 2024 SEDD in §2.1?",
+        body_md: "…why this is relevant, what we'd add…",
+        default_action: "approve" | "reject",
+        priority: 5,
+        linked_claim_id: "pc-…",
+        linked_citation_key: "lou2024sedd",
+      }
+    """
+    from . import paper as _paper
+    body = await _safe_json(request)
+    kind = (body.get("kind") or "").strip()
+    title = (body.get("title") or "").strip()
+    if not kind or not title:
+        return {"ok": False, "detail": "kind and title required"}
+    did = _paper.file_decision(
+        source="agent",
+        kind=kind,
+        title=title,
+        body_md=body.get("body_md") or "",
+        default_action=body.get("default_action") or "approve",
+        options=body.get("options") or [],
+        priority=int(body.get("priority") or 0),
+        linked_claim_id=body.get("linked_claim_id") or "",
+        linked_figure_id=body.get("linked_figure_id") or "",
+        linked_run_id=body.get("linked_run_id") or "",
+        linked_citation_key=body.get("linked_citation_key") or "",
+    )
+    return {"ok": True, "id": did}
+
+
+@router.put("/paper/claims/{cid}/update")
+async def paper_claim_update(cid: str, request: Request):
+    """Author Agent updates a claim's status / evidence_strength / ready /
+    summary as it learns more. Body: any subset of those fields."""
+    body = await _safe_json(request)
+    allowed = {"status", "evidence_strength", "novelty", "ready",
+               "summary_md", "rationale_md", "killed_reason"}
+    db = SessionLocal()
+    try:
+        c = db.query(PaperClaim).filter(PaperClaim.id == cid).first()
+        if not c:
+            return {"ok": False, "detail": "claim not found"}
+        for k, v in body.items():
+            if k in allowed:
+                setattr(c, k, v)
+        db.commit()
+    finally:
+        db.close()
+    bus.publish("paper", "claim_updated", {"id": cid})
+    return {"ok": True}
+
+
+@router.post("/paper/runs/{rid}/kill")
+def paper_run_kill(rid: str):
+    """Kill a diverging paper-mode run. Wraps the existing /runs/{id}/kill
+    but verifies the run is in paper context and tags who killed it."""
+    db = SessionLocal()
+    try:
+        r = db.query(Run).filter(Run.id == rid).first()
+        if not r or r.context != "paper":
+            return {"ok": False, "detail": "not a paper run"}
+        if r.tmux_session:
+            subprocess.run(["tmux", "kill-session", "-t", r.tmux_session],
+                           capture_output=True, timeout=5)
+        r.status = "crashed"
+        r.ended_at = dt.datetime.now(dt.timezone.utc).isoformat()
+        cfg = dict(r.config) if isinstance(r.config, dict) else {}
+        cfg["killed_by"] = "author_agent"
+        r.config = cfg
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(r, "config")
+        db.commit()
+    finally:
+        db.close()
+    bus.publish("paper", "run_killed",
+                {"run_id": rid, "by": "author_agent"})
+    return {"ok": True}
+
+
+@router.post("/paper/pause_research")
+def paper_pause_research():
+    """One-shot: kill the autonomous research-agent tmux + disable PI nags.
+    Use this if the research loop is still running and starving paper
+    ablations of GPUs."""
+    killed = []
+    for sess in ("agent", "coord"):
+        r = subprocess.run(["tmux", "kill-session", "-t", sess],
+                           capture_output=True, timeout=5)
+        if r.returncode == 0:
+            killed.append(sess)
+    # PI stays enabled — it'll nag the author agent in paper mode now.
+    _set_setting("pi_agent_enabled", True)
+    bus.publish("paper", "research_paused", {"sessions_killed": killed})
+    return {"ok": True, "killed": killed,
+            "pi_enabled": False,
+            "note": "in-flight training runs were NOT killed; they finish "
+                    "naturally and the Paper Runner picks up freed GPUs."}
+
+
+@router.post("/paper/scaffold")
+def paper_scaffold():
+    """One-shot: populate claims / queue ablations / kick off Lit Agent.
+    Safe to call repeatedly while in paper mode."""
+    from . import paper as _paper
+    if _paper.project_mode() != "paper":
+        return {"ok": False, "detail": "not in paper mode"}
+    claims = _paper.populate_claims_from_proposal()
+    # Backfill missing cmd on previously-queued/failed paper runs and
+    # re-queue any that failed for "no cmd" so they pick up on next tick.
+    backfilled = 0
+    requeued_crashed = 0
+    db = SessionLocal()
+    try:
+        for r in db.query(Run).filter(Run.context == "paper",
+                                       Run.status.in_(
+                                           ("queued", "failed", "crashed"))).all():
+            cfg = r.config if isinstance(r.config, dict) else {}
+            # Backfill missing cmd. ALSO patch existing cmds that lack the
+            # PYTHONPATH/ARUI envs so the re-queue gets a working command.
+            existing_cmd = cfg.get("cmd", "")
+            needs_env_patch = (existing_cmd and
+                "PYTHONPATH=" not in existing_cmd)
+            if existing_cmd and not needs_env_patch:
+                continue
+            claim_title = ""
+            if r.paper_claim_id:
+                c = db.query(PaperClaim).filter(
+                    PaperClaim.id == r.paper_claim_id).first()
+                claim_title = (c.title if c else "") or ""
+            new_cmd = _paper._default_run_cmd_for_project(
+                r.paper_role or "ablation",
+                cfg.get("ablation") or "default",
+                int(cfg.get("seed") or 1),
+                claim_title)
+            if new_cmd:
+                from sqlalchemy.orm.attributes import flag_modified
+                cfg["cmd"] = new_cmd
+                r.config = dict(cfg)              # new object — but JSON column
+                flag_modified(r, "config")        # …needs explicit mark too
+                # Re-queue anything that was previously failed OR crashed —
+                # the patched cmd may succeed now.
+                if r.status in ("failed", "crashed"):
+                    if r.status == "crashed":
+                        requeued_crashed += 1
+                    r.status = "queued"
+                    r.started_at = ""
+                    r.ended_at = ""
+                backfilled += 1
+        if backfilled:
+            db.commit()
+    finally:
+        db.close()
+    # NOTE: we no longer auto-queue default ablations here. The Author
+    # Agent now owns the ablation queue end-to-end and decides what to
+    # run based on the claims it just imported. We do still backfill
+    # cmds on any legacy queued/failed runs above so they remain valid.
+    runs = 0
+    import threading as _th
+    _th.Thread(target=_paper.kickoff_lit_discover, daemon=True,
+               name="lit-discover-scaffold").start()
+    return {"ok": True, "claims_added": claims, "runs_added": runs,
+            "backfilled_cmd": backfilled,
+            "requeued_crashed": requeued_crashed,
+            "lit_discover": "started in background",
+            "note": "Author Agent now owns ablation queueing — see "
+                    "/paper/runs/queue. We no longer seed default ablations."}
+
+
+@router.post("/paper/author/restart")
+def paper_author_restart():
+    """Restart the Author Agent tmux (used when it crashed or you want a
+    fresh session). Idempotent."""
+    from . import author_agent
+    from .db import SessionLocal as _SL
+    db = _SL()
+    try:
+        p = db.query(PaperProposal).filter(
+            PaperProposal.status == "ready").order_by(
+            PaperProposal.created_at.desc()).first()
+        pid = p.id if p else ""
+    finally:
+        db.close()
+    if author_agent.is_running():
+        author_agent.stop()
+    return author_agent.start(proposal_id=pid)
+
+
+@router.get("/paper/author/terminal")
+def paper_author_terminal(tail: int = 200):
+    from . import author_agent
+    return {"running": author_agent.is_running(),
+            "text": author_agent.terminal_tail(tail)}
+
+
+@router.post("/paper/author/send")
+async def paper_author_send(request: Request):
+    """Send a message to the Author Agent (typed by the user in the rail)."""
+    from . import author_agent
+    body = await _safe_json(request)
+    text = (body.get("text") or "").strip()
+    if not text:
+        return {"ok": False, "detail": "text required"}
+    ok = author_agent.send(text)
+    return {"ok": bool(ok), "sent": text[:120]}
 
 
 @router.post("/paper/revert")
@@ -1153,7 +1722,7 @@ async def paper_revert(request: Request):
     pauses paper_runs, captures Paper Snapshot."""
     from . import paper as _paper
     from . import author_agent
-    body = await request.json()
+    body = await _safe_json(request)
     reason = (body.get("reason") or "").strip()
     if not reason or len(reason) < 5:
         return {"status": "error",
@@ -1179,6 +1748,24 @@ async def paper_revert(request: Request):
         db.close()
     author_agent.stop()
     _paper.set_project_mode("research")
+    # Resume the autonomous research loop we paused on /paper/enter.
+    _set_setting("pi_agent_enabled", True)
+    try:
+        from . import orchestrator
+        from .config import ROOT
+        from pathlib import Path
+        # Pick the project's existing workspace dir if one's known.
+        proj = SessionLocal().query(Project).first()
+        repo = (proj.name if proj else "project")
+        # Restart the research orchestrator/agent in 'agent' tmux. If a
+        # session is somehow still alive (shouldn't be), this is a no-op
+        # because orchestrator.start handles that.
+        workspace = ROOT / "data" / "workspace" / repo
+        if workspace.exists():
+            orchestrator.start(str(workspace), name="resume", n_slots=10)
+    except Exception as e:                              # noqa: BLE001
+        print(f"[paper/revert] could not restart research agent: {e}",
+              flush=True)
     bus.publish("paper", "mode_reverted", {"reason": reason})
     return {"status": "reverted"}
 
@@ -1227,6 +1814,34 @@ def paper_today(db: Session = Depends(get_session)):
         Run.status == "running").all()]
     sections = [s.dict() for s in db.query(PaperSection).all()]
     folder = _paper.paper_folder(db)
+    # If the section table is empty but the Author Agent has scaffolded
+    # files on disk, synthesize a row per file so the user sees something
+    # in the Today view instead of "no sections yet".
+    if not sections and folder and (folder / "sections").exists():
+        for tex in sorted(folder.glob("sections/*.tex")):
+            if tex.name.endswith(".user.tex"):
+                continue
+            slug = tex.stem
+            title = (slug.split("_", 1)[-1] if "_" in slug else slug
+                     ).replace("_", " ").title()
+            mtime = tex.stat().st_mtime
+            # "writing" if modified in last hour; "draft" otherwise.
+            status = ("writing"
+                       if (dt.datetime.now().timestamp() - mtime) < 3600
+                       else "draft")
+            sections.append({
+                "id": "syn-" + slug,
+                "slug": slug,
+                "title": title,
+                "file_path": f"sections/{tex.name}",
+                "status": status,
+                "blocked_on_claim_id": "",
+                "blocked_on_run_id": "",
+                "last_agent_pass_at": dt.datetime.fromtimestamp(
+                    mtime, tz=dt.timezone.utc).isoformat(),
+                "last_user_edit_at": "",
+                "agent_notes_md": "",
+            })
     commits = _paper.list_commits(folder, limit=8) if folder else []
     # last-N completed paper_runs for the "overnight" line
     recent = (db.query(Run).filter(
@@ -1260,7 +1875,7 @@ def paper_decisions(status: str = "pending",
 @router.post("/paper/decisions/{did}/resolve")
 async def paper_decision_resolve(did: str, request: Request):
     from . import paper as _paper
-    body = await request.json()
+    body = await _safe_json(request)
     action = body.get("action") or "approve"
     note = body.get("note") or ""
     ok = _paper.resolve_decision(did, action=action, note=note)
@@ -1270,7 +1885,7 @@ async def paper_decision_resolve(did: str, request: Request):
 @router.post("/paper/recompile")
 async def paper_recompile(request: Request):
     from . import paper_compile
-    body = await request.json() if request.headers.get("content-length") else {}
+    body = await _safe_json(request)
     force = bool(body.get("force"))
     status = paper_compile.build(force=force)
     return status
@@ -1316,7 +1931,7 @@ async def paper_section_save(request: Request):
     """Persist a *.user.tex override file (the only kind of LaTeX edit
     we accept from the user in v1)."""
     from . import paper as _paper
-    body = await request.json()
+    body = await _safe_json(request)
     path = body.get("path") or ""
     content = body.get("content") or ""
     if not path.endswith(".user.tex"):
@@ -1338,7 +1953,7 @@ async def paper_section_save(request: Request):
 @router.post("/paper/lit/search")
 async def paper_lit_search(request: Request):
     from . import lit_agent
-    body = await request.json()
+    body = await _safe_json(request)
     q = (body.get("query") or "").strip()
     if not q:
         return {"results": []}
@@ -1362,7 +1977,7 @@ def paper_versions(db: Session = Depends(get_session)):
 @router.post("/paper/versions/pin")
 async def paper_versions_pin(request: Request):
     from . import paper as _paper
-    body = await request.json()
+    body = await _safe_json(request)
     label = (body.get("label") or "").strip() or \
         ("v-" + dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M"))
     snap = _paper.take_snapshot()
@@ -1447,6 +2062,510 @@ def _run_reviewer_sim():
                 default_action="approve",
                 priority=8)
     bus.publish("paper", "reviewer_sim_finished", {})
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Paper Mode v3 — missing endpoint completion
+# (sections, citations, version diff, submission helpers, share token,
+#  rebuttal parsing, anti-pattern nudges)
+# ────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/paper/sections")
+def paper_sections(db: Session = Depends(get_session)):
+    rows = db.query(PaperSection).order_by(PaperSection.slug).all()
+    return {"sections": [r.dict() if hasattr(r, "dict") else
+            {c.name: getattr(r, c.name) for c in r.__table__.columns}
+            for r in rows]}
+
+
+@router.put("/paper/sections/{slug}/status")
+async def paper_section_status(slug: str, request: Request):
+    body = await _safe_json(request)
+    new_status = (body.get("status") or "").strip()
+    allowed = {"draft", "writing", "blocked", "ready", "needs_review"}
+    if new_status not in allowed:
+        return {"ok": False, "detail": f"status must be one of {sorted(allowed)}"}
+    db = SessionLocal()
+    try:
+        s = db.query(PaperSection).filter(PaperSection.slug == slug).first()
+        if not s:
+            return {"ok": False, "detail": "section not found"}
+        s.status = new_status
+        s.last_user_edit_at = dt.datetime.now(dt.timezone.utc).isoformat()
+        db.commit()
+    finally:
+        db.close()
+    bus.publish("paper", "section_status_changed", {"slug": slug, "status": new_status})
+    return {"ok": True}
+
+
+@router.get("/paper/citations")
+def paper_citations(db: Session = Depends(get_session)):
+    rows = db.query(PaperCitation).order_by(PaperCitation.year.desc()).all()
+    return {"citations": [
+        {c.name: getattr(r, c.name) for c in r.__table__.columns}
+        for r in rows]}
+
+
+@router.post("/paper/citations/{key}/approve")
+def paper_citation_approve(key: str):
+    db = SessionLocal()
+    try:
+        r = db.query(PaperCitation).filter(PaperCitation.key == key).first()
+        if not r:
+            return {"ok": False, "detail": "citation not found"}
+        r.user_approved_at = dt.datetime.now(dt.timezone.utc).isoformat()
+        db.commit()
+    finally:
+        db.close()
+    return {"ok": True}
+
+
+@router.get("/paper/versions/{vid}/diff")
+def paper_version_diff(vid: str, against: str = ""):
+    """Diff between two pinned versions (by id). Per-file unified diff,
+    keyed by relative paper/ path. Empty `against` → diff against HEAD."""
+    from . import paper as _paper
+    folder = _paper.paper_folder()
+    if not folder:
+        return {"ok": False, "detail": "no paper folder"}
+    db = SessionLocal()
+    try:
+        v_a = db.query(PaperVersion).filter(PaperVersion.id == vid).first()
+        v_b = (db.query(PaperVersion).filter(PaperVersion.id == against).first()
+               if against else None)
+    finally:
+        db.close()
+    if not v_a:
+        return {"ok": False, "detail": "version not found"}
+    sha_a = v_a.latex_commit_sha
+    sha_b = (v_b.latex_commit_sha if v_b else "HEAD")
+    if not sha_a:
+        return {"ok": False, "detail": "version has no commit sha"}
+    raw = _paper.diff(folder, sha_a, sha_b)
+    # Split into per-file chunks for the UI.
+    files: list[dict] = []
+    cur_path = None
+    cur_lines: list[str] = []
+    for ln in raw.splitlines():
+        if ln.startswith("diff --git "):
+            if cur_path:
+                files.append({"path": cur_path, "diff": "\n".join(cur_lines)})
+            cur_lines = [ln]
+            try:
+                cur_path = ln.split(" b/")[-1]
+            except IndexError:
+                cur_path = ln
+        else:
+            cur_lines.append(ln)
+    if cur_path:
+        files.append({"path": cur_path, "diff": "\n".join(cur_lines)})
+    return {"ok": True, "sha_a": sha_a, "sha_b": sha_b, "files": files}
+
+
+# ── Submission helper ───────────────────────────────────────────────────
+
+
+_DEANONYMIZE_PATTERNS = [
+    (re.compile(r"\\author\s*\{[^}]+\}", re.I), "author block in LaTeX"),
+    (re.compile(r"\\affil[a-z]*\s*\{[^}]+\}", re.I), "affiliation block"),
+    (re.compile(r"\\thanks\s*\{[^}]+\}", re.I), "\\thanks footnote"),
+    (re.compile(r"https?://github\.com/[^\s'\"\}]+"), "GitHub URL"),
+    (re.compile(r"https?://(www\.)?gitlab\.[^\s'\"\}]+"), "GitLab URL"),
+    (re.compile(r"\bORCID\b[^\n]{0,40}"), "ORCID line"),
+]
+
+
+@router.post("/paper/submit/anonymize_check")
+def paper_anonymize_check():
+    """Scan paper/ for de-anonymizing content: author names from PaperMeta,
+    affiliation lines, ORCID, GitHub URLs, \\thanks footnotes."""
+    from . import paper as _paper
+    folder = _paper.paper_folder()
+    if not folder:
+        return {"ok": False, "detail": "no paper folder"}
+    db = SessionLocal()
+    try:
+        meta = db.query(PaperMeta).first()
+    finally:
+        db.close()
+    # Build the name list from authors_json (must redact in anon mode).
+    name_patterns: list[tuple] = []
+    if meta and isinstance(meta.authors_json, list):
+        for a in meta.authors_json:
+            name = (a.get("name") or "").strip() if isinstance(a, dict) else ""
+            aff  = (a.get("affiliation") or "").strip() if isinstance(a, dict) else ""
+            if name and len(name) >= 3:
+                name_patterns.append((re.compile(
+                    r"\b" + re.escape(name) + r"\b", re.I), f"author name '{name}'"))
+            if aff and len(aff) >= 4:
+                name_patterns.append((re.compile(
+                    r"\b" + re.escape(aff) + r"\b", re.I), f"affiliation '{aff}'"))
+    findings: list[dict] = []
+    files_scanned = 0
+    for p in list(folder.rglob("*.tex")) + list(folder.rglob("*.bib")):
+        # Skip user override files? No — they go in the bundle too.
+        try:
+            text = p.read_text(errors="ignore")
+        except OSError:
+            continue
+        files_scanned += 1
+        for i, ln in enumerate(text.splitlines(), 1):
+            for pat, label in (_DEANONYMIZE_PATTERNS + name_patterns):
+                m = pat.search(ln)
+                if m:
+                    findings.append({
+                        "path": str(p.relative_to(folder)),
+                        "line": i, "match": m.group(0)[:100],
+                        "kind": label,
+                    })
+                    if len(findings) >= 200:   # safety
+                        break
+            if len(findings) >= 200:
+                break
+        if len(findings) >= 200:
+            break
+    return {"ok": len(findings) == 0,
+            "files_scanned": files_scanned,
+            "findings": findings}
+
+
+@router.post("/paper/submit/bundle")
+def paper_submit_bundle():
+    """Build paper/submission/<project>-<ts>.zip with PDF + .tex sources +
+    refs.bib + supplementary stub. Auto-pin as v-submitted on success."""
+    import zipfile
+    from . import paper as _paper
+    folder = _paper.paper_folder()
+    if not folder:
+        return {"ok": False, "detail": "no paper folder"}
+    pdf = folder / "build" / "main.pdf"
+    if not pdf.exists():
+        return {"ok": False, "detail": "no PDF compiled yet"}
+    sub_dir = folder / "submission"
+    sub_dir.mkdir(exist_ok=True)
+    ts = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S")
+    zip_path = sub_dir / f"submission-{ts}.zip"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(pdf, arcname="main.pdf")
+        for p in [folder / "main.tex"]:
+            if p.exists():
+                zf.write(p, arcname=p.name)
+        for p in folder.glob("sections/*.tex"):
+            zf.write(p, arcname=f"sections/{p.name}")
+        for p in folder.glob("figures/*"):
+            zf.write(p, arcname=f"figures/{p.name}")
+        for n in ("refs.bib",):
+            if (folder / n).exists():
+                zf.write(folder / n, arcname=n)
+    # Auto-pin
+    db = SessionLocal()
+    try:
+        sha = _paper._run_git(folder, "rev-parse", "HEAD") if (folder / ".git").exists() else ""
+        vid = "pv-" + os.urandom(4).hex()
+        db.add(PaperVersion(
+            id=vid, label=f"v-submitted-{ts}",
+            latex_commit_sha=sha, snapshot_json=_paper.take_snapshot(),
+            frozen_pdf_path=str(pdf.resolve())))
+        db.commit()
+    finally:
+        db.close()
+    return {"ok": True, "zip": str(zip_path.relative_to(folder.parent)),
+            "size_bytes": zip_path.stat().st_size,
+            "version_id": vid}
+
+
+@router.get("/paper/submit/page_count")
+def paper_submit_page_count():
+    """Use pdfinfo if available; otherwise estimate from log."""
+    from . import paper as _paper
+    folder = _paper.paper_folder()
+    if not folder:
+        return {"pages": 0}
+    pdf = folder / "build" / "main.pdf"
+    if not pdf.exists():
+        return {"pages": 0}
+    try:
+        r = subprocess.run(["pdfinfo", str(pdf)],
+                           capture_output=True, text=True, timeout=8)
+        for ln in (r.stdout or "").splitlines():
+            if ln.startswith("Pages:"):
+                return {"pages": int(ln.split(":", 1)[1].strip())}
+    except Exception:
+        pass
+    return {"pages": 0}
+
+
+# ── Share token (read-only collaborator view) ───────────────────────────
+
+
+def _share_token_key() -> str:
+    return "paper_share_token"
+
+
+@router.post("/paper/share/token")
+def paper_share_create():
+    """Generate (or rotate) the read-only share token. The token grants
+    no write access; only the assembled state payload is returned."""
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(
+            Setting.key == _share_token_key()).first()
+        token = os.urandom(16).hex()
+        if row:
+            row.value = {"token": token, "created_at":
+                          dt.datetime.now(dt.timezone.utc).isoformat()}
+        else:
+            db.add(Setting(key=_share_token_key(),
+                           value={"token": token, "created_at":
+                                  dt.datetime.now(dt.timezone.utc).isoformat()}))
+        db.commit()
+    finally:
+        db.close()
+    return {"token": token, "url": f"/p/{token}"}
+
+
+@router.delete("/paper/share/token")
+def paper_share_revoke():
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(
+            Setting.key == _share_token_key()).first()
+        if row:
+            db.delete(row)
+            db.commit()
+    finally:
+        db.close()
+    return {"ok": True}
+
+
+@router.get("/paper/share/{token}")
+def paper_share_view(token: str):
+    """Read-only paper state for a share-token holder. Returns the
+    same shape as /paper/state minus internal IDs; PDF is fetched via
+    /paper/share/<token>/pdf so the UI doesn't need an auth header."""
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(
+            Setting.key == _share_token_key()).first()
+    finally:
+        db.close()
+    if not row or not isinstance(row.value, dict) or \
+            row.value.get("token") != token:
+        return {"ok": False, "detail": "invalid token"}
+    # Build a redacted state payload.
+    from . import paper as _paper
+    db = SessionLocal()
+    try:
+        meta = db.query(PaperMeta).first()
+        claims = db.query(PaperClaim).order_by(PaperClaim.idx).all()
+        decs = db.query(PaperDecision).filter(
+            PaperDecision.status == "pending").all()
+        sections = db.query(PaperSection).order_by(PaperSection.slug).all()
+    finally:
+        db.close()
+    return {
+        "ok": True,
+        "venue": meta.venue if meta else "",
+        "days_till_deadline": _paper.days_till_deadline(),
+        "claims": [{"title": c.title, "summary_md": c.summary_md,
+                    "status": c.status} for c in claims],
+        "decisions": [{"title": d.title, "kind": d.kind,
+                       "source": d.source, "body_md": d.body_md[:600]}
+                      for d in decs[:50]],
+        "sections": [{"slug": s.slug, "title": s.title, "status": s.status}
+                     for s in sections],
+        "has_pdf": (_paper.paper_folder() and
+                    (_paper.paper_folder() / "build" / "main.pdf").exists()),
+    }
+
+
+@router.get("/paper/share/{token}/pdf")
+def paper_share_pdf(token: str):
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(
+            Setting.key == _share_token_key()).first()
+    finally:
+        db.close()
+    if not row or not isinstance(row.value, dict) or \
+            row.value.get("token") != token:
+        return {"ok": False, "detail": "invalid token"}
+    from . import paper_compile
+    data = paper_compile.pdf_bytes()
+    if not data:
+        return {"ok": False, "detail": "no pdf yet"}
+    from fastapi.responses import Response
+    return Response(content=data, media_type="application/pdf")
+
+
+# ── Rebuttal sub-mode ───────────────────────────────────────────────────
+
+
+@router.post("/paper/rebuttal/start")
+def paper_rebuttal_start():
+    """Transition paper_phase → 'rebuttal'. Idempotent."""
+    db = SessionLocal()
+    try:
+        meta = db.query(PaperMeta).first()
+        if not meta:
+            return {"ok": False, "detail": "not in paper mode"}
+        prev = meta.phase
+        meta.phase = "rebuttal"
+        meta.updated_at = dt.datetime.now(dt.timezone.utc).isoformat()
+        db.commit()
+    finally:
+        db.close()
+    bus.publish("paper", "phase_changed",
+                {"from": prev, "to": "rebuttal"})
+    return {"ok": True, "from": prev, "to": "rebuttal"}
+
+
+@router.post("/paper/rebuttal/parse")
+async def paper_rebuttal_parse(request: Request):
+    """Take pasted reviewer reviews → call the council to extract
+    concerns → file one decision per concern. Returns the count."""
+    from . import council as _c, paper as _paper
+    body = await _safe_json(request)
+    reviews = body.get("reviews") or []
+    if not isinstance(reviews, list) or not reviews:
+        return {"ok": False, "detail": "reviews must be a non-empty list"}
+    filed = 0
+    cfg = _c._settings()
+    available = _c._available_reviewers(cfg)
+    if not available:
+        return {"ok": False, "detail": "no council reviewers configured"}
+    for i, rv in enumerate(reviews):
+        text = (str(rv).strip())[:8000]
+        if not text:
+            continue
+        rev = available[0]    # cheap path: one reviewer extracts
+        prompt = (
+            "You are helping a researcher triage a peer review. Read the "
+            "review and extract the top 3-6 actionable concerns. Each "
+            "concern should be a single specific item that, if addressed, "
+            "would satisfy the reviewer. Output JSON ONLY:\n"
+            "{\"concerns\":[{\"title\":\"\",\"why\":\"\","
+            "\"suggested_action\":\"\",\"est_gpu_hours\":0,"
+            "\"category\":\"experiment|rewrite|cite|clarify\"}]}\n\n"
+            "=== REVIEW " + str(i + 1) + " ===\n" + text)
+        out = _c._call_reviewer(
+            rev, "Extract concerns from the review. Be honest, not polite.",
+            prompt, cfg)
+        if not out:
+            continue
+        for cn in (out.get("concerns") or [])[:6]:
+            cat = (cn.get("category") or "").lower()
+            kind = ("add_ablation" if cat == "experiment"
+                    else "approve_text" if cat == "rewrite"
+                    else "cite_paper" if cat == "cite"
+                    else "approve_text")
+            _paper.file_decision(
+                source="reviewer_sim",  # reuse the source enum
+                kind=kind,
+                title=f"[Rebuttal R{i+1}] {cn.get('title','')[:80]}",
+                body_md=(f"**Reviewer's concern:** {cn.get('why','')}\n\n"
+                         f"**Suggested action:** {cn.get('suggested_action','')}\n\n"
+                         f"**Est GPU-hours:** {cn.get('est_gpu_hours','?')}"),
+                default_action="approve",
+                priority=9)
+            filed += 1
+    return {"ok": True, "filed": filed}
+
+
+# ── Anti-pattern watcher (manual fire endpoint; scheduler kicks it too) ─
+
+
+@router.post("/paper/anti_patterns/run")
+def paper_antipatterns_run():
+    """Inspect the project state and file low-priority decision-queue
+    nudges for any anti-patterns detected. Returns the count filed."""
+    from . import paper as _paper
+    filed = 0
+    db = SessionLocal()
+    try:
+        meta = db.query(PaperMeta).first()
+        if not meta:
+            return {"filed": 0}
+        # Pattern 1 — many failed paper_runs in last 24h
+        cutoff = (dt.datetime.now(dt.timezone.utc) -
+                  dt.timedelta(hours=24)).isoformat()
+        try:
+            recent = db.query(Run).filter(
+                Run.context == "paper",
+                Run.started_at >= cutoff).all()
+        except Exception:
+            recent = []
+        if len(recent) >= 5:
+            failed = sum(1 for r in recent if (r.status or "") in
+                         ("crashed", "failed", "error"))
+            if failed / len(recent) > 0.3:
+                filed += _file_nudge(
+                    title=f"⚠ {failed}/{len(recent)} paper runs failed in 24h",
+                    body=("That's a higher-than-usual failure rate. Often "
+                          "this is infra (CUDA OOM, disk full, kernel) "
+                          "rather than research. Worth investigating before "
+                          "queuing more."))
+        # Pattern 2 — paper-runs queued without recent progress
+        try:
+            queued = db.query(Run).filter(
+                Run.context == "paper",
+                Run.status == "queued").count()
+        except Exception:
+            queued = 0
+        if queued > 8:
+            filed += _file_nudge(
+                title=f"⚠ {queued} paper runs queued",
+                body=("Paper Runner has a long queue. Consider "
+                      "deprioritising lower-value ablations or "
+                      "increasing concurrency."))
+        # (GPU budget pattern intentionally dropped — runs run until done.)
+        # Pattern 4 — reviewer sim never run on current draft
+        sims = db.query(PaperReviewSim).count()
+        folder = _paper.paper_folder()
+        commits = _paper.list_commits(folder, limit=5) if folder else []
+        if commits and sims == 0:
+            filed += _file_nudge(
+                title="ℹ Run Reviewer Sim before submitting",
+                body=("You haven't run the reviewer simulator on the "
+                      "current paper. It typically surfaces 5-15 "
+                      "defensive ablations that materially improve "
+                      "acceptance odds."))
+        # Pattern 5 — deadline close, no PDF compiled
+        days_left = _paper.days_till_deadline()
+        from . import paper_compile
+        pdf_ready = (paper_compile.status() or {}).get("pdf_exists")
+        if days_left is not None and days_left < 7 and not pdf_ready:
+            filed += _file_nudge(
+                title=f"⚠ Deadline in {days_left:.0f} days; no PDF yet",
+                body=("Less than a week to deadline and no compiled draft. "
+                      "The Author Agent should prioritise scaffolding NOW."))
+    finally:
+        db.close()
+    return {"filed": filed}
+
+
+def _file_nudge(title: str, body: str) -> int:
+    """File a nudge ONLY if a near-duplicate (same title) isn't already
+    pending — prevents flooding the queue on repeated watcher ticks.
+    Returns 1 if filed, 0 if deduped."""
+    from . import paper as _paper
+    db = SessionLocal()
+    try:
+        existing = db.query(PaperDecision).filter(
+            PaperDecision.status == "pending",
+            PaperDecision.title == title).first()
+        if existing:
+            return 0
+    finally:
+        db.close()
+    _paper.file_decision(
+        source="system", kind="approve_text",
+        title=title, body_md=body,
+        default_action="approve",
+        priority=3)
+    return 1
 
 
 @router.get("/lessons")

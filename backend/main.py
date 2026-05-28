@@ -14,7 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .app import monitor, notify, orchestrator, pi, paper_runner
+from .app import auth, monitor, notify, orchestrator, pi, paper_runner, paper_watcher
 from .app.api import router
 from .app.config import AUTORUN, HOST, PORT, ROOT, STATIC_DIR
 from .app.db import SessionLocal, init_db
@@ -28,6 +28,7 @@ async def lifespan(app: FastAPI):
     monitor.start()                   # gpu telemetry + run reconciliation
     pi.start()                        # hourly PI oversight cycle
     paper_runner.start()              # paper-mode ablation scheduler
+    paper_watcher.start()             # hourly anti-pattern nudges
     if AUTORUN:
         db = SessionLocal()
         has_project = db.query(Project).first() is not None
@@ -42,6 +43,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="autoresearcherUI", version="0.2.0", lifespan=lifespan)
+# Passcode gate runs BEFORE the router so a missing/wrong passcode 401s
+# immediately. The gate is a no-op when no passcode is configured, so
+# fresh installs and pre-onboarding flows work exactly as before.
+app.middleware("http")(auth.passcode_middleware)
 app.include_router(router)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -96,6 +101,35 @@ def index():
 @app.get("/healthz")
 def healthz() -> dict:
     return {"ok": True}
+
+
+# SPA client-side routing: any URL that isn't an API or static asset
+# should serve index.html so the frontend can read window.location.pathname
+# and pick the right view (Dashboard / Write the paper / Analysis / …).
+_SPA_PATHS = {
+    "dashboard", "analysis", "lessons",
+    "write-paper", "writepaper", "write_paper", "paper", "latex",
+    "system", "system-stats", "systemstats",
+    "authkeys", "authorized-keys", "authorized_keys",
+    "p",                         # /p/<token> → read-only share viewer
+}
+
+
+@app.get("/{path:path}")
+def spa_catchall(path: str):
+    """Serve index.html for SPA paths so /write-paper et al. work on reload.
+    The /p/<token> share-viewer URL is also served as the SPA so the
+    frontend can render the read-only view by calling /api/paper/share/."""
+    from fastapi.responses import HTMLResponse, JSONResponse
+    head = path.split("/", 1)[0]
+    if head in _SPA_PATHS:
+        return HTMLResponse(_index_html(), headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        })
+    # otherwise 404 (preserve existing behavior for unknown paths)
+    return JSONResponse({"detail": "Not Found"}, status_code=404)
 
 
 def run() -> None:

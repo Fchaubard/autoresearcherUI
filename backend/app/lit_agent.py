@@ -25,16 +25,57 @@ _ARXIV_API = "http://export.arxiv.org/api/query"
 _SEMANTIC_API = "https://api.semanticscholar.org/graph/v1/paper/search"
 
 
-def _arxiv_search(query: str, limit: int = 20) -> list[dict]:
-    """Return [{arxiv_id, title, authors, year, abstract, ...}] from arxiv."""
-    params = {
-        "search_query": query,
-        "start": "0",
-        "max_results": str(limit),
-        "sortBy": "relevance",
-        "sortOrder": "descending",
-    }
-    url = _ARXIV_API + "?" + urllib.parse.urlencode(params)
+_ARXIV_ML_CATEGORIES = ("cs.LG", "cs.CL", "cs.AI", "cs.NE", "stat.ML",
+                         "cs.CV", "cs.IR")
+
+
+def _extract_keywords(text: str, k: int = 8) -> list[str]:
+    """Pull the most useful keywords from a noisy claim title/summary.
+    Heuristic: split into words, drop short / stop / generic words, dedup,
+    cap to k. Adequate for arxiv's keyword index."""
+    stop = {"a","an","the","of","and","or","for","to","is","are","was","were",
+            "be","been","with","that","this","these","those","on","in","at","by",
+            "as","than","more","less","most","best","our","we","its","it",
+            "from","over","into","can","may","do","does","one","two","three",
+            "all","any","some","new","such","model","models","method","methods",
+            "approach","approaches","using","via","based","propose","proposes",
+            "shows","show","results","result","experiments","experiment",
+            "study","studies","paper","papers","work","works","analysis"}
+    seen = set()
+    out: list[str] = []
+    for w in text.split():
+        w = "".join(c for c in w.lower() if c.isalnum() or c in "-_")
+        if not w or len(w) < 3 or w in stop or w in seen:
+            continue
+        seen.add(w)
+        out.append(w)
+        if len(out) >= k:
+            break
+    return out
+
+
+def _arxiv_search(query: str, limit: int = 20,
+                   ml_only: bool = True) -> list[dict]:
+    """Return [{arxiv_id, title, authors, year, abstract, ...}] from arxiv.
+    Builds a category-filtered query so we get cs.LG / cs.CL / etc., not
+    physics — arxiv ranks by relevance only within whatever subset matches.
+    Also robustly handles broad natural-language queries by extracting
+    keywords and ANDing them."""
+    kws = _extract_keywords(query, k=6)
+    if not kws:
+        return []
+    kw_clause = "+AND+".join(f"all:{k}" for k in kws[:5])
+    if ml_only:
+        cat_clause = "+OR+".join(f"cat:{c}" for c in _ARXIV_ML_CATEGORIES)
+        sq = f"({kw_clause})+AND+({cat_clause})"
+    else:
+        sq = kw_clause
+    # Build URL manually because arxiv expects literal `+AND+` / `cat:` —
+    # urlencode would percent-encode those and break the query.
+    url = (_ARXIV_API
+           + f"?search_query={sq}"
+           + f"&start=0&max_results={limit}"
+           + "&sortBy=relevance&sortOrder=descending")
     req = urllib.request.Request(url, headers={"User-Agent": "autoresearcherUI/1"})
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
@@ -136,23 +177,50 @@ def _bibtex_for(p: dict) -> str:
 
 
 def search(query: str, limit: int = 20) -> list[dict]:
-    """Try arxiv first; fall back to Semantic Scholar."""
-    rows = _arxiv_search(query, limit=limit)
+    """Semantic Scholar has much better natural-language relevance ranking
+    than arxiv's keyword-index search, so we try it first now. arxiv is
+    the fallback (cs.* category-filtered)."""
+    rows = _semantic_search(query, limit=limit)
     if not rows:
-        rows = _semantic_search(query, limit=limit)
+        rows = _arxiv_search(query, limit=limit)
     return rows
 
 
-def upsert_citation(p: dict, source: str) -> str:
+def _build_relevance(claim_title: str, claim_summary: str,
+                      paper: dict) -> str:
+    """Concrete one-liner: 'Relates to claim X because of overlapping
+    keywords Y. {paper_year} {venue}.' We compare keyword sets and call
+    out the overlap so the user can decide fast."""
+    kws_claim = set(_extract_keywords(
+        (claim_title or "") + " " + (claim_summary or ""), k=20))
+    kws_paper = set(_extract_keywords(
+        (paper.get("title","") or "") + " " +
+        (paper.get("abstract","") or ""), k=30))
+    overlap = sorted(kws_claim & kws_paper)[:6]
+    parts = []
+    if overlap:
+        parts.append("Shared keywords: " + ", ".join(f"`{w}`" for w in overlap))
+    if paper.get("citation_count"):
+        parts.append(f"{paper['citation_count']} citations")
+    if paper.get("year"):
+        parts.append(str(paper["year"]))
+    if not parts:
+        return "Surfaced by Lit Agent; relevance not yet assessed."
+    return " · ".join(parts)
+
+
+def upsert_citation(p: dict, source: str, relevance_md: str = "") -> str:
     """Add or update a PaperCitation row. Returns its bibtex key."""
     bibtex = _bibtex_for(p)
-    # parse the key out of the bibtex string
     key = bibtex.split("{", 1)[1].split(",", 1)[0]
     db = SessionLocal()
     try:
         existing = db.query(PaperCitation).filter(
             PaperCitation.key == key).first()
         if existing:
+            if relevance_md and not (existing.relevance_md or "").strip():
+                existing.relevance_md = relevance_md
+                db.commit()
             return key
         db.add(PaperCitation(
             key=key, bibtex_md=bibtex, source=source,
@@ -161,7 +229,7 @@ def upsert_citation(p: dict, source: str) -> str:
             doi=p.get("doi", ""),
             title=p.get("title", ""), authors=p.get("authors", ""),
             year=p.get("year", ""), abstract_md=p.get("abstract", ""),
-            relevance_md=""))
+            relevance_md=relevance_md or ""))
         db.commit()
     finally:
         db.close()
@@ -180,7 +248,10 @@ def auto_discover_for_claims(max_per_claim: int = 5) -> int:
     finally:
         db.close()
     for c in claims:
-        q = (c.title or "") + " " + (c.summary_md or "")[:200]
+        # Focused query: extract keywords from claim title (the summary
+        # adds too much noise for natural-language search APIs).
+        kws = _extract_keywords(c.title or "", k=6)
+        q = " ".join(kws) if kws else (c.title or "")
         if not q.strip():
             continue
         results = search(q, limit=max_per_claim)
@@ -189,15 +260,23 @@ def auto_discover_for_claims(max_per_claim: int = 5) -> int:
                               p.get("authors", "") or "anon")
             if key in already_keys:
                 continue
-            upsert_citation(p, source="arxiv" if p.get("arxiv_id")
-                            else "semantic_scholar")
+            relevance = _build_relevance(c.title or "", c.summary_md or "", p)
+            upsert_citation(
+                p, source=("arxiv" if p.get("arxiv_id")
+                           else "semantic_scholar"),
+                relevance_md=relevance)
             already_keys.add(key)
+            # Compact author list — first 3 + et al for the decision body.
+            authors = (p.get("authors", "") or "").split(", ")
+            short_a = ", ".join(authors[:3]) + (
+                f", + {len(authors)-3} more" if len(authors) > 3 else "")
             paper.file_decision(
                 source="lit", kind="cite_paper",
                 title=f"Cite '{p.get('title','')[:80]}'? ({p.get('year','')})",
-                body_md=(f"**Relevance to claim:** {c.title}\n\n"
-                         f"**Authors:** {p.get('authors','')}\n\n"
-                         f"**Abstract:** {p.get('abstract','')[:600]}…"),
+                body_md=(f"**Why relevant to claim:** {relevance}\n\n"
+                         f"**Claim:** {c.title}\n\n"
+                         f"**Authors:** {short_a}\n\n"
+                         f"**Abstract:** {(p.get('abstract','') or '')[:700]}"),
                 default_action="approve",
                 priority=10,
                 linked_claim_id=c.id,

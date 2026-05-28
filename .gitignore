@@ -28,3 +28,6 @@ frontend/.vite/
 *.pem
 .deploy/
 onboarding.env
+
+# Dev outputs / scratchpad
+outputs/
