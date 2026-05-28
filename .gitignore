@@ -34,3 +34,5 @@ outputs/
 
 # user's local screenshot drop (canonical copies live in docs/screenshots/)
 docs/arui-images/
+docs/screenshots/lessons.png
+docs/screenshots/write-paper.png
