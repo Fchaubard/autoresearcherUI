@@ -31,3 +31,6 @@ onboarding.env
 
 # Dev outputs / scratchpad
 outputs/
+
+# user's local screenshot drop (canonical copies live in docs/screenshots/)
+docs/arui-images/
