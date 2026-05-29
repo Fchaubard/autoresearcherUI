@@ -585,10 +585,14 @@ body.resizing{user-select:none}
 .anav2-base-clear{background:none;border:0;color:var(--muted);cursor:pointer;
   font-size:11px;padding:0 0 0 4px}
 .anav2-hint{font-size:11px;color:var(--muted)}
+/* auto-fit + minmax means: pack as many ~480px-min panels as fit, each
+ * stretching to share the row equally. With 1 panel it spans the full
+ * width; with 2 panels at typical widths they're 50/50; with 3+ panels
+ * on a wide monitor (>1500px) you get 3 across. No more empty column. */
 .anav2-grid{flex:1;overflow:auto;padding:14px;display:grid !important;
-  grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-content:start;
+  grid-template-columns:repeat(auto-fit,minmax(min(100%,480px),1fr));
+  gap:12px;align-content:start;
   min-height:0;align-items:stretch;width:100% !important;box-sizing:border-box}
-@media (max-width: 1100px) { .anav2-grid{grid-template-columns:1fr} }
 /* Expanded-panel mode: one panel takes the whole grid area. */
 .anav2-grid.expanded{grid-template-columns:1fr}
 .anav2-grid.expanded .anav2-panel{min-height:calc(100vh - 150px)}
@@ -607,7 +611,8 @@ body.resizing{user-select:none}
 .anav2-panel{background:var(--panel);border:1px solid var(--border);
   border-radius:9px;display:flex;flex-direction:column;min-width:0;
   min-height:300px}
-.anav2-panel.full{grid-column:span 2}
+/* "Full width" panel — spans every column the grid currently has. */
+.anav2-panel.full{grid-column:1 / -1}
 .anav2-panel-titlerow{display:flex;align-items:center;gap:8px;padding:9px 12px 4px}
 .anav2-panel-title{font-size:13px;font-weight:600;color:var(--text);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:0 1 auto}
