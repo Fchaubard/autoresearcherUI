@@ -28,7 +28,18 @@ class Bus:
                 pass
 
     async def subscribe(self, topic: str) -> AsyncIterator[str]:
-        """Yield SSE-formatted frames for a topic until the client disconnects."""
+        """Yield SSE-formatted frames for a topic until the client disconnects.
+
+        Keep-alives at 5 s instead of 20 s — cloudflared quick-tunnels and
+        corporate proxies tend to buffer the first chunk for ~30 s if the
+        body stays small, which makes early events invisible. A 5 s heartbeat
+        keeps the stream above the proxy's buffering threshold so events
+        propagate within ~1 s of being published.
+
+        The frontend also runs a 6 s polling fallback (see app.js
+        ``refreshDashboardLive``), so even if SSE fails entirely the
+        dashboard stays fresh — this just makes SSE itself robust.
+        """
         q: asyncio.Queue = asyncio.Queue(maxsize=1000)
         self._subs[topic].add(q)
         try:
@@ -36,7 +47,7 @@ class Bus:
             yield ": connected\n\n"
             while True:
                 try:
-                    msg = await asyncio.wait_for(q.get(), timeout=20)
+                    msg = await asyncio.wait_for(q.get(), timeout=5)
                     yield (f"id: {msg['id']}\n"
                            f"event: {msg['type']}\n"
                            f"data: {json.dumps(msg['payload'])}\n\n")

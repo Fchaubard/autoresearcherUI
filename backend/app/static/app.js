@@ -2026,6 +2026,34 @@ function paintConvo() {
 }
 
 /* ── SSE ──────────────────────────────────────────────────────────────── */
+
+// Tracks the last successful runs_changed (or polling-fallback) refresh.
+// The polling fallback uses this to decide whether SSE is doing its job.
+let _lastRunsRefreshAt = 0;
+
+// Centralized refresh + repaint for runs/ideas/project/gpus/events.
+// Called from both the SSE runs_changed handler and the polling fallback.
+async function refreshDashboardLive(reason) {
+  try {
+    const [proj, runs, ideas, gpus] = await Promise.all([
+      api('/project'), api('/runs'), api('/ideas'), api('/gpus')]);
+    S.project = proj; S.runs = runs; S.ideas = ideas; S.gpus = gpus;
+  } catch (e) { return false; }
+  _lastRunsRefreshAt = Date.now();
+  // Always repaint the parts that exist on the current view. If the user
+  // happens to be on Analysis or Lessons we still keep the data fresh so
+  // when they navigate back to Dashboard the row is already there.
+  if (S.view === 'dashboard') {
+    try { paintHero(); paintStats(); paintTable(); paintRail();
+      document.querySelector('.hdr')?.replaceWith(header()); paintGpus();
+    } catch (e) { /* ignore paint errors so the next tick can recover */ }
+  } else if (S.view === 'analysis') {
+    try { if (typeof paintAnalysisTable === 'function') paintAnalysisTable();
+    } catch (e) {}
+  }
+  return true;
+}
+
 function streams() {
   const m = new EventSource('/api/stream/metrics');
   m.addEventListener('metrics_changed', e => {
@@ -2067,13 +2095,7 @@ function streams() {
       _rcTimer = null;
       if (!_rcPending) return;
       _rcPending = false;
-      try {
-        [S.project, S.runs, S.ideas] = await Promise.all(
-          [api('/project'), api('/runs'), api('/ideas')]);
-      } catch (e) { return; }                // network blip: try again later
-      if (S.view !== 'dashboard') return;
-      paintHero(); paintStats(); paintTable(); paintRail();
-      document.querySelector('.hdr')?.replaceWith(header()); paintGpus();
+      await refreshDashboardLive('sse');
     }, 800);
   });
   const ch = new EventSource('/api/stream/chat');
@@ -2089,6 +2111,42 @@ function streams() {
     else S.chat.push(msg);
     paintConvo();
     appendFeedItem({ t: msg.created_at, kind: 'chat', d: msg });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // POLLING FALLBACK — covers every case where SSE silently fails:
+  //   • cloudflared quick-tunnels buffer chunked responses for ~30s
+  //   • proxies / corporate networks strip text/event-stream
+  //   • the EventSource silently disconnects and reconnect storms it
+  //   • the backend restarted mid-session so the SSE pipe is dead
+  // Every 6s, if no SSE refresh has happened in the last 5s, do a fetch.
+  // Adds ~0.5–1 KB / 6s of background traffic — negligible vs. having a
+  // dashboard that doesn't update.
+  // ──────────────────────────────────────────────────────────────────────
+  const POLL_INTERVAL_MS = 6000;
+  const STALE_THRESHOLD_MS = 5000;
+  let _pollHidden = false;
+  document.addEventListener('visibilitychange', () => {
+    _pollHidden = (document.visibilityState === 'hidden');
+    // On regaining visibility, do an immediate refresh — the user has
+    // probably been away for a while and wants the latest state NOW.
+    if (!_pollHidden) refreshDashboardLive('visible');
+  });
+  setInterval(() => {
+    if (_pollHidden) return;                 // don't poll backgrounded tabs
+    if (Date.now() - _lastRunsRefreshAt < STALE_THRESHOLD_MS) return;
+    refreshDashboardLive('poll');
+  }, POLL_INTERVAL_MS);
+
+  // Log SSE health to console so it's easy to see in DevTools whether
+  // EventSource is dropping (this is the #1 thing to check if the
+  // "doesn't update" symptom comes back).
+  [['metrics', m], ['events', ev], ['chat', ch]].forEach(([name, src]) => {
+    src.addEventListener('open',
+      () => console.log(`[sse] ${name} connected`));
+    src.addEventListener('error',
+      () => console.log(`[sse] ${name} disconnected — will auto-reconnect ` +
+        '(polling fallback covers the gap)'));
   });
 }
 
