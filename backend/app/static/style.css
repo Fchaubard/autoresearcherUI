@@ -947,6 +947,26 @@ body.resizing{user-select:none}
   to { transform:rotate(360deg); }
 }
 
+/* Token validation result list — rendered in a modal at onboarding time
+ * so the user sees BEFORE clicking Start whether each provider is happy. */
+.tc-list{display:flex;flex-direction:column;gap:7px;margin:10px 0 16px;
+  max-height:50vh;overflow:auto}
+.tc-row{background:var(--panel);border:1px solid var(--border);
+  border-radius:9px;padding:10px 13px}
+.tc-row.tc-bad{border-left:3px solid var(--bad)}
+.tc-row.tc-ok{border-left:3px solid var(--ok)}
+.tc-row.tc-skip{opacity:.6}
+.tc-name{font-size:13px;color:var(--text);font-weight:600;
+  display:flex;align-items:center;gap:8px}
+.tc-opt{font-size:9.5px;text-transform:uppercase;letter-spacing:.5px;
+  background:var(--panel-3);color:var(--muted);
+  padding:2px 6px;border-radius:4px;font-weight:500}
+.tc-st{font-size:11.5px;font-family:var(--mono);margin-top:3px}
+.tc-lat{color:var(--muted);font-size:10px;margin-left:6px}
+.tc-detail{font-size:11.5px;color:var(--text-2);line-height:1.5;
+  margin-top:5px;font-family:var(--mono);background:#0a0c0f;
+  border-radius:5px;padding:6px 9px}
+
 /* Error state on the boot overlay — keeps the same card but swaps the
  * spinner for a big amber warning glyph and changes the action row. */
 .boot-err-icon{font-size:48px;color:#FBBF24;line-height:1;margin:6px 0 8px;

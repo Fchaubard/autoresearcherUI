@@ -2497,7 +2497,26 @@ PASSCODE=`;
       inp.claude_token?.focus();
       return;
     }
-    start.disabled = true; start.textContent = 'Starting…';
+    // PRE-FLIGHT TOKEN VALIDATION. Probe every configured provider in
+    // parallel and report results back. Required tokens (Claude) that
+    // fail block the launch. Optional tokens (OpenAI/Gemini/Gmail/GitHub)
+    // that fail prompt for "continue with this feature disabled" so the
+    // user is never confused about why councils/emails go silent later.
+    start.disabled = true; start.textContent = 'Checking tokens…';
+    let results;
+    try {
+      results = await post('/onboarding/validate_tokens', cfg);
+    } catch (e) {
+      results = null;       // network blip → skip and proceed
+    }
+    if (results) {
+      const proceed = await showTokenCheckResults(results);
+      if (!proceed) {
+        start.disabled = false; start.textContent = 'Start research →';
+        return;
+      }
+    }
+    start.textContent = 'Starting…';
     try {
       await post('/onboarding', cfg);
     } catch (e) {
@@ -2512,6 +2531,74 @@ PASSCODE=`;
     // redirect. The user gets visible progress instead of a blank page.
     showAgentBootOverlay();
   };
+}
+
+/* Show the token-validation results in a modal. Returns a Promise that
+ * resolves to true (user clicked Continue) or false (user clicked Fix). */
+function showTokenCheckResults(results) {
+  return new Promise(resolve => {
+    // If everything passed (or was empty/skipped), no need to bother the user.
+    const failed = Object.entries(results)
+      .filter(([_, r]) => r && r.ok === false);
+    if (failed.length === 0) { resolve(true); return; }
+    // Claude is the only token that's actually required to launch the
+    // research agent. If Claude failed, "continue" doesn't make sense.
+    const claudeBad = (results.claude && results.claude.ok === false);
+    const sc = el('div', 'mscrim');
+    const m  = el('div', 'modal');
+    const rowsHtml = Object.entries(results).map(([name, r]) => {
+      const labelMap = { claude: 'Claude API token',
+                         openai: 'OpenAI API token',
+                         gemini: 'Gemini API token',
+                         github: 'GitHub token',
+                         gmail:  'Gmail app password' };
+      const optional = name !== 'claude';
+      let stChip, stColor;
+      if (!r) { stChip = 'unknown'; stColor = '#5C636B'; }
+      else if (r.skipped) { stChip = 'not configured'; stColor = '#5C636B'; }
+      else if (r.ok) { stChip = 'valid ✓'; stColor = 'var(--ok)'; }
+      else { stChip = 'failed ✗'; stColor = 'var(--bad)'; }
+      const lat = r && r.latency_ms ? ` <span class="tc-lat">${r.latency_ms}ms</span>` : '';
+      const detail = r && r.detail && !r.skipped
+        ? `<div class="tc-detail">${esc(r.detail)}</div>` : '';
+      const opt = optional
+        ? '<span class="tc-opt">optional</span>' : '';
+      return `<div class="tc-row tc-${r && r.ok ? (r.skipped ? 'skip' : 'ok') : 'bad'}">` +
+        `<div class="tc-name">${esc(labelMap[name] || name)}${opt}</div>` +
+        `<div class="tc-st" style="color:${stColor}">${stChip}${lat}</div>` +
+        detail + '</div>';
+    }).join('');
+    m.innerHTML =
+      '<div class="modal-hd"><h2>' +
+      (claudeBad ? 'Claude token failed — fix it before continuing'
+                 : 'Some optional tokens failed') +
+      '</h2><button class="iconbtn" id="tc-x">✕</button></div>' +
+      '<p class="modal-sub">' +
+      (claudeBad
+        ? 'The Research Agent needs a working Claude API token to start. ' +
+          'Fix the token and try again.'
+        : 'The required Claude token is good — but some optional providers ' +
+          'failed. You can continue and those features (council reviews / ' +
+          'emails / lit search) will be silently disabled, or fix them now.') +
+      '</p>' +
+      '<div class="tc-list">' + rowsHtml + '</div>' +
+      '<div class="modal-actions">' +
+      (claudeBad
+        ? '<button class="btn pri" id="tc-fix" type="button">' +
+          '← Back to fix Claude token</button>'
+        : '<button class="btn pri" id="tc-cont" type="button">' +
+          'Continue with failed features disabled</button>' +
+          '<button class="btn" id="tc-fix" type="button">' +
+          '← Back to fix</button>') +
+      '</div>';
+    sc.append(m); document.body.append(sc);
+    const done = (proceed) => { sc.remove(); resolve(proceed); };
+    m.querySelector('#tc-x').onclick = () => done(false);
+    m.querySelector('#tc-fix').onclick = () => done(false);
+    const cont = m.querySelector('#tc-cont');
+    if (cont) cont.onclick = () => done(true);
+    sc.onclick = e => { if (e.target === sc) done(false); };
+  });
 }
 
 /* Full-screen "warming up" overlay shown between onboarding submission and

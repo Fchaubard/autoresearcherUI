@@ -573,6 +573,49 @@ def _safe_parse(text: str) -> dict | None:
 
 
 # ── one reviewer turn ────────────────────────────────────────────────────
+def _emit_token_failure_event(reviewer: str, kind: str, detail: str) -> None:
+    """Persist a failure as an Event so the user SEES it in the Summary
+    feed + email digest instead of finding out by reading the backend log.
+    Deduplicates by (reviewer, kind) within a single hour so a runaway 401
+    doesn't drown the feed. Best-effort: never raises into the caller."""
+    try:
+        import os as _os
+        from .db import SessionLocal
+        from .models import Event
+        import datetime as _dt
+        db = SessionLocal()
+        try:
+            cutoff = (_dt.datetime.now(_dt.timezone.utc)
+                      - _dt.timedelta(hours=1)).isoformat()
+            recent = (db.query(Event)
+                      .filter(Event.type == f"reviewer_{kind}")
+                      .filter(Event.actor == reviewer)
+                      .filter(Event.created_at > cutoff).first())
+            if recent:
+                return                                # already announced
+            ev = Event(id=f"ev-{_os.urandom(4).hex()}",
+                       type=f"reviewer_{kind}",
+                       severity="warning",
+                       actor=reviewer,
+                       message=(f"{reviewer} reviewer is failing "
+                                f"({kind}): {detail[:160]}. "
+                                "Council will run with the other reviewers "
+                                "until you fix the token / quota."),
+                       created_at=_dt.datetime.now(
+                           _dt.timezone.utc).isoformat())
+            db.add(ev)
+            db.commit()
+            try:
+                from .bus import bus
+                bus.publish("events", "event", ev.dict())
+            except Exception:
+                pass
+        finally:
+            db.close()
+    except Exception as e:                              # noqa: BLE001
+        print(f"[council] _emit_token_failure_event failed: {e}", flush=True)
+
+
 def _call_reviewer(reviewer: str, system: str, user: str, cfg: dict
                    ) -> dict | None:
     try:
@@ -584,6 +627,14 @@ def _call_reviewer(reviewer: str, system: str, user: str, cfg: dict
         except Exception:
             pass
         print(f"[council] {reviewer} HTTP {e.code}: {body}", flush=True)
+        # Surface auth + rate-limit errors as Events so the user sees
+        # them in the Summary feed + digest emails.
+        if e.code in (401, 403):
+            _emit_token_failure_event(reviewer, "auth_failed",
+                                       f"HTTP {e.code} {body}")
+        elif e.code == 429:
+            _emit_token_failure_event(reviewer, "rate_limited",
+                                       f"HTTP 429 {body}")
         return None
     except Exception as e:                              # noqa: BLE001
         print(f"[council] {reviewer} call failed: {e}", flush=True)

@@ -819,6 +819,26 @@ def passcode_logout():
     return resp
 
 
+@router.post("/onboarding/validate_tokens")
+async def onboarding_validate_tokens(request: Request):
+    """Probe each provider's auth endpoint with the user's tokens IN
+    PARALLEL and report which ones are good before we actually start
+    the agent. Returns a dict keyed by token name:
+        {claude:  {ok, detail, latency_ms, skipped?},
+         openai:  {...},
+         gemini:  {...},
+         github:  {...},
+         gmail:   {...}}
+
+    A token that's empty / not configured returns ok=True + skipped=True
+    so the frontend can render it grey instead of red. Required tokens
+    (Claude) that come back as ok=False should block the launch; optional
+    tokens (Gemini, OpenAI, Gmail, GitHub) can warn but proceed."""
+    from . import token_check
+    body = await _safe_json(request)
+    return token_check.check_all(body or {})
+
+
 @router.post("/onboarding")
 async def post_onboarding(request: Request):
     """Save the onboarding config and register the project.

@@ -95,6 +95,47 @@ def _recipients(cfg: dict) -> list[str]:
     return out
 
 
+def _emit_smtp_failure_event(detail: str) -> None:
+    """Persist an SMTP failure as an Event so the user sees that emails
+    aren't going out (without having to scroll through backend logs).
+    Deduplicates per hour so a broken Gmail password doesn't spam the
+    Summary feed."""
+    try:
+        import datetime as _dt
+        import os as _os
+        from .db import SessionLocal
+        from .models import Event
+        db = SessionLocal()
+        try:
+            cutoff = (_dt.datetime.now(_dt.timezone.utc)
+                      - _dt.timedelta(hours=1)).isoformat()
+            recent = (db.query(Event)
+                      .filter(Event.type == "email_failed")
+                      .filter(Event.created_at > cutoff).first())
+            if recent:
+                return
+            ev = Event(id=f"ev-{_os.urandom(4).hex()}",
+                       type="email_failed",
+                       severity="warning", actor="notify",
+                       message=("Email digest failed to send: "
+                                f"{detail[:200]}. Fix the SMTP settings "
+                                "in onboarding (most often: Gmail app "
+                                "password expired or 2FA was turned off)."),
+                       created_at=_dt.datetime.now(
+                           _dt.timezone.utc).isoformat())
+            db.add(ev)
+            db.commit()
+            try:
+                from .bus import bus
+                bus.publish("events", "event", ev.dict())
+            except Exception:
+                pass
+        finally:
+            db.close()
+    except Exception as e:                           # noqa: BLE001
+        print(f"[notify] _emit_smtp_failure_event failed: {e}", flush=True)
+
+
 def _smtp_send(host, port, user, password, sender, recipients, subject,
                text, html=None, images=None) -> bool:
     try:
@@ -121,8 +162,13 @@ def _smtp_send(host, port, user, password, sender, recipients, subject,
             s.send_message(msg)
         print(f"[notify] smtp -> {recipients} via {host}", flush=True)
         return True
+    except smtplib.SMTPAuthenticationError as e:     # noqa: BLE001
+        print(f"[notify] smtp auth error: {e}", flush=True)
+        _emit_smtp_failure_event(f"auth rejected (535): {e}")
+        return False
     except Exception as e:                           # noqa: BLE001
         print(f"[notify] smtp error: {e}", flush=True)
+        _emit_smtp_failure_event(str(e))
         return False
 
 
