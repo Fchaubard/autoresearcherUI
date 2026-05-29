@@ -201,6 +201,25 @@ view.
 - Delivery auto-detects: Resend if a key is present, otherwise SMTP (Gmail
   app-password works out of the box).
 
+### Getting a Gmail app password
+
+If you set `EMAIL` to a Gmail address, you need an **app password** in
+`GMAIL_APP_PW` (your normal login won't work — Google blocks SMTP for it).
+
+1. Turn on **2-Step Verification** at
+   [myaccount.google.com/security](https://myaccount.google.com/security).
+   This is required; app passwords don't exist without it.
+2. Open [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords).
+3. Type `autoresearcherUI` (or anything) in the "App name" box and click
+   **Create**.
+4. Google shows a 16-character code formatted like `abcd efgh ijkl mnop`.
+   **Strip the spaces** and paste it into `GMAIL_APP_PW=`.
+
+If you don't see an "App passwords" page at all, 2-Step Verification isn't
+on yet — that's the only thing that's ever wrong. Once set, the SMTP path
+in `notify.py` will use it transparently and you'll get the hourly /
+daily digest with embedded charts.
+
 ## Configuration
 
 All config lives in the onboarding form: project purpose, validation metric,
