@@ -402,12 +402,84 @@ async def reorder_ideas(request: Request):
     return {"ok": True}
 
 
+# ────── council code-bless: pre-flight code review before any run ──────
+
+@router.post("/council/bless")
+async def council_bless(request: Request):
+    """Kick off a council review of the current research workspace.
+
+    Returns immediately with status='pending'; reviewers vote in the
+    background. The agent's prompt instructs it to call this after
+    scaffolding code, then poll /api/council/bless/status before any
+    training run. The /api/track/run endpoint refuses (HTTP 423) until
+    the verdict is 'approved'."""
+    from . import council as _c
+    body = await _safe_json(request)
+    # Default to the current project's workspace; allow override for tests.
+    if body.get("workspace"):
+        workspace = body["workspace"]
+    else:
+        db = SessionLocal()
+        try:
+            row = db.query(Setting).filter(
+                Setting.key == "onboarding").first()
+            cfg = dict(row.value) if row and isinstance(row.value, dict) \
+                else {}
+            proj = db.query(Project).first()
+        finally:
+            db.close()
+        name = ((cfg.get("repo_name") or
+                 (proj.name if proj else "research") or "research").strip())
+        workspace = str(DATA_DIR / "workspace" / name)
+    return _c.bless_async(workspace)
+
+
+@router.get("/council/bless/status")
+def council_bless_status():
+    """The latest verdict (or 'not_requested' / 'pending' / 'approved' /
+    'rejected'). Polled by the agent and shown on the dashboard."""
+    from . import council as _c
+    return _c.bless_status()
+
+
+@router.post("/council/bless/reset")
+def council_bless_reset():
+    """Clear the bless state — used when the agent edits code after a
+    rejection so the next /api/council/bless gets a clean slate. Also
+    exposed as a dashboard button if the human wants a re-review."""
+    from . import council as _c
+    _c._bless_state_set({"status": "not_requested",
+                         "summary": "Cleared — awaiting re-review"})
+    return _c.bless_status()
+
+
 # ───────────────────────── arui ingest (doc 06) ────────────────────────────
 
 @router.post("/track/run")
 async def track_run(request: Request):
+    from fastapi.responses import JSONResponse
+    from . import council as _c
     body = await request.json()
     name = body.get("name", f"run-{_rng.randrange(16**6):06x}")
+    # CODE-BLESS GATE: the council must approve the codebase before the
+    # first training run can register. The agent's prompt knows the dance
+    # (POST /api/council/bless → poll /api/council/bless/status →
+    # only proceed when status==approved). 423 = Locked. Whitelist:
+    # any name starting with _probe / _smoke for the agent's pre-flight
+    # smoke tests, which prove the code RUNS at all before bless.
+    if not (str(name).startswith("_probe")
+            or str(name).startswith("_smoke")):
+        if not _c.is_code_blessed():
+            st = _c.bless_status()
+            return JSONResponse({
+                "ok": False,
+                "blocked": True,
+                "reason": "code_not_blessed",
+                "bless_status": st,
+                "hint": ("POST /api/council/bless then poll "
+                         "/api/council/bless/status — once status='approved' "
+                         "training runs are unlocked."),
+            }, status_code=423)
     db = SessionLocal()
     project = db.query(Project).first()
     pid = project.id if project else "proj-default"

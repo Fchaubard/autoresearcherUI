@@ -429,6 +429,98 @@ function render() {
   if (!isPaperView) { paintHero(); paintStats(); paintTable(); }
   paintRail();
   pollGpus();
+  pollBlessStatus();
+}
+
+/* Pre-flight code-bless banner. Top-of-page banner that shows whether
+ * the council has approved the codebase. Reasons for prominence:
+ *   - pending  → user knows the agent is paused for review, not stuck
+ *   - rejected → user sees exactly what the council asked the agent to
+ *                fix, without digging into the Summary feed
+ *   - approved → small green "✓ blessed" badge so it's visible but not
+ *                in the way after the first time
+ *   - not_requested → small grey "no review yet" badge
+ */
+async function pollBlessStatus() {
+  let last = null;
+  const tick = async () => {
+    let s;
+    try { s = await api('/council/bless/status'); } catch (e) { return; }
+    if (!s) return;
+    // dedupe: only repaint when state actually changes
+    const sig = (s.status || '') + '|' + ((s.blockers || []).length);
+    if (sig === last) return;
+    last = sig;
+    renderBlessBanner(s);
+  };
+  tick();
+  addTimer(setInterval(tick, 6000));
+}
+
+function renderBlessBanner(s) {
+  const existing = document.getElementById('bless-banner');
+  if (existing) existing.remove();
+  // Approved state — small badge in the header instead of a full banner.
+  if (!s || s.status === 'approved') {
+    const hdr = document.querySelector('.hdr');
+    if (hdr && !hdr.querySelector('.bless-pill')) {
+      const pill = el('span', 'bless-pill bless-pill-ok',
+        '✓ code blessed');
+      pill.title = (s && s.summary) || 'Council approved the codebase';
+      hdr.appendChild(pill);
+    }
+    return;
+  }
+  // not_requested / pending / rejected — full banner under the header.
+  const colorClass = ({
+    pending: 'bless-pending',
+    rejected: 'bless-rejected',
+    not_requested: 'bless-waiting',
+  })[s.status] || 'bless-waiting';
+  const icon = ({
+    pending: '⏳',
+    rejected: '✗',
+    not_requested: '·',
+  })[s.status] || '·';
+  const title = ({
+    pending: 'Council is reviewing the codebase…',
+    rejected: 'Council rejected the codebase — agent must fix before any '
+      + 'run can launch',
+    not_requested: 'Awaiting code review — the agent will request it after '
+      + 'scaffolding the baseline',
+  })[s.status] || s.summary || 'Code review';
+  const blockersHtml = (s.blockers || []).length
+    ? '<ul class="bless-blockers">' +
+      s.blockers.slice(0, 12).map(b => `<li>${esc(b)}</li>`).join('') +
+      (s.blockers.length > 12
+        ? `<li>… and ${s.blockers.length - 12} more</li>` : '') +
+      '</ul>'
+    : '';
+  const banner = el('div', `bless-banner ${colorClass}`);
+  banner.id = 'bless-banner';
+  banner.innerHTML =
+    `<div class="bless-banner-row">` +
+      `<div class="bless-icon">${icon}</div>` +
+      `<div class="bless-text"><b>${esc(title)}</b>` +
+      (s.summary && s.summary !== title
+        ? `<div class="bless-summary">${esc(s.summary)}</div>` : '') +
+      blockersHtml +
+      '</div>' +
+      (s.status === 'rejected'
+        ? '<button class="btn xs" id="bless-clear" title="Mark as ' +
+          'cleared — the agent will re-request review next">Clear &amp; ' +
+          'await re-review</button>' : '') +
+    '</div>';
+  const app = document.getElementById('app');
+  const hdr = app && app.querySelector('.hdr');
+  if (hdr) hdr.insertAdjacentElement('afterend', banner);
+  else if (app) app.insertBefore(banner, app.firstChild);
+  const clr = document.getElementById('bless-clear');
+  if (clr) clr.onclick = async () => {
+    clr.disabled = true; clr.textContent = 'Clearing…';
+    await post('/council/bless/reset', {});
+    pollBlessStatus();
+  };
 }
 
 function header() {

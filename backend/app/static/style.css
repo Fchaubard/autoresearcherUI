@@ -977,6 +977,28 @@ body.resizing{user-select:none}
 .boot-term-err{border-color:#F43F5E55;background:#1a0d10;color:#fca5a5}
 .boot-actions .btn.pri{margin-right:8px}
 
+/* ── code-bless banner (council pre-flight code review) ──────────────── */
+.bless-pill{font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;
+  background:#0d2a1b;color:#34D399;padding:4px 9px;border-radius:5px;
+  font-weight:700;margin-left:10px;border:1px solid #34D39933}
+.bless-pill-ok{background:#0d2a1b;color:#34D399}
+.bless-banner{margin:0 0 14px;border-radius:11px;padding:12px 16px;
+  border:1px solid var(--border);display:flex;align-items:flex-start;
+  gap:14px;font-size:13px;line-height:1.5}
+.bless-banner-row{display:flex;align-items:flex-start;gap:14px;width:100%}
+.bless-icon{font-size:24px;line-height:1;flex-shrink:0;margin-top:2px}
+.bless-text{flex:1;min-width:0}
+.bless-summary{font-size:11.5px;color:var(--text-2);margin-top:4px}
+.bless-blockers{margin:8px 0 0;padding-left:20px;font-size:12px;
+  color:var(--text);line-height:1.55}
+.bless-blockers li{margin:3px 0;font-family:var(--mono);font-size:11.5px}
+.bless-pending{background:#1f1d33;border-color:#6366F155;color:#A78BFA}
+.bless-pending .bless-icon{color:#A78BFA}
+.bless-rejected{background:#2a0f15;border-color:#F43F5E55;color:#FCA5A5}
+.bless-rejected .bless-icon{color:#F43F5E}
+.bless-waiting{background:var(--panel);color:var(--muted)}
+.bless-waiting .bless-icon{color:var(--muted)}
+
 /* ── login screen ─────────────────────────────────────────────────────── */
 .login-wrap{min-height:100vh;display:flex;align-items:center;
   justify-content:center;padding:24px}

@@ -1314,3 +1314,253 @@ def _apply_to_ideas_md(review: dict) -> None:
                   f"{len(veto)} vetoed", flush=True)
         except Exception as e:                          # noqa: BLE001
             print(f"[council] could not rewrite ideas.md: {e}", flush=True)
+
+
+# ════════════════════════════════════════════════════════════════════════
+#                       Code-bless — pre-flight code review
+# ════════════════════════════════════════════════════════════════════════
+#
+# After the research agent scaffolds program.md / train.py / prepare.py /
+# ideas.md but BEFORE any training run launches, the council reviews the
+# codebase for blocking bugs (arui SDK usage, __METRIC__ wiring, baseline
+# correctness, eval hookup, off-by-ones). The verdict gates POST
+# /api/track/run — until the council approves, the agent cannot start
+# experiments. This prevents the classic "we waste 10 GPU-hours then
+# discover the metric was being maximised when it should be minimised."
+#
+# State machine — persisted to Setting key "code_bless":
+#   {"status": "pending"}           review in flight
+#   {"status": "approved",          unlocked: /api/track/run accepts
+#    "at": iso, "verdicts": {...}}
+#   {"status": "rejected",          blocked: agent must fix + re-submit
+#    "blockers": [...], "verdicts": {...}}
+#   absent / {"status": "not_requested"}  no bless ever requested → blocked
+
+_BLESS_SYSTEM = """You are a senior ML research engineer doing a final code
+review BEFORE the autoresearcher agent launches any training run. You will
+be shown the entire research codebase (program.md, train.py, prepare.py,
+ideas.md, plus any model/eval helper files).
+
+Your job is to catch BLOCKING bugs — things that would invalidate every
+single run if left in. Examples of blockers:
+
+  - the arui SDK is not used to log the validation metric, OR the headline
+    metric key `arui.summary["__METRIC__"]` is misspelled or missing
+  - the metric being reported maximises when it should minimise (e.g.
+    logging loss but the metric direction is "maximize") or vice versa
+  - the evaluation set is the SAME as the training set (data leakage)
+  - the baseline doesn't match what was promised in program.md
+  - train.py crashes on import (missing class, undefined variable)
+  - the script never calls .backward() / never updates weights
+  - obvious off-by-ones in epoch / step counting that would mis-attribute
+    metrics
+  - missing seed handling that makes runs non-deterministic without warning
+  - the dataset loader assumes a path that doesn't exist on this node
+
+Do NOT flag:
+  - style nits, hyperparameter choices, model architecture preferences,
+    suggestions for ablations, "consider also trying X" — these are
+    research decisions, NOT blockers.
+  - missing GPU-saturation logic — the orchestrator handles that.
+  - the presence of TODOs that don't break the baseline.
+
+Reply with STRICT JSON:
+  {
+    "approved": <true if NO blockers found, else false>,
+    "blockers": [<one short sentence per blocker, each ending with the
+                  filename + roughly which lines>],
+    "suggestions": [<optional non-blocking improvements>],
+    "summary": "<one-sentence verdict for the dashboard>"
+  }
+
+NEVER set approved=true with blockers in the list. NEVER cite style
+issues as blockers. Be strict but not paranoid — if you can imagine the
+baseline run scoring something meaningful, approve it.
+"""
+
+
+def _collect_codebase(workspace: str | os.PathLike) -> str:
+    """Read every text file in the agent's workspace that's small enough to
+    fit in the prompt. Skips binaries, caches, datasets, virtualenvs."""
+    from pathlib import Path
+    ws = Path(str(workspace))
+    if not ws.exists():
+        return ""
+    SKIP_DIRS = {"__pycache__", ".git", ".venv", "venv", "data", "ckpts",
+                 "checkpoints", "runs", "wandb", "node_modules"}
+    EXT = {".py", ".md", ".yaml", ".yml", ".json", ".toml", ".cfg", ".sh"}
+    MAX_BYTES_PER_FILE = 24_000
+    MAX_TOTAL = 220_000
+    chunks: list[str] = []
+    total = 0
+    for p in sorted(ws.rglob("*")):
+        if not p.is_file():
+            continue
+        if any(part in SKIP_DIRS for part in p.parts):
+            continue
+        if p.suffix.lower() not in EXT and p.name not in (
+                "Dockerfile", "Makefile"):
+            continue
+        try:
+            text = p.read_text(errors="ignore")
+        except OSError:
+            continue
+        if not text.strip():
+            continue
+        text = text[:MAX_BYTES_PER_FILE]
+        rel = p.relative_to(ws).as_posix()
+        block = f"\n\n===== FILE: {rel} =====\n{text}\n"
+        if total + len(block) > MAX_TOTAL:
+            chunks.append("\n\n[... codebase truncated to fit context ...]\n")
+            break
+        chunks.append(block)
+        total += len(block)
+    return "".join(chunks).strip()
+
+
+def _bless_state_get() -> dict:
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(Setting.key == "code_bless").first()
+        if row and isinstance(row.value, dict):
+            return dict(row.value)
+        return {"status": "not_requested"}
+    finally:
+        db.close()
+
+
+def _bless_state_set(state: dict) -> None:
+    state = dict(state)
+    state.setdefault("updated_at",
+                     dt.datetime.now(dt.timezone.utc).isoformat())
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(Setting.key == "code_bless").first()
+        if row:
+            row.value = state
+        else:
+            db.add(Setting(key="code_bless", value=state))
+        db.commit()
+    finally:
+        db.close()
+    try:
+        from .bus import bus
+        bus.publish("events", "runs_changed", {})
+    except Exception:
+        pass
+
+
+def bless_status() -> dict:
+    """Live state of the pre-flight code review. Read by the dashboard and
+    by the /api/track/run gate."""
+    return _bless_state_get()
+
+
+def is_code_blessed() -> bool:
+    """True iff the council has approved the current codebase."""
+    return _bless_state_get().get("status") == "approved"
+
+
+def _bless_worker(workspace: str) -> None:
+    cfg = _settings()
+    reviewers = _available_reviewers(cfg)
+    # If no reviewers are configured we cannot block forever; auto-approve
+    # but record the verdict honestly so the dashboard says so.
+    if not reviewers:
+        _bless_state_set({
+            "status": "approved",
+            "summary": ("No council reviewers configured — auto-approved. "
+                        "Add an OpenAI or Gemini key in Settings to enable "
+                        "code review before training runs."),
+            "blockers": [], "suggestions": [], "verdicts": {},
+            "auto": True,
+        })
+        return
+    code = _collect_codebase(workspace)
+    if not code:
+        _bless_state_set({
+            "status": "rejected", "blockers": [
+                "no source files found in the agent workspace — the agent "
+                "has not scaffolded anything yet"],
+            "suggestions": [], "verdicts": {}})
+        return
+    user_prompt = (
+        "Review the codebase below. Respond with STRICT JSON per the "
+        "schema in the system message.\n" + code)
+    verdicts: dict[str, dict] = {}
+    for reviewer in reviewers:
+        v = _call_reviewer(reviewer, _BLESS_SYSTEM, user_prompt, cfg)
+        if not v:
+            verdicts[reviewer] = {"approved": None,
+                                  "blockers": [], "suggestions": [],
+                                  "summary":
+                                  f"{reviewer}: call failed (token / quota?)"}
+            continue
+        verdicts[reviewer] = {
+            "approved": bool(v.get("approved")),
+            "blockers": list(v.get("blockers") or []),
+            "suggestions": list(v.get("suggestions") or []),
+            "summary": (v.get("summary") or "")[:280],
+        }
+    # Aggregate: ALL working reviewers must approve. Any blocker from any
+    # reviewer is included in the blocker list shown to the agent.
+    working = [r for r, v in verdicts.items() if v.get("approved") is not None]
+    approved = bool(working) and all(verdicts[r]["approved"] for r in working)
+    blockers: list[str] = []
+    suggestions: list[str] = []
+    for r, v in verdicts.items():
+        for b in v.get("blockers", []):
+            blockers.append(f"[{r}] {b}")
+        for s in v.get("suggestions", []):
+            suggestions.append(f"[{r}] {s}")
+    summary = ("approved by " + ", ".join(working)
+               if approved else
+               f"{len(blockers)} blocker(s) raised — agent must fix")
+    _bless_state_set({
+        "status": "approved" if approved else "rejected",
+        "summary": summary,
+        "blockers": blockers,
+        "suggestions": suggestions,
+        "verdicts": verdicts,
+    })
+    # Emit an Event so it shows up in the Summary feed live.
+    try:
+        from .models import Event
+        db = SessionLocal()
+        try:
+            ev = Event(id="ev-" + os.urandom(4).hex(),
+                       type=("code_blessed" if approved
+                             else "code_rejected"),
+                       severity=("info" if approved else "warning"),
+                       actor="council",
+                       message=("Council approved the codebase — "
+                                "training runs unlocked."
+                                if approved else
+                                f"Council rejected the codebase: "
+                                f"{len(blockers)} blocker(s). "
+                                "Agent must fix before any run can launch."),
+                       created_at=dt.datetime.now(
+                           dt.timezone.utc).isoformat())
+            db.add(ev)
+            db.commit()
+            try:
+                from .bus import bus
+                bus.publish("events", "event", ev.dict())
+            except Exception:
+                pass
+        finally:
+            db.close()
+    except Exception as e:                              # noqa: BLE001
+        print(f"[council/bless] event-emit failed: {e}", flush=True)
+
+
+def bless_async(workspace: str) -> dict:
+    """Kick off a fresh review of ``workspace``. Returns the state
+    immediately (pending); the verdict is written later by the worker."""
+    _bless_state_set({"status": "pending",
+                      "summary": "Council is reviewing the codebase…",
+                      "blockers": [], "suggestions": [], "verdicts": {}})
+    threading.Thread(target=_bless_worker, args=(workspace,),
+                     daemon=True, name="council-bless").start()
+    return bless_status()
+

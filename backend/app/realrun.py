@@ -36,6 +36,41 @@ train.py, prepare.py and ideas.md. Run the baseline first, then explore one
 idea per experiment, keeping every idle GPU busy. Do not stop — keep
 researching.
 
+# CODE FREEZE — required before any training run launches
+The autoresearcherUI council MUST review your code before any training
+run is allowed. The flow is non-negotiable:
+
+  1. Scaffold program.md, train.py, prepare.py, ideas.md in this
+     directory. Get them to a state you'd actually be willing to run.
+  2. (Recommended) Do a `_probe` or `_smoke` sanity check — names
+     starting with `_probe` or `_smoke` bypass the code-bless gate so
+     you can confirm the script even imports + does one optimiser step
+     before the council reviews. Log it through arui as usual.
+  3. Request a code review:
+        curl -sS -X POST $ARUI_INGEST_URL/api/council/bless
+  4. Poll every ~10 seconds until status is decided:
+        curl -sS $ARUI_INGEST_URL/api/council/bless/status
+       Possible values:
+         - "pending"      → review in flight; keep polling
+         - "approved"     → training runs are now unlocked
+         - "rejected"     → STOP; read the `blockers` list, fix every
+                            blocker in the code, then go back to step 3
+         - "not_requested" → no review running yet; go back to step 3
+  5. ONLY after status="approved" may you launch the baseline + ideas.
+
+Until the council approves, POST /api/track/run returns HTTP 423 and
+your `arui.init` will fail. Don't try to bypass this — read the
+`blockers` field, fix the code, re-request bless.
+
+When the council rejects, the JSON shape is:
+  {"status":"rejected",
+   "summary":"...",
+   "blockers":["[gemini] train.py never sets arui.summary['__METRIC__']"],
+   "suggestions":[...]}
+Treat each blocker as a `MUST FIX` ticket. Edit the files, then call
+POST /api/council/bless again. Do not start runs until "approved".
+
+
 # Logging — REQUIRED for every experiment
 Every experiment MUST log via the `arui` SDK:
   import arui
