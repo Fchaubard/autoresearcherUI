@@ -897,6 +897,8 @@ async def post_onboarding(request: Request):
     the GPUs (RealAgent) — is not built yet, so the dashboard stays honestly
     empty until a real agent produces real experiments.
     """
+    from fastapi.responses import JSONResponse
+    from . import auth as _auth
     cfg = await request.json()
     db = SessionLocal()
     row = db.query(Setting).filter(Setting.key == "onboarding").first()
@@ -914,11 +916,27 @@ async def post_onboarding(request: Request):
     except Exception as e:                              # noqa: BLE001
         print(f"[api] apply_tokens_to_env error: {e}", flush=True)
 
+    # If the user set a passcode in this same submission, the passcode
+    # gate would IMMEDIATELY start 401'ing every subsequent dashboard
+    # call (including the boot-overlay polls), and the user would see
+    # 'The agent never started' even though it's running fine. Set the
+    # auth cookie on this response so the frontend continues as the
+    # authenticated user without needing a second login round-trip.
+    new_passcode = (cfg.get("passcode") or "").strip()
+
+    def _maybe_set_cookie(resp):
+        if new_passcode:
+            resp.set_cookie(
+                _auth.COOKIE_NAME, new_passcode,
+                max_age=60 * 60 * 24 * 30, httponly=True,
+                samesite="lax", path="/")
+        return resp
+
     # a Claude token (or the test hook) -> launch the real autonomous agent
     token = (cfg.get("claude_token") or "").strip()
     if token or os.environ.get("ARUI_CLAUDE_BIN"):
         realrun.start_real(cfg)
-        return {"status": "started"}
+        return _maybe_set_cookie(JSONResponse({"status": "started"}))
 
     # otherwise just register the project; dashboard stays honestly empty
     db = SessionLocal()
@@ -934,7 +952,7 @@ async def post_onboarding(request: Request):
             status="awaiting agent", gpu_count=0, created_at=_iso()))
         db.commit()
     db.close()
-    return {"status": "configured"}
+    return _maybe_set_cookie(JSONResponse({"status": "configured"}))
 
 
 # ──────────── tmux run sessions (the Sessions tab) ───────────────────────────
