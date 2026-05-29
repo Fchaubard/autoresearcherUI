@@ -2786,7 +2786,28 @@ function showAgentBootOverlay() {
         'output below, fix the cause, and retry.',
         txt);
     }
-    // tmux NEVER came up at all → likely realrun failed to spawn
+    // tmux NEVER came up at all → likely realrun failed to spawn.
+    // Check for the specific "claude binary missing" Event first so we
+    // give the user the actionable fix instead of a generic timeout.
+    if (!sawAliveOnce && sec > 6) {
+      try {
+        const evs = await api('/events');
+        const missing = (evs || []).find(e =>
+          e && e.type === 'claude_code_missing');
+        if (missing) {
+          return showError(
+            'Claude Code is not installed on this node',
+            'The autonomous Research Agent runs as a real `claude` CLI ' +
+            'session in tmux, but the binary isn\'t on the node\'s PATH. ' +
+            'SSH in and run: ' +
+            'npm install -g @anthropic-ai/claude-code ' +
+            '(then click Retry). On a fresh node, the cleanest fix is to ' +
+            '`git pull && bash setup.sh` — the installer now sets this up ' +
+            'automatically.',
+            txt || missing.message);
+        }
+      } catch (e) { /* keep polling */ }
+    }
     if (!sawAliveOnce && sec > 25) {
       return showError(
         'The agent never started',

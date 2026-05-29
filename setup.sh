@@ -75,7 +75,43 @@ else
 fi
 ok "deps installed"
 
-# ── 4. cloudflared (for the public URL) ─────────────────────────────────
+# ── 4a. Node.js (needed by Claude Code) ─────────────────────────────────
+if ! command -v node >/dev/null 2>&1; then
+  step "installing Node.js (Claude Code's runtime)…"
+  if command -v apt-get >/dev/null 2>&1; then
+    # nvm-free path: use NodeSource's prebuilt apt repo.
+    curl -fsSL https://deb.nodesource.com/setup_lts.x | $SUDO bash - \
+      >/dev/null 2>&1 || warn "could not add NodeSource repo"
+    $SUDO apt-get install -y -qq nodejs >/dev/null 2>&1 \
+      || warn "apt-get install nodejs failed"
+  fi
+  if command -v node >/dev/null 2>&1; then
+    ok "node $(node --version) installed"
+  else
+    warn "Node install didn't finish — install it manually then re-run setup.sh"
+  fi
+fi
+
+# ── 4b. Claude Code (the research + author agent runtimes) ──────────────
+if ! command -v claude >/dev/null 2>&1; then
+  step "installing Claude Code (the autonomous agent)…"
+  if command -v npm >/dev/null 2>&1; then
+    # --location=global is the future-proof flag; fall back to -g for older
+    # npm versions. Either way the binary lands in /usr/local/bin/claude.
+    $SUDO npm install -g --location=global @anthropic-ai/claude-code \
+      >/dev/null 2>&1 \
+      || $SUDO npm install -g @anthropic-ai/claude-code >/dev/null 2>&1 \
+      || warn "npm install -g @anthropic-ai/claude-code failed"
+  fi
+  if command -v claude >/dev/null 2>&1; then
+    ok "claude $(claude --version 2>/dev/null | head -1) installed"
+  else
+    warn "Claude Code missing — research agent won't spawn." \
+         "Install with: npm install -g @anthropic-ai/claude-code"
+  fi
+fi
+
+# ── 4c. cloudflared (for the public URL) ────────────────────────────────
 if [ "$NO_TUNNEL" -eq 0 ] && ! command -v cloudflared >/dev/null 2>&1; then
   step "installing cloudflared (gives you a public https URL)…"
   ARCH=$(uname -m)

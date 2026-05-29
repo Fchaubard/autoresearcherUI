@@ -169,11 +169,52 @@ researching.
 """
 
 
+def claude_binary_present() -> bool:
+    """True iff a `claude` binary is on the PATH. False means setup.sh
+    didn't install Claude Code yet; the dashboard surfaces this as a
+    specific error in the boot overlay instead of a generic timeout."""
+    import shutil
+    return shutil.which("claude") is not None
+
+
 def start_real(cfg: dict, resume: bool = False) -> RealAgent:
     """Create (or, on resume, reuse) the project and launch the agent."""
     global _agent
     name = (cfg.get("repo_name") or "research").strip() or "research"
     metric = (cfg.get("metric") or "val_loss").strip()
+    # Fail loudly + persistently if Claude Code is missing on the node.
+    # Previously this would spawn `claude --dangerously-skip-permissions`,
+    # the shell would 127-exit, tmux would die, and the boot overlay would
+    # time out with the unhelpful "agent never started" message.
+    if (not os.environ.get("ARUI_CLAUDE_BIN")) and not claude_binary_present():
+        try:
+            from .bus import bus
+            from .db import SessionLocal as _SL
+            from .models import Event as _Ev
+            db = _SL()
+            try:
+                ev = _Ev(id="ev-" + os.urandom(4).hex(),
+                         type="claude_code_missing",
+                         severity="critical", actor="system",
+                         message="The `claude` binary isn't installed on "
+                                 "this node. The Research Agent can't start. "
+                                 "Fix with: "
+                                 "`npm install -g @anthropic-ai/claude-code` "
+                                 "(or re-run setup.sh after `git pull`).",
+                         created_at=_iso())
+                db.add(ev)
+                db.commit()
+                try: bus.publish("events", "event", ev.dict())
+                except Exception: pass
+            finally:
+                db.close()
+        except Exception as e:                          # noqa: BLE001
+            print(f"[realrun] missing-claude event failed: {e}", flush=True)
+        print("[realrun] claude binary not on PATH — agent will not start",
+              flush=True)
+        # Don't spawn the tmux session; the frontend will see no agent
+        # session and surface the error overlay with the precise reason.
+        return None  # type: ignore[return-value]
 
     db = SessionLocal()
     proj = db.query(Project).first()
