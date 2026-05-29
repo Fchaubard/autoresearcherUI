@@ -2324,29 +2324,20 @@ EMAIL_RECIPIENTS=you@example.com
 GMAIL_APP_PW=
 PASSCODE=`;
   const bpb = el('button', 'btn', 'Parse & fill');
+  // Set explicit type="button" so this never tries to submit a parent form
+  // (was defaulting to submit-button semantics in some browsers; combined
+  // with the async defaults fetch this could swallow the first click).
+  bpb.type = 'button';
   bp.append(bpa, bpb); wrap.append(bp);
 
   const { form, inp } = buildSettingsForm();
   wrap.append(form);
 
-  const foot = el('div', 'onb-foot');
-  foot.append(el('div', 'onb-note',
-    'This saves your project config — it does not show any demo data. The ' +
-    'autonomous agent that researches your project (a real Claude Code agent ' +
-    'on your GPUs) is the next milestone; until it is built the dashboard ' +
-    'stays empty.'));
-  const start = el('button', 'btn pri onb-start', 'Start research →');
-  foot.append(start); wrap.append(foot);
-  app.append(wrap);
-
-  // pre-fill editable defaults (agent_instructions etc.) from the backend
-  api('/onboarding/defaults').then(defs => {
-    Object.entries(defs || {}).forEach(([k, v]) => {
-      if (inp[k] && !inp[k].value) inp[k].value = v;
-    });
-  }).catch(() => { /* keep the blank textarea */ });
-
-  bpb.onclick = () => {
+  // Attach the click handler IMMEDIATELY — before app.append + the async
+  // /api/onboarding/defaults fetch. The previous order left a window
+  // where the button was live in the DOM but had no handler yet, which
+  // is what caused "first click does nothing, second click works".
+  const parseAndFill = () => {
     const keymap = {};                       // case-insensitive lookup
     Object.keys(inp).forEach(k => keymap[k.toLowerCase()] = inp[k]);
     let filled = 0;
@@ -2361,11 +2352,48 @@ PASSCODE=`;
       if (v.length > 1 && /^(['"]).*\1$/.test(v)) v = v.slice(1, -1);
       if (x.type === 'checkbox') x.checked = /^(true|yes|1|on)$/i.test(v);
       else x.value = v;
+      // Notify any listeners (and prevent the async defaults fetch from
+      // clobbering — `!inp[k].value` becomes false after this) by firing
+      // both 'input' and 'change' events the way a real keystroke would.
+      try { x.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {}
+      try { x.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {}
       filled++;
     });
-    bpb.textContent = filled ? `Filled ${filled} fields ✓` : 'No matching keys';
-    setTimeout(() => bpb.textContent = 'Parse & fill', 2000);
+    bpb.textContent = filled
+      ? `Filled ${filled} field${filled === 1 ? '' : 's'} ✓`
+      : 'No matching keys';
+    bpb.style.background = filled ? 'var(--ok)' : '';
+    bpb.style.color = filled ? '#0b0d10' : '';
+    setTimeout(() => {
+      bpb.textContent = 'Parse & fill';
+      bpb.style.background = '';
+      bpb.style.color = '';
+    }, 2200);
   };
+  // addEventListener (not onclick) so a stray onclick assignment elsewhere
+  // can't blow this away. preventDefault guards against any inherited
+  // form-submit semantics.
+  bpb.addEventListener('click', e => { e.preventDefault(); parseAndFill(); });
+
+  const foot = el('div', 'onb-foot');
+  foot.append(el('div', 'onb-note',
+    'This saves your project config — it does not show any demo data. The ' +
+    'autonomous agent that researches your project (a real Claude Code agent ' +
+    'on your GPUs) is the next milestone; until it is built the dashboard ' +
+    'stays empty.'));
+  const start = el('button', 'btn pri onb-start', 'Start research →');
+  start.type = 'button';
+  foot.append(start); wrap.append(foot);
+  app.append(wrap);
+
+  // Pre-fill editable defaults (agent_instructions etc.) from the backend.
+  // Runs AFTER the Parse & fill click handler is attached, so an
+  // overly-fast click is always handled correctly.
+  api('/onboarding/defaults').then(defs => {
+    Object.entries(defs || {}).forEach(([k, v]) => {
+      if (inp[k] && !inp[k].value) inp[k].value = v;
+    });
+  }).catch(() => { /* keep the blank textarea */ });
   start.onclick = async () => {
     start.disabled = true; start.textContent = 'Starting…';
     const cfg = {};
