@@ -942,6 +942,16 @@ body.resizing{user-select:none}
   to { transform:rotate(360deg); }
 }
 
+/* Error state on the boot overlay — keeps the same card but swaps the
+ * spinner for a big amber warning glyph and changes the action row. */
+.boot-err-icon{font-size:48px;color:#FBBF24;line-height:1;margin:6px 0 8px;
+  filter:drop-shadow(0 0 14px rgba(251,191,36,.4));text-align:center}
+.boot-err-title{color:#FCA5A5}
+.boot-err-body{font-size:13px;color:var(--text-2);line-height:1.6;
+  margin:8px 0 14px}
+.boot-term-err{border-color:#F43F5E55;background:#1a0d10;color:#fca5a5}
+.boot-actions .btn.pri{margin-right:8px}
+
 /* ── login screen ─────────────────────────────────────────────────────── */
 .login-wrap{min-height:100vh;display:flex;align-items:center;
   justify-content:center;padding:24px}

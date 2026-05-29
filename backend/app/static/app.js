@@ -2254,7 +2254,7 @@ function buildSettingsForm({ initial = {}, hideFields = [] } = {}) {
   return { form, inp };
 }
 
-function onboarding() {
+function onboarding(initial = {}) {
   const app = document.getElementById('app');
   app.className = 'onb'; app.innerHTML = '';
   const wrap = el('div', 'onb-wrap');
@@ -2330,7 +2330,7 @@ PASSCODE=`;
   bpb.type = 'button';
   bp.append(bpa, bpb); wrap.append(bp);
 
-  const { form, inp } = buildSettingsForm();
+  const { form, inp } = buildSettingsForm({ initial });
   wrap.append(form);
 
   // Attach the click handler IMMEDIATELY — before app.append + the async
@@ -2395,10 +2395,24 @@ PASSCODE=`;
     });
   }).catch(() => { /* keep the blank textarea */ });
   start.onclick = async () => {
-    start.disabled = true; start.textContent = 'Starting…';
     const cfg = {};
     Object.entries(inp).forEach(([k, x]) =>
       cfg[k] = x.type === 'checkbox' ? x.checked : x.value);
+    // Cheap client-side sanity check — catches obvious mistakes (empty,
+    // wrong-format, placeholder) before we waste 30 s of boot time only to
+    // discover the token can't authenticate.
+    const tok = (cfg.claude_token || '').trim();
+    if (!tok || /^sk-ant-replace_?me$/i.test(tok) || tok.length < 25
+        || !/^sk-ant-/i.test(tok)) {
+      aruiAlert(
+        "The Claude API token doesn't look right. It must start with " +
+        "'sk-ant-' and be the full key from https://console.anthropic.com/" +
+        " (paste the entire string, not a placeholder).",
+        { title: 'Claude token looks invalid' });
+      inp.claude_token?.focus();
+      return;
+    }
+    start.disabled = true; start.textContent = 'Starting…';
     try {
       await post('/onboarding', cfg);
     } catch (e) {
@@ -2482,29 +2496,133 @@ function showAgentBootOverlay() {
   };
   let interval = null;
   let redirected = false;
+  let errorShown = false;
+  let sawAliveOnce = false;
+  // Patterns that mean Claude Code died because the token is wrong /
+  // expired / out of credit / rate-limited. Anything matching → switch
+  // the overlay to error mode with a "Back to onboarding" button.
+  const AUTH_ERROR_PATTERNS = [
+    /invalid\s+api\s+key/i,
+    /authentication\s+(failed|error)/i,
+    /unauthor[iz]ed/i,
+    /\b401\b/,
+    /credit\s+balance/i,
+    /(low|insufficient)\s+balance/i,
+    /api\s+key.*(invalid|expired|revoked|not\s+found)/i,
+    /please\s+(login|log\s+in|authenticate|sign\s+in)/i,
+    /failed\s+to\s+authenticate/i,
+    /your\s+api\s+key.*not.*valid/i,
+  ];
+  const RATE_LIMIT_PATTERNS = [
+    /rate\s+limit/i,
+    /\b429\b/,
+    /too\s+many\s+requests/i,
+  ];
+  const matchesAny = (text, pats) => pats.some(re => re.test(text));
   const finish = (reason) => {
-    if (redirected) return; redirected = true;
+    if (redirected || errorShown) return; redirected = true;
     if (interval) clearInterval(interval);
     setTimeout(() => location.reload(), 500);
     step.textContent = reason || 'Ready — opening the dashboard…';
+  };
+  const showError = async (title, body, ttext) => {
+    if (errorShown || redirected) return;
+    errorShown = true;
+    if (interval) clearInterval(interval);
+    // Pull the user's saved config back so the form pre-fills when they
+    // click "Back to onboarding". The settings endpoint returns the
+    // onboarding row with secrets masked — that's fine, the user will
+    // re-enter the broken token anyway.
+    let saved = {};
+    try { saved = await api('/settings'); } catch (e) {}
+    const card = document.querySelector('.boot-card');
+    if (card) {
+      card.innerHTML =
+        '<div class="boot-brand">autoresearcher<span>UI</span></div>' +
+        '<div class="boot-err-icon" aria-hidden="true">⚠</div>' +
+        '<h2 class="boot-title boot-err-title">' + esc(title) + '</h2>' +
+        '<div class="boot-err-body">' + esc(body) + '</div>' +
+        '<pre class="boot-term boot-term-err">' +
+        esc((ttext || '').split('\n').slice(-14).join('\n') ||
+        '(no agent output)') + '</pre>' +
+        '<div class="boot-actions">' +
+          '<button class="btn pri" id="boot-back" type="button">' +
+          '← Back to onboarding</button>' +
+          '<button class="btn" id="boot-retry" type="button">' +
+          'Retry now</button>' +
+        '</div>' +
+        '<div class="boot-help">' +
+          'Your config is saved — clicking <b>Back to onboarding</b> ' +
+          'reopens the form with everything pre-filled so you only need ' +
+          'to fix the broken field.' +
+        '</div>';
+      document.getElementById('boot-back').onclick = () =>
+        onboarding(saved || {});
+      document.getElementById('boot-retry').onclick = async () => {
+        const btn = document.getElementById('boot-retry');
+        btn.disabled = true; btn.textContent = 'Restarting agent…';
+        try {
+          await post('/agent/restart', {});
+        } catch (e) {}
+        // Reset overlay state and resume polling.
+        errorShown = false;
+        showAgentBootOverlay();
+      };
+    }
   };
   const tick = async () => {
     const sec = Math.floor((Date.now() - t0) / 1000);
     elapsed.textContent = sec + 's elapsed';
     let d = null;
     try { d = await api('/agent/terminal'); } catch (e) { /* try later */ }
-    if (d && d.text) {
-      const txt = d.text.replace(/[ \t]+$/gm, '').trim();
-      if (txt && txt !== '(no agent session yet)') {
-        const lines = txt.split('\n').slice(-12).join('\n');
-        term.textContent = lines;
-        term.scrollTop = term.scrollHeight;
-        const detected = detectStage(txt);
-        if (detected > stage) { stage = detected; step.textContent = stages[stage]; }
-      } else if (sec > 4) {
-        // We sent the config but tmux still has nothing — agent is mid-boot.
-        if (stage < 2) { stage = 2; step.textContent = stages[stage]; }
+    const txtRaw = (d && d.text) || '';
+    const txt = txtRaw.replace(/[ \t]+$/gm, '').trim();
+    if (d && d.alive) sawAliveOnce = true;
+    if (txt && txt !== '(no agent session yet)') {
+      const lines = txt.split('\n').slice(-12).join('\n');
+      term.textContent = lines;
+      term.scrollTop = term.scrollHeight;
+      const detected = detectStage(txt);
+      if (detected > stage) { stage = detected; step.textContent = stages[stage]; }
+      // ── error detection on the live tmux text ───────────────────────
+      if (matchesAny(txt, AUTH_ERROR_PATTERNS)) {
+        return showError(
+          'Claude token rejected',
+          'Claude Code reported an authentication error. The token in ' +
+          'your config is invalid, expired, revoked, or out of credit. ' +
+          'Fix it in the onboarding form and try again.',
+          txt);
       }
+      if (matchesAny(txt, RATE_LIMIT_PATTERNS)) {
+        return showError(
+          'Anthropic rate-limited the launch',
+          'The Anthropic API responded with a rate-limit error. Wait a ' +
+          'minute or two, then click Retry. If it keeps happening, your ' +
+          'workspace may be over its usage limit.',
+          txt);
+      }
+    } else if (sec > 4) {
+      if (stage < 2) { stage = 2; step.textContent = stages[stage]; }
+    }
+    // tmux died after we saw it alive at least once → Claude Code exited
+    if (sawAliveOnce && d && d.alive === false && sec > 8) {
+      return showError(
+        'The Research Agent quit during startup',
+        'The Claude Code tmux session is gone. Common causes: the API ' +
+        'token is invalid or expired, the user pressed "No, exit" on the ' +
+        'bypass-permissions consent, or Claude Code crashed. Check the ' +
+        'output below, fix the cause, and retry.',
+        txt);
+    }
+    // tmux NEVER came up at all → likely realrun failed to spawn
+    if (!sawAliveOnce && sec > 25) {
+      return showError(
+        'The agent never started',
+        'After 25 s the Research Agent tmux session still does not ' +
+        'exist. Either the Claude Code binary is missing on this node, ' +
+        'or the backend rejected the onboarding submission. Check the ' +
+        'server log (`tmux attach -t arui`) for details.',
+        txt);
     }
     // Heuristic finish: the agent has produced enough output AND we're
     // past the "scaffolding" stage. Realistically, by then there will be
