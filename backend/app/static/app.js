@@ -2428,10 +2428,37 @@ PASSCODE=`;
       bpb.style.color = '';
     }, 2200);
   };
-  // addEventListener (not onclick) so a stray onclick assignment elsewhere
-  // can't blow this away. preventDefault guards against any inherited
-  // form-submit semantics.
-  bpb.addEventListener('click', e => { e.preventDefault(); parseAndFill(); });
+  // Multi-event triggering: bind click + pointerdown + auto-on-paste so
+  // the user gets a fill no matter which interaction Chrome decides to
+  // honor first. The 200ms guard dedupes the cascade.
+  let _lastFire = 0;
+  const fireParseAndFill = (label) => {
+    const now = Date.now();
+    if (now - _lastFire < 200) return;
+    _lastFire = now;
+    console.log('[onb] parse&fill triggered via', label);
+    parseAndFill();
+  };
+  // Capture phase + click — runs before any later-attached handler can
+  // call stopPropagation. Defensive against future code that might
+  // accidentally swallow clicks at a parent level.
+  bpb.addEventListener('click', e => {
+    e.preventDefault(); e.stopPropagation();
+    fireParseAndFill('click');
+  }, { capture: true });
+  // pointerdown fires BEFORE click and before any focus-change drama —
+  // works even if a textarea blur somehow eats the click event.
+  bpb.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    fireParseAndFill('pointerdown');
+  });
+  // AUTO-PARSE ON PASTE — most ergonomic of all: paste your .env block
+  // into the textarea and the form fills itself ~250 ms later. No click
+  // needed. We still keep the button for users who edit the textarea
+  // line by line and want explicit control.
+  bpa.addEventListener('paste', () => {
+    setTimeout(() => fireParseAndFill('paste'), 250);
+  });
 
   const foot = el('div', 'onb-foot');
   foot.append(el('div', 'onb-note',
