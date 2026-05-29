@@ -67,6 +67,50 @@ def _poke_author_to_integrate(run_id: str, metric: float | None,
         print(f"[paper] poke author tmux failed: {e}", flush=True)
 
 
+def _apply_tokens_to_env() -> None:
+    """Copy onboarding-saved API tokens into ``os.environ`` so council,
+    PI, and lit-agent can find them.
+
+    Bug history: ``council._call_gemini`` reads
+    ``os.environ['GEMINI_API_KEY']`` directly. The onboarding form saves
+    user-provided tokens to the ``Setting`` row under the snake-case keys
+    ``gemini_token`` / ``openai_token`` / ``claude_token``. Nothing
+    bridged the two, so the user could paste a perfectly good Gemini key
+    and still see ``[pi] no API key for gemini-2.5-pro; skipping cycle``.
+
+    Call this at backend startup (lifespan), after every
+    ``POST /api/onboarding``, and after every ``PUT /api/settings``. The
+    helper is idempotent and never overwrites an existing env var that
+    was set externally (e.g. via ``.env`` or systemd) — that lets the
+    user override the dashboard value when they really need to."""
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(Setting.key == "onboarding").first()
+        cfg = dict(row.value) if row and isinstance(row.value, dict) else {}
+    finally:
+        db.close()
+    pairs = {
+        "ANTHROPIC_API_KEY": cfg.get("claude_token"),
+        "OPENAI_API_KEY":    cfg.get("openai_token"),
+        "GEMINI_API_KEY":    cfg.get("gemini_token"),
+        "GOOGLE_API_KEY":    cfg.get("gemini_token"),  # some libs use this name
+        "GITHUB_TOKEN":      cfg.get("github_token"),
+    }
+    set_names = []
+    for env_name, val in pairs.items():
+        val = (val or "").strip()
+        if not val:
+            continue
+        # Don't clobber an externally-set value — env wins over Settings.
+        if os.environ.get(env_name):
+            continue
+        os.environ[env_name] = val
+        set_names.append(env_name)
+    if set_names:
+        print(f"[api] applied tokens from onboarding to env: "
+              f"{', '.join(set_names)}", flush=True)
+
+
 def _set_setting(key: str, value) -> None:
     """Persist a single Settings key (small helper for mode-switch logic)."""
     db = SessionLocal()
@@ -771,6 +815,11 @@ async def put_settings(request: Request):
         db.commit()
     finally:
         db.close()
+    # Sync newly-saved tokens into os.environ so council/PI/lit-agent
+    # pick them up immediately — no backend restart required.
+    try: _apply_tokens_to_env()
+    except Exception as e:                              # noqa: BLE001
+        print(f"[api] apply_tokens_to_env error: {e}", flush=True)
     return {"status": "ok"}
 
 
@@ -857,6 +906,13 @@ async def post_onboarding(request: Request):
         db.add(Setting(key="onboarding", value=cfg))
     db.commit()
     db.close()
+    # Push the freshly-saved tokens into os.environ BEFORE we spawn the
+    # research agent. Without this, council and PI cycles can't find the
+    # keys and silently skip — the symptom that brought you here:
+    #     [pi] no API key for gemini-2.5-pro; skipping cycle
+    try: _apply_tokens_to_env()
+    except Exception as e:                              # noqa: BLE001
+        print(f"[api] apply_tokens_to_env error: {e}", flush=True)
 
     # a Claude token (or the test hook) -> launch the real autonomous agent
     token = (cfg.get("claude_token") or "").strip()

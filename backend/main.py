@@ -24,6 +24,14 @@ from .app.models import Project
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # Push onboarding-saved API tokens into os.environ BEFORE any of the
+    # background services start, so the very first PI / council cycle on
+    # boot can find them. Idempotent — env vars set externally win.
+    try:
+        from .app import api as _api
+        _api._apply_tokens_to_env()
+    except Exception as e:                              # noqa: BLE001
+        print(f"[main] apply_tokens_to_env failed: {e}", flush=True)
     notify.start_scheduler()          # periodic email digests (cadence-driven)
     monitor.start()                   # gpu telemetry + run reconciliation
     pi.start()                        # hourly PI oversight cycle
