@@ -106,14 +106,81 @@ arXiv + Semantic Scholar. Flip back to Research at any time.
 - **PI Agent** — hourly. Reads GPU saturation, the last ~12 runs, the agent's
   recent output, and the top of `ideas.md`; types short concrete nudges.
   Switches persona by mode.
-- **The Council** — after every kept run (batched every N), Gemini and GPT-5
-  independently review then debate up to N rounds. Consensus applies;
-  deadlocks go to Claude. Every round is persisted on the run.
+- **The Council** — runs in two places. **(1)** Once at startup as the
+  **code-bless gate** (see below). **(2)** After every kept run (batched
+  every N), Gemini and GPT-5 independently review then debate up to N
+  rounds; consensus applies, deadlocks go to Claude. Every round is
+  persisted on the run.
 - **Lit Agent** — pulls candidates from arXiv + Semantic Scholar, ranks by
   relevance, files cite-candidate decisions.
 - **Paper Runner** — daemon that reads paper-mode `Run` rows with
   `status='queued'`, resolves deps, bin-packs onto the GPU table, launches
   them. Local backend in v0.0.1; SLURM/K8s pluggable later.
+
+## The default safety pattern: council code-bless
+
+**No training runs launch until the council has reviewed and approved
+the codebase.** This is the default behaviour, on by default, and you
+cannot turn it off through the UI — it's the most important guardrail
+between an enthusiastic agent and a 10-GPU-hour run that was logging the
+wrong metric the entire time.
+
+The dance, every time the Research Agent (re)spawns a new project:
+
+```
+agent: scaffolds program.md, train.py, prepare.py, ideas.md
+agent: (recommended) launches a _probe or _smoke run that bypasses the
+       gate, to confirm the script actually imports + does one optimiser
+       step before wasting council tokens
+agent: POST /api/council/bless
+backend: reads every .py / .md / .yaml / .json / .sh in the workspace
+         (skipping caches, datasets, checkpoints, .venv)
+         and sends it to every available reviewer (Gemini, OpenAI) in
+         parallel with a strict "find BLOCKERS not style nits" prompt
+reviewers: return {approved, blockers:[...], suggestions:[...]}
+backend: ALL reviewers must approve. Verdict persisted to Setting
+         `code_bless` and broadcast on SSE.
+agent: polls GET /api/council/bless/status every ~10 s
+   - "pending"   → keep waiting
+   - "approved"  → launch the baseline
+   - "rejected"  → reads the `blockers` list, fixes the code, then
+                   POST /api/council/bless again
+```
+
+Server-side enforcement, not trust-based: `POST /api/track/run` returns
+**HTTP 423 Locked** unless `code_blessed=true`. The agent's `arui.init()`
+call fails immediately, the agent reads the JSON body's `bless_status`
+field, and knows exactly what to fix. (Run names starting with `_probe`
+or `_smoke` bypass the gate so the agent can sanity-check the script
+imports BEFORE submitting for review.)
+
+The council's brief, paraphrased: catch BLOCKERS, not style nits. Real
+blockers it looks for: `arui.summary["__METRIC__"]` misspelled or
+missing; metric direction mismatch (logging loss while the project says
+"maximize"); training set leaks into the eval set; baseline doesn't
+match `program.md`; script crashes on import; never calls `.backward()`;
+off-by-ones in epoch/step counting; dataset path that doesn't exist on
+this node. What it explicitly DOESN'T flag: style, hyperparameter
+choices, "consider also trying X" — those are research decisions.
+
+You see the verdict live on the dashboard:
+
+| State | Banner |
+|---|---|
+| `approved` | small green ✓ **code blessed** pill in the header |
+| `pending` | violet banner: *"Council is reviewing the codebase…"* |
+| `rejected` | red banner listing every blocker as bullets + *Clear & await re-review* button |
+| `not_requested` | grey *"Awaiting code review"* note |
+
+If you have no OpenAI or Gemini key configured, the bless auto-approves
+with an honest "no reviewers configured — auto-approved" note. So you
+can still run autoresearcherUI Claude-only; you just don't get the
+code-bless protection on the baseline.
+
+Want to force a re-review (e.g., the agent fixed something the council
+flagged)? Hit **Clear & await re-review** on the banner, or
+`POST /api/council/bless/reset` — the next run attempt will trigger a
+fresh review.
 
 ## Screens
 
