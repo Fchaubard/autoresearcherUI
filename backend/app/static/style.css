@@ -897,6 +897,51 @@ body.resizing{user-select:none}
 .pp-ctrl select{background:#0a0c0f;border:1px solid var(--border);
   color:var(--text);border-radius:6px;padding:4px 8px;font-size:12px}
 
+/* ── agent-boot overlay (post-onboarding "warming up") ────────────────── */
+.boot-wrap{min-height:100vh;display:flex;align-items:center;
+  justify-content:center;padding:24px;
+  background:radial-gradient(1100px 600px at 50% 30%,
+    rgba(99,102,241,.18), transparent 60%), var(--bg)}
+.boot-card{background:var(--panel);border:1px solid var(--border);
+  border-radius:14px;padding:30px 28px 22px;width:100%;max-width:620px;
+  text-align:center;box-shadow:0 24px 60px rgba(0,0,0,.45)}
+.boot-brand{font-size:14px;font-weight:700;color:var(--muted);
+  letter-spacing:.4px;margin-bottom:18px}
+.boot-brand span{color:var(--accent)}
+.boot-title{font-size:18px;font-weight:700;color:var(--text);margin:8px 0 4px}
+.boot-step{font-size:13px;color:var(--accent-2,#A78BFA);
+  font-weight:600;margin:12px 0 4px;min-height:18px}
+.boot-elapsed{font-size:11px;color:var(--muted);
+  font-family:var(--mono);margin-bottom:14px}
+.boot-term{background:#0a0c0f;border:1px solid var(--border);
+  border-radius:9px;padding:11px 13px;font-family:var(--mono);font-size:11px;
+  color:#cdd3da;text-align:left;line-height:1.55;height:170px;
+  overflow:auto;white-space:pre-wrap;word-break:break-all}
+.boot-actions{margin:14px 0 6px}
+.boot-help{font-size:11px;color:var(--muted);line-height:1.55;margin-top:6px}
+
+/* "Beachball" spinner — a four-color conic gradient ring that spins
+ * continuously. Pure CSS, no JS, no SVG. Sits centered above the title. */
+.boot-spinner{
+  width:64px;height:64px;border-radius:50%;margin:6px auto 12px;
+  background:
+    conic-gradient(
+      from 0deg,
+      #6366F1 0deg 90deg,
+      #A78BFA 90deg 180deg,
+      #34D399 180deg 270deg,
+      #FBBF24 270deg 360deg);
+  /* mask out the center so it's a ring, not a disc */
+  -webkit-mask:radial-gradient(circle 22px at 50% 50%, transparent 99%,
+    #000 100%);
+          mask:radial-gradient(circle 22px at 50% 50%, transparent 99%,
+    #000 100%);
+  animation:boot-spin 1.3s linear infinite;
+  filter:drop-shadow(0 0 16px rgba(99,102,241,.35))}
+@keyframes boot-spin{
+  to { transform:rotate(360deg); }
+}
+
 /* ── login screen ─────────────────────────────────────────────────────── */
 .login-wrap{min-height:100vh;display:flex;align-items:center;
   justify-content:center;padding:24px}

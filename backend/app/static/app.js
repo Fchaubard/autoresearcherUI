@@ -2399,9 +2399,122 @@ PASSCODE=`;
     const cfg = {};
     Object.entries(inp).forEach(([k, x]) =>
       cfg[k] = x.type === 'checkbox' ? x.checked : x.value);
-    await post('/onboarding', cfg);
-    setTimeout(() => location.reload(), 600);
+    try {
+      await post('/onboarding', cfg);
+    } catch (e) {
+      aruiAlert('Onboarding save failed: ' + e,
+        { title: 'Could not save config' });
+      start.disabled = false; start.textContent = 'Start research →';
+      return;
+    }
+    // Don't slam-reload — the Claude Code agent takes 20–40 s to come up
+    // (Claude Code splash → consent prompt → REPL → brief). Show a boot
+    // overlay that polls the agent's tmux until we see real output, then
+    // redirect. The user gets visible progress instead of a blank page.
+    showAgentBootOverlay();
   };
+}
+
+/* Full-screen "warming up" overlay shown between onboarding submission and
+ * the dashboard opening. Polls /api/agent/terminal every 2 s, shows the
+ * latest tmux tail + a status line that advances as we observe progress,
+ * and redirects to the dashboard once the agent looks responsive.
+ * A "Skip & open dashboard" button lets impatient users bail out. */
+function showAgentBootOverlay() {
+  const app = document.getElementById('app');
+  app.className = 'onb';
+  app.innerHTML =
+    '<div class="boot-wrap">' +
+      '<div class="boot-card">' +
+        '<div class="boot-brand">autoresearcher<span>UI</span></div>' +
+        '<div class="boot-spinner" aria-hidden="true"></div>' +
+        '<h2 class="boot-title">Spinning up your research</h2>' +
+        '<div class="boot-step" id="boot-step">Saving your config…</div>' +
+        '<div class="boot-elapsed" id="boot-elapsed">0s elapsed</div>' +
+        '<pre class="boot-term" id="boot-term">(waiting for the agent to ' +
+        'come up…)</pre>' +
+        '<div class="boot-actions">' +
+          '<button class="btn" id="boot-skip" type="button">' +
+          'Skip &amp; open dashboard</button>' +
+        '</div>' +
+        '<div class="boot-help">' +
+          'The Research Agent is a real Claude Code session. First boot ' +
+          'takes ~20–40&nbsp;seconds (splash screen → bypass-permissions ' +
+          'consent → REPL → your research brief). Once it\'s up, you\'ll ' +
+          'be dropped onto the dashboard.' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  const step = document.getElementById('boot-step');
+  const term = document.getElementById('boot-term');
+  const elapsed = document.getElementById('boot-elapsed');
+  document.getElementById('boot-skip').onclick = () => location.reload();
+  const t0 = Date.now();
+  let stage = 0;
+  const stages = [
+    'Saving your config…',
+    'Spawning the Research Agent tmux session…',
+    'Booting Claude Code…',
+    'Accepting bypass-permissions consent…',
+    'Waiting for the Claude Code REPL to be ready…',
+    'Handing the research brief to the agent…',
+    'Agent is reading your purpose, seeds, and metric…',
+    'Agent is scaffolding program.md, train.py, ideas.md…',
+    'Agent is queuing the baseline run…',
+  ];
+  // Best-effort stage detection from the actual tmux output.
+  const detectStage = (text) => {
+    const lc = text.toLowerCase();
+    if (lc.includes('arui.init') || lc.includes('arui.log')
+        || lc.includes('experiment') || /\bidea\s*\d/.test(lc)) return 8;
+    if (lc.includes('program.md') || lc.includes('train.py')
+        || lc.includes('ideas.md') || lc.includes('writing')
+        || lc.includes('creating')) return 7;
+    if (lc.includes('research') || lc.includes('purpose')
+        || lc.includes('goal')) return 6;
+    if (lc.includes('how can i help') || lc.includes("what's your")
+        || lc.includes('claude code') && lc.includes('ready')) return 5;
+    if (lc.includes('yes, i accept') || lc.includes('bypass permissions')) {
+      return 3;
+    }
+    if (lc.includes('welcome') || lc.length > 50) return 4;
+    return Math.max(stage, 2);   // tmux is reachable → at least booting
+  };
+  let interval = null;
+  let redirected = false;
+  const finish = (reason) => {
+    if (redirected) return; redirected = true;
+    if (interval) clearInterval(interval);
+    setTimeout(() => location.reload(), 500);
+    step.textContent = reason || 'Ready — opening the dashboard…';
+  };
+  const tick = async () => {
+    const sec = Math.floor((Date.now() - t0) / 1000);
+    elapsed.textContent = sec + 's elapsed';
+    let d = null;
+    try { d = await api('/agent/terminal'); } catch (e) { /* try later */ }
+    if (d && d.text) {
+      const txt = d.text.replace(/[ \t]+$/gm, '').trim();
+      if (txt && txt !== '(no agent session yet)') {
+        const lines = txt.split('\n').slice(-12).join('\n');
+        term.textContent = lines;
+        term.scrollTop = term.scrollHeight;
+        const detected = detectStage(txt);
+        if (detected > stage) { stage = detected; step.textContent = stages[stage]; }
+      } else if (sec > 4) {
+        // We sent the config but tmux still has nothing — agent is mid-boot.
+        if (stage < 2) { stage = 2; step.textContent = stages[stage]; }
+      }
+    }
+    // Heuristic finish: the agent has produced enough output AND we're
+    // past the "scaffolding" stage. Realistically, by then there will be
+    // a project name in /api/project and the dashboard will paint correctly.
+    if (stage >= 7 && sec > 18) finish('Ready — opening the dashboard…');
+    // Hard cap so we never strand the user.
+    if (sec > 75) finish('Taking a while — opening the dashboard anyway…');
+  };
+  tick();
+  interval = setInterval(tick, 2000);
 }
 
 /* ── settings (post-onboarding edit of EVERY onboarding field) ────────── */
