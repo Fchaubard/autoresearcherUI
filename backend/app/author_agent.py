@@ -293,9 +293,11 @@ def start(proposal_id: str = "") -> dict:
                         f"cat >> {shlex.quote(str(folder / 'author.log'))}"],
                        capture_output=True, timeout=5)
         # Once Claude Code has booted, hand it the brief. Same dance as
-        # agent.py: first dismiss the (possible) one-time Bypass Permissions
-        # consent prompt with Down+Enter (no-op on subsequent restarts
-        # because the consent is remembered), then send the research brief.
+        # agent.py: first auto-accept the (possible) one-time Bypass
+        # Permissions consent by typing the literal "2" (the numeric
+        # shortcut for "Yes, I accept") then Enter, then send the brief.
+        # The numeric path avoids the arrow-key race where Down+Enter
+        # could land on the highlighted "No, exit" default.
         if not cmd_override:
             brief = ("Read the file .author_prompt.txt in this directory "
                      "and carry out the paper-writing work it describes. "
@@ -304,13 +306,12 @@ def start(proposal_id: str = "") -> dict:
                      "sections/*. Do not stop.")
             sess = shlex.quote(SESSION)
             script = (
-                "sleep 4 && "
-                # auto-accept Claude Code's one-time bypass-permissions
-                # consent (cursor starts on "No, exit"; Down selects "Yes")
-                f"tmux send-keys -t {sess} Down && sleep 0.3 && "
+                "sleep 6 && "
+                # accept via numeric shortcut: "2" = "Yes, I accept"
+                f"tmux send-keys -t {sess} '2' && sleep 0.5 && "
                 f"tmux send-keys -t {sess} Enter && "
                 # wait for REPL to actually be ready
-                "sleep 8 && "
+                "sleep 10 && "
                 # hand it the paper-writing brief
                 f"tmux send-keys -t {sess} -l {shlex.quote(brief)} && "
                 "sleep 1 && "

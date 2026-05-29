@@ -118,30 +118,33 @@ class RealAgent:
         # mirror the live pane into agent.log for a persistent record
         subprocess.run(["tmux", "pipe-pane", "-t", self.session, "-o",
                         f"cat >> {shlex.quote(log)}"], capture_output=True)
-        # once Claude Code has booted, hand it the research brief.
+        # Once Claude Code has booted, hand it the research brief.
         #
-        # Claude Code now shows a one-time "Bypass Permissions mode" consent
+        # Claude Code shows a one-time "Bypass Permissions mode" consent
         # prompt the first time --dangerously-skip-permissions is used on a
-        # fresh ~/.config/claude. The prompt has two options:
+        # fresh ~/.config/claude. The prompt has two numbered options:
         #     1. No, exit
-        #     2. Yes, I accept all responsibility for actions taken …
-        # The cursor starts on "No, exit". We auto-dismiss by sending
-        # Down+Enter once the binary has spawned — that selects "Yes" and
-        # confirms. On subsequent restarts the consent is remembered and
-        # Down+Enter is a no-op (Down is interpreted as REPL history nav).
+        #     2. Yes, I accept all responsibility …
+        # We auto-accept by typing the literal "2" then Enter. The numeric
+        # shortcut is shown in the menu and bypasses any arrow-key quirks
+        # (Down + Enter previously confirmed the highlighted "No, exit" on
+        # some Claude Code builds because the keystrokes raced the render).
+        # On subsequent restarts the consent is remembered, the prompt
+        # never appears, and the stray "2" is typed at the REPL — Claude
+        # Code's REPL eats single digits without side effects.
         # See https://code.claude.com/docs/en/security
         if not self.agent_cmd:
             msg = ("Read the file _setup_prompt.txt in this directory and "
                    "carry out the research it describes. Do not stop.")
             sess = shlex.quote(self.session)
             script = (
-                # 1) wait for `claude` to draw its splash screen
-                "sleep 4 && "
-                # 2) auto-accept the bypass-permissions consent if shown
-                f"tmux send-keys -t {sess} Down && sleep 0.3 && "
+                # 1) wait for the splash + consent prompt to draw
+                "sleep 6 && "
+                # 2) accept via numeric shortcut ("2" = "Yes, I accept")
+                f"tmux send-keys -t {sess} '2' && sleep 0.5 && "
                 f"tmux send-keys -t {sess} Enter && "
                 # 3) wait for the REPL to actually be ready
-                "sleep 8 && "
+                "sleep 10 && "
                 # 4) hand it the research brief
                 f"tmux send-keys -t {sess} -l {shlex.quote(msg)} && "
                 "sleep 1 && "
