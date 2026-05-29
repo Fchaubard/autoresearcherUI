@@ -657,6 +657,44 @@ async def agent_send(request: Request):
     return {"ok": True}
 
 
+@router.post("/agent/restart")
+async def agent_restart():
+    """Re-launch the research agent.
+
+    Used when the agent's tmux session died or got stuck on a Claude Code
+    consent prompt that the user manually dismissed. Pulls the live
+    onboarding config and re-spawns via :func:`realrun.start_real`. The
+    relaunched session immediately re-runs the auto-accept (Down+Enter)
+    sequence — so a hung session can be recovered from the dashboard
+    without SSH'ing into the pod."""
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(
+            Setting.key == "onboarding").first()
+        cfg = dict(row.value) if row and isinstance(row.value, dict) else {}
+    finally:
+        db.close()
+    if not (cfg.get("claude_token")
+            or os.environ.get("ARUI_CLAUDE_BIN")):
+        return {"ok": False,
+                "error": "no Claude token configured — onboarding not complete"}
+    # Kill any zombie session first so the launcher gets a clean slot.
+    subprocess.run(["tmux", "kill-session", "-t", "agent"],
+                   capture_output=True, timeout=5)
+    info = realrun.start_real(cfg)
+    return {"ok": True, "info": info}
+
+
+@router.post("/paper/author/restart")
+async def paper_author_restart():
+    """Re-launch the author agent (paper mode counterpart of /agent/restart)."""
+    from . import author_agent
+    subprocess.run(["tmux", "kill-session", "-t", "author"],
+                   capture_output=True, timeout=5)
+    info = author_agent.start()
+    return {"ok": True, "info": info}
+
+
 # ──────────── reset + onboarding ─────────────────────────────────────────────
 
 @router.post("/reset")

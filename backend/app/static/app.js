@@ -1213,6 +1213,13 @@ function renderLive(c) {
     '</div>'
   ) : '';
   c.innerHTML =
+    '<div class="author-rail-hd">' +
+      '<span>🔬 Research Agent</span>' +
+      '<span class="author-rail-status" id="agent-status">checking…</span>' +
+      '<button class="btn xs" id="agent-restart" ' +
+        'title="Kill the research tmux and spawn a fresh one — fixes a ' +
+        'session stuck on the Claude Code consent prompt">↻ restart</button>' +
+    '</div>' +
     '<div class="rail-agent-desc">' +
       '<b>What it does:</b> autonomous Claude Code loop that reads ' +
       '<code>ideas.md</code>, decides what to try next, launches training ' +
@@ -1226,6 +1233,22 @@ function renderLive(c) {
     '<pre class="term" id="term">connecting to the agent ' +
     'session…</pre>';
   const term = document.getElementById('term');
+  const stat = document.getElementById('agent-status');
+  document.getElementById('agent-restart').onclick = async () => {
+    const ok = await aruiConfirm(
+      'Restart the Research Agent tmux? Anything mid-response will be lost. ' +
+      'Use this if the session got stuck on the Claude Code "Bypass ' +
+      'Permissions" consent screen.',
+      { title: 'Restart Research Agent' });
+    if (!ok) return;
+    stat.textContent = 'restarting…';
+    const r = await post('/agent/restart', {});
+    stat.textContent = (r && r.ok) ? 'restarted' : 'restart failed';
+    if (r && !r.ok) {
+      aruiAlert(r.error || 'unknown error',
+        { title: 'Could not restart agent' });
+    }
+  };
   const poll = async () => {
     try {
       const d = await api('/agent/terminal');
@@ -1233,6 +1256,12 @@ function renderLive(c) {
         < 80;
       term.textContent = ((d.text || '').replace(/[ \t\r\n]+$/, '')) ||
         '(no output)';
+      // running flag is on the response; fall back to "alive" if present
+      const running = d.running ?? d.alive ?? !!(d.text && d.text.length);
+      if (stat) {
+        stat.textContent = running ? '● running' : '○ not running';
+        stat.style.color = running ? 'var(--ok)' : 'var(--muted)';
+      }
       if (atBottom) term.scrollTop = term.scrollHeight;
     } catch (e) { /* keep last frame */ }
   };
@@ -1932,7 +1961,8 @@ async function sendChat(text) {
   const r = await post('/agent/send', { text });
   if (r && r.ok === false) {
     S.chat.push({ role: 'agent', created_at: new Date().toISOString(),
-      content: '⚠ could not deliver — ' + (r.error || 'no agent session') });
+      content: '⚠ could not deliver — ' + (r.error || 'no agent session') +
+      ' · click "Restart agent" above to relaunch the Claude Code session.' });
     paintConvo();
     return;
   }

@@ -118,15 +118,35 @@ class RealAgent:
         # mirror the live pane into agent.log for a persistent record
         subprocess.run(["tmux", "pipe-pane", "-t", self.session, "-o",
                         f"cat >> {shlex.quote(log)}"], capture_output=True)
-        # once Claude Code has booted, hand it the research brief
+        # once Claude Code has booted, hand it the research brief.
+        #
+        # Claude Code now shows a one-time "Bypass Permissions mode" consent
+        # prompt the first time --dangerously-skip-permissions is used on a
+        # fresh ~/.config/claude. The prompt has two options:
+        #     1. No, exit
+        #     2. Yes, I accept all responsibility for actions taken …
+        # The cursor starts on "No, exit". We auto-dismiss by sending
+        # Down+Enter once the binary has spawned — that selects "Yes" and
+        # confirms. On subsequent restarts the consent is remembered and
+        # Down+Enter is a no-op (Down is interpreted as REPL history nav).
+        # See https://code.claude.com/docs/en/security
         if not self.agent_cmd:
             msg = ("Read the file _setup_prompt.txt in this directory and "
                    "carry out the research it describes. Do not stop.")
-            subprocess.Popen(
-                ["sh", "-c",
-                 f"sleep 9 && tmux send-keys -t {shlex.quote(self.session)} "
-                 f"-l {shlex.quote(msg)} && sleep 1 && "
-                 f"tmux send-keys -t {shlex.quote(self.session)} Enter"])
+            sess = shlex.quote(self.session)
+            script = (
+                # 1) wait for `claude` to draw its splash screen
+                "sleep 4 && "
+                # 2) auto-accept the bypass-permissions consent if shown
+                f"tmux send-keys -t {sess} Down && sleep 0.3 && "
+                f"tmux send-keys -t {sess} Enter && "
+                # 3) wait for the REPL to actually be ready
+                "sleep 8 && "
+                # 4) hand it the research brief
+                f"tmux send-keys -t {sess} -l {shlex.quote(msg)} && "
+                "sleep 1 && "
+                f"tmux send-keys -t {sess} Enter")
+            subprocess.Popen(["sh", "-c", script])
         return self.session
 
     def alive(self) -> bool:

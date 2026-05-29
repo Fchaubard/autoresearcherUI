@@ -292,20 +292,30 @@ def start(proposal_id: str = "") -> dict:
         subprocess.run(["tmux", "pipe-pane", "-t", SESSION, "-o",
                         f"cat >> {shlex.quote(str(folder / 'author.log'))}"],
                        capture_output=True, timeout=5)
-        # Once Claude Code has booted (~9s), hand it the brief. Mirrors how
-        # agent.py kicks off the research agent.
+        # Once Claude Code has booted, hand it the brief. Same dance as
+        # agent.py: first dismiss the (possible) one-time Bypass Permissions
+        # consent prompt with Down+Enter (no-op on subsequent restarts
+        # because the consent is remembered), then send the research brief.
         if not cmd_override:
             brief = ("Read the file .author_prompt.txt in this directory "
                      "and carry out the paper-writing work it describes. "
                      "Read claims.md, paper_runs.md, paper_figures.md, "
                      "lessons.md FIRST. Then scaffold main.tex and "
                      "sections/*. Do not stop.")
-            subprocess.Popen(
-                ["sh", "-c",
-                 f"sleep 9 && "
-                 f"tmux send-keys -t {shlex.quote(SESSION)} -l "
-                 f"{shlex.quote(brief)} && "
-                 f"sleep 1 && tmux send-keys -t {shlex.quote(SESSION)} Enter"])
+            sess = shlex.quote(SESSION)
+            script = (
+                "sleep 4 && "
+                # auto-accept Claude Code's one-time bypass-permissions
+                # consent (cursor starts on "No, exit"; Down selects "Yes")
+                f"tmux send-keys -t {sess} Down && sleep 0.3 && "
+                f"tmux send-keys -t {sess} Enter && "
+                # wait for REPL to actually be ready
+                "sleep 8 && "
+                # hand it the paper-writing brief
+                f"tmux send-keys -t {sess} -l {shlex.quote(brief)} && "
+                "sleep 1 && "
+                f"tmux send-keys -t {sess} Enter")
+            subprocess.Popen(["sh", "-c", script])
     except Exception as e:
         return {"status": "error", "detail": str(e)}
     bus.publish("paper", "author_started", {})
