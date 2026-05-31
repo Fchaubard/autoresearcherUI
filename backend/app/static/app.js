@@ -2740,6 +2740,21 @@ function showAgentBootOverlay() {
     'Agent is scaffolding program.md, train.py, ideas.md…',
     'Agent is queuing the baseline run…',
   ];
+  // Detect Claude Code OAuth fallback. On a fresh ~/.claude with no
+  // ANTHROPIC_API_KEY in the env (or one that Claude Code declined to
+  // use), Claude Code prints an oauth/code URL + "Paste code here if
+  // prompted >". We pull the URL out and show a paste-back UI in the
+  // overlay instead of leaving the user staring at the spinner.
+  const detectOauth = (text) => {
+    const m = text.match(
+      /https:\/\/(?:platform\.|console\.|claude\.com|anthropic\.com)[^\s'"]+/);
+    if (!m) return null;
+    const url = m[0];
+    if (!/oauth/i.test(url) && !/code=|response_type=/i.test(url)) {
+      return null;
+    }
+    return url;
+  };
   // Best-effort stage detection from the actual tmux output.
   const detectStage = (text) => {
     const lc = text.toLowerCase();
@@ -2750,6 +2765,9 @@ function showAgentBootOverlay() {
         || lc.includes('creating')) return 7;
     if (lc.includes('research') || lc.includes('purpose')
         || lc.includes('goal')) return 6;
+    if (lc.includes('paste code here') || lc.includes('response_type=code')) {
+      return 4;     // OAuth flow — stuck until user pastes the code back
+    }
     if (lc.includes('how can i help') || lc.includes("what's your")
         || lc.includes('claude code') && lc.includes('ready')) return 5;
     if (lc.includes('yes, i accept') || lc.includes('bypass permissions')) {
@@ -2789,6 +2807,86 @@ function showAgentBootOverlay() {
     setTimeout(() => location.reload(), 500);
     step.textContent = reason || 'Ready — opening the dashboard…';
   };
+  // Special recovery card for the Claude Code OAuth fallback.
+  // 1. shows the OAuth URL as a clickable link (open in browser, sign in)
+  // 2. provides a paste-back input → POST /api/agent/paste_oauth
+  // 3. once typed, resumes polling (sawAliveOnce is already true so we
+  //    won't show the "never started" error; the next tick should see
+  //    real Claude Code REPL output).
+  const showOauthRecovery = (url, ttext) => {
+    if (errorShown || redirected) return;
+    errorShown = true;
+    if (interval) clearInterval(interval);
+    const card = document.querySelector('.boot-card');
+    if (!card) return;
+    card.innerHTML =
+      '<div class="boot-brand">autoresearcher<span>UI</span></div>' +
+      '<div class="boot-err-icon" style="color:#A78BFA" aria-hidden="true">⚿</div>' +
+      '<h2 class="boot-title">Claude Code wants you to log in</h2>' +
+      '<div class="boot-err-body">' +
+        'Claude Code started its OAuth flow instead of using the API key. ' +
+        'Click the link below to sign in to your Anthropic account, then ' +
+        'paste the code Claude gives you back into the box below.' +
+      '</div>' +
+      '<div class="oauth-url-row">' +
+        '<a class="btn pri oauth-url-btn" target="_blank" rel="noopener" ' +
+        'href="' + esc(url) + '">Open Anthropic login →</a>' +
+        '<button class="btn" id="oauth-copy" type="button">Copy URL</button>' +
+      '</div>' +
+      '<div class="oauth-url-pre">' + esc(url) + '</div>' +
+      '<input id="oauth-code" class="login-input" ' +
+        'placeholder="Paste the code from your browser here…" ' +
+        'autocomplete="off">' +
+      '<div class="modal-actions">' +
+        '<button class="btn pri" id="oauth-submit" type="button">' +
+        'Send code to agent</button>' +
+        '<button class="btn" id="oauth-retry" type="button">Skip &amp; ' +
+        'retry agent</button>' +
+      '</div>' +
+      '<div class="boot-help">' +
+        'Alternative: SSH into the pod and run <code>claude</code> once ' +
+        'manually to finish OAuth. Subsequent agent restarts will reuse ' +
+        'those credentials and skip this prompt.' +
+      '</div>';
+    const copyBtn = document.getElementById('oauth-copy');
+    if (copyBtn) copyBtn.onclick = () => {
+      navigator.clipboard?.writeText(url);
+      copyBtn.textContent = 'Copied ✓';
+      setTimeout(() => copyBtn.textContent = 'Copy URL', 1400);
+    };
+    const submit = document.getElementById('oauth-submit');
+    const inp = document.getElementById('oauth-code');
+    if (inp) inp.focus();
+    const doSubmit = async () => {
+      const code = (inp && inp.value || '').trim();
+      if (!code) { inp.focus(); return; }
+      submit.disabled = true; submit.textContent = 'Sending…';
+      try {
+        const r = await post('/agent/paste_oauth', { code });
+        if (r && r.ok === false) {
+          submit.disabled = false; submit.textContent = 'Send code to agent';
+          aruiAlert(r.error || 'Could not deliver to the agent.',
+            { title: 'Paste failed' });
+          return;
+        }
+        submit.textContent = 'Sent — resuming…';
+      } catch (e) {
+        submit.disabled = false; submit.textContent = 'Retry';
+        return;
+      }
+      // Reset state and resume the spinner so we can detect "ready".
+      errorShown = false; setTimeout(() => showAgentBootOverlay(), 800);
+    };
+    if (submit) submit.onclick = doSubmit;
+    if (inp) inp.onkeydown = e => { if (e.key === 'Enter') doSubmit(); };
+    const retry = document.getElementById('oauth-retry');
+    if (retry) retry.onclick = async () => {
+      retry.disabled = true; retry.textContent = 'Restarting…';
+      try { await post('/agent/restart', {}); } catch (e) {}
+      errorShown = false; setTimeout(() => showAgentBootOverlay(), 800);
+    };
+  };
+
   const showError = async (title, body, ttext) => {
     if (errorShown || redirected) return;
     errorShown = true;
@@ -2848,6 +2946,14 @@ function showAgentBootOverlay() {
       term.scrollTop = term.scrollHeight;
       const detected = detectStage(txt);
       if (detected > stage) { stage = detected; step.textContent = stages[stage]; }
+      // ── OAuth-prompt detection ──────────────────────────────────────
+      // Claude Code on a fresh node falls back to OAuth when it can't
+      // read ANTHROPIC_API_KEY. Surface a paste-back UI instead of
+      // letting the user stare at a spinner forever.
+      const oauthUrl = detectOauth(txt);
+      if (oauthUrl) {
+        return showOauthRecovery(oauthUrl, txt);
+      }
       // ── error detection on the live tmux text ───────────────────────
       if (matchesAny(txt, AUTH_ERROR_PATTERNS)) {
         return showError(

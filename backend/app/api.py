@@ -773,6 +773,29 @@ async def agent_send(request: Request):
     return {"ok": True}
 
 
+@router.post("/agent/paste_oauth")
+async def agent_paste_oauth(request: Request):
+    """Type an OAuth callback code into the Research Agent's tmux pane.
+
+    Claude Code on a fresh ~/.claude sometimes falls back to its OAuth
+    flow ("Paste code here if prompted >") instead of using
+    ANTHROPIC_API_KEY. The dashboard's boot overlay detects this state
+    and offers a paste-back input; this endpoint takes the OAuth code
+    the user copied from their browser and `tmux send-keys` it into
+    the agent session, followed by Enter."""
+    body = await _safe_json(request)
+    code = (body.get("code") or "").strip()
+    if not code or len(code) > 4096:
+        return {"ok": False, "error": "empty or oversized code"}
+    if not _tmux_alive("agent"):
+        return {"ok": False, "error": "no agent session is running"}
+    subprocess.run(["tmux", "send-keys", "-t", "agent", "-l", code],
+                   capture_output=True)
+    subprocess.run(["tmux", "send-keys", "-t", "agent", "Enter"],
+                   capture_output=True)
+    return {"ok": True}
+
+
 @router.post("/agent/restart")
 async def agent_restart():
     """Re-launch the research agent.
