@@ -1223,8 +1223,10 @@ async function deleteIdea(id, reason) {
 }
 
 let _termTimer = null;
+let _termHost = null;        // active xterm.js wrapper for the rail
 function stopTermPoll() {
   if (_termTimer) { clearInterval(_termTimer); _termTimer = null; }
+  if (_termHost) { try { _termHost.dispose(); } catch (e) {} _termHost = null; }
 }
 
 function paintRail() {
@@ -1233,9 +1235,9 @@ function paintRail() {
   const c = document.getElementById('railcontent');
   if (!c) return;
   if (S.railTab === 'author') {
-    if (!document.getElementById('authorterm')) { stopTermPoll(); renderAuthorLive(c); }
+    if (!document.getElementById('authorterm-host')) { stopTermPoll(); renderAuthorLive(c); }
   } else if (S.railTab === 'live') {
-    if (!document.getElementById('term')) { stopTermPoll(); renderLive(c); }
+    if (!document.getElementById('term-host')) { stopTermPoll(); renderLive(c); }
   } else if (S.railTab === 'sessions') {
     if (!c.querySelector('.sess-wrap')) { stopTermPoll(); renderSessions(c); }
   } else {
@@ -1248,6 +1250,114 @@ function paintRail() {
       renderSummary(c);
     }
   }
+}
+
+/* ── xterm.js rail terminal ───────────────────────────────────────────── */
+// One factory shared by the Research-Agent rail and the Author-Agent
+// rail. Returns { container, write(text), dispose(), fallback }.
+//
+// What the user gets:
+//   - native text selection (drag, even across line-wraps), Cmd/Ctrl-C
+//     copies — finally a way to grab a long OAuth URL in one swipe
+//   - double-click selects a word, triple-click selects a line
+//   - URLs are clickable (Ctrl/Cmd-click opens in a new tab) via the
+//     web-links addon
+//   - every keystroke types directly into the agent's tmux via
+//     POST /api/agent/keys — feels like a real terminal
+//
+// If xterm.js failed to load (CDN blocked, offline), we fall back to a
+// plain <pre> so the rail still works, just with the old read-only UX.
+function createRailTerm(session) {
+  const container = el('div', 'xterm-wrap');
+  container.dataset.session = session;
+  if (!window.Terminal) {
+    container.innerHTML =
+      '<pre class="term" data-fallback="1">loading terminal…</pre>';
+    const pre = container.firstChild;
+    return { container, fallback: true,
+             write: (t) => { pre.textContent = t || ''; },
+             dispose: () => {} };
+  }
+  const t = new window.Terminal({
+    convertEol: true,
+    cursorBlink: false,
+    fontFamily: "'SF Mono','Menlo','Consolas',monospace",
+    fontSize: 12,
+    lineHeight: 1.15,
+    theme: {
+      background: '#0a0c0f', foreground: '#cdd3da',
+      cursor: '#cdd3da', cursorAccent: '#0a0c0f',
+      selectionBackground: '#6366F155',
+      black: '#000', red: '#F87171', green: '#34D399',
+      yellow: '#FBBF24', blue: '#60A5FA', magenta: '#C084FC',
+      cyan: '#22D3EE', white: '#E6E8EB',
+      brightBlack: '#6b7280', brightRed: '#FCA5A5',
+      brightGreen: '#86EFAC', brightYellow: '#FDE68A',
+      brightBlue: '#93C5FD', brightMagenta: '#D8B4FE',
+      brightCyan: '#67E8F9', brightWhite: '#F9FAFB',
+    },
+    scrollback: 8000,
+    allowProposedApi: true,
+  });
+  const FitAddon = window.FitAddon && window.FitAddon.FitAddon;
+  const WebLinksAddon =
+    window.WebLinksAddon && window.WebLinksAddon.WebLinksAddon;
+  const fitAddon = FitAddon ? new FitAddon() : null;
+  if (fitAddon) t.loadAddon(fitAddon);
+  if (WebLinksAddon) t.loadAddon(new WebLinksAddon((e, uri) =>
+    window.open(uri, '_blank', 'noopener')));
+  t.open(container);
+  const refit = () => { try { fitAddon && fitAddon.fit(); } catch (e) {} };
+  setTimeout(refit, 50);
+  let ro = null;
+  try {
+    ro = new ResizeObserver(refit);
+    ro.observe(container);
+  } catch (e) { /* not all browsers */ }
+  // Raw keystroke passthrough — every key the user presses while the
+  // term has focus is sent to the tmux session via send-keys. We don't
+  // try to echo locally; the next poll tick will show the new state.
+  let _pasteBuf = '', _pasteTimer = null;
+  const sendNow = async (data) => {
+    try { await post('/agent/keys', { session, data }); } catch (e) {}
+  };
+  t.onData((data) => {
+    // Coalesce typed-character bursts (paste) into one POST so we
+    // don't hammer the backend with 200 tiny send-keys calls. Special
+    // keys (Enter, arrows, Ctrl-*) go through immediately because the
+    // tmux mapping is per-key.
+    if (data.length > 1) { sendNow(data); return; }
+    const c = data.charCodeAt(0);
+    if (c === 13 /* Enter */ || c === 9 /* Tab */ ||
+        c === 27 /* Esc  */ || c === 127 /* Bksp */ ||
+        c === 8  /* ^H   */ || (c >= 1 && c <= 26 && c !== 9 && c !== 13)) {
+      // flush any pending typed buffer first so order is preserved
+      if (_pasteBuf) { sendNow(_pasteBuf); _pasteBuf = ''; }
+      if (_pasteTimer) { clearTimeout(_pasteTimer); _pasteTimer = null; }
+      sendNow(data);
+      return;
+    }
+    _pasteBuf += data;
+    if (_pasteTimer) clearTimeout(_pasteTimer);
+    _pasteTimer = setTimeout(() => {
+      const buf = _pasteBuf; _pasteBuf = ''; _pasteTimer = null;
+      if (buf) sendNow(buf);
+    }, 90);
+  });
+  return {
+    container, fallback: false,
+    write(text) {
+      // Reset + write full scrollback. xterm handles this fast (~1ms
+      // for typical agent output) and the user's scroll-pinned-to-
+      // bottom behaviour is preserved.
+      t.reset();
+      t.write(text || '');
+    },
+    dispose() {
+      try { ro && ro.disconnect(); } catch (e) {}
+      try { t.dispose(); } catch (e) {}
+    },
+  };
 }
 
 /* ── Author Agent rail (paper mode) ─────────────────────────────────────── */
@@ -1267,11 +1377,14 @@ function renderAuthorLive(c) {
       'Files <i>strategic</i> decisions only — citations, kill_claim, ' +
       'approve_text, approve_figure. Ablation runs do NOT need your ' +
       'approval. The <b>PI agent</b> watches it every hour and nudges if it ' +
-      'drifts (idle GPUs, unintegrated results, stalled sections). Type ' +
-      'below to steer it.' +
-    '</div>' +
-    '<pre class="term author-term" id="authorterm">connecting to the author session…</pre>';
-  const term = document.getElementById('authorterm');
+      'drifts. Click in the terminal below and type — keystrokes go ' +
+      'straight to the Claude session.' +
+    '</div>';
+  const termHost = createRailTerm('author');
+  termHost.container.id = 'authorterm-host';
+  c.appendChild(termHost.container);
+  if (_termHost) { try { _termHost.dispose(); } catch (e) {} }
+  _termHost = termHost;
   const stat = document.getElementById('author-status');
   document.getElementById('author-restart').onclick = async () => {
     const ok = await aruiConfirm('Restart the Author Agent tmux? Anything mid-response will be lost.',
@@ -1284,11 +1397,11 @@ function renderAuthorLive(c) {
   const poll = async () => {
     try {
       const d = await api('/paper/author/terminal');
-      const atBottom = term.scrollHeight - term.scrollTop - term.clientHeight < 80;
-      term.textContent = (d.text || '').replace(/[ \t\r\n]+$/, '') || '(no output yet)';
+      const text = ((d && d.text) || '').replace(/[ \t\r\n]+$/, '')
+        || '(no output yet)';
+      termHost.write(text);
       stat.textContent = d.running ? '● running' : '○ not running';
       stat.style.color = d.running ? 'var(--ok)' : 'var(--muted)';
-      if (atBottom) term.scrollTop = term.scrollHeight;
     } catch (e) { /* keep last frame */ }
   };
   poll();
@@ -1318,13 +1431,16 @@ function renderLive(c) {
       'runs, kills divergers, and writes <code>lessons.md</code>. The ' +
       '<b>PI agent</b> watches it every hour and types short nudges into ' +
       'this tmux when GPUs go idle, runs diverge, or it ignores the ' +
-      'council. Type below to steer it. ' +
-      '<b>Job: discovery</b>; pauses automatically when you flip to paper mode.' +
+      'council. Click the terminal and type — keystrokes go straight to ' +
+      'the Claude session. <b>Job: discovery</b>; pauses automatically ' +
+      'when you flip to paper mode.' +
     '</div>' +
-    pausedBanner +
-    '<pre class="term" id="term">connecting to the agent ' +
-    'session…</pre>';
-  const term = document.getElementById('term');
+    pausedBanner;
+  const termHost = createRailTerm('agent');
+  termHost.container.id = 'term-host';
+  c.appendChild(termHost.container);
+  if (_termHost) { try { _termHost.dispose(); } catch (e) {} }
+  _termHost = termHost;
   const stat = document.getElementById('agent-status');
   document.getElementById('agent-restart').onclick = async () => {
     const ok = await aruiConfirm(
@@ -1344,17 +1460,15 @@ function renderLive(c) {
   const poll = async () => {
     try {
       const d = await api('/agent/terminal');
-      const atBottom = term.scrollHeight - term.scrollTop - term.clientHeight
-        < 80;
-      term.textContent = ((d.text || '').replace(/[ \t\r\n]+$/, '')) ||
-        '(no output)';
+      const text = ((d && d.text) || '').replace(/[ \t\r\n]+$/, '')
+        || '(no output yet)';
+      termHost.write(text);
       // running flag is on the response; fall back to "alive" if present
       const running = d.running ?? d.alive ?? !!(d.text && d.text.length);
       if (stat) {
         stat.textContent = running ? '● running' : '○ not running';
         stat.style.color = running ? 'var(--ok)' : 'var(--muted)';
       }
-      if (atBottom) term.scrollTop = term.scrollHeight;
     } catch (e) { /* keep last frame */ }
   };
   poll();

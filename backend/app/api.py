@@ -805,6 +805,63 @@ def agent_oauth_url():
     return {"url": m.group(0)}
 
 
+@router.post("/agent/keys")
+async def agent_keys(request: Request):
+    """Forward raw keystrokes to a tmux session — used by the xterm.js
+    terminal in the rail to make the embedded terminal feel real.
+
+    Body:
+        {
+          "session": "agent" | "author" | <run_id>,   (default: agent)
+          "data":    "<raw bytes>"                     (xterm onData payload)
+        }
+
+    Special-case Enter (\\r → tmux 'Enter'), Backspace (\\x7f → 'BSpace'),
+    Tab (\\t → 'Tab'), Esc (\\x1b → 'Escape'), arrow keys (\\x1b[A/B/C/D),
+    Ctrl-* sequences. Everything else goes through with ``-l`` (literal)
+    so multi-char paste is preserved verbatim.
+    """
+    body = await _safe_json(request)
+    sess = (body.get("session") or "agent").strip()
+    data = body.get("data") or ""
+    if not sess or len(sess) > 80 or not _SAFE_NAME.match(sess):
+        return {"ok": False, "error": "bad session"}
+    if not isinstance(data, str) or len(data) > 16384:
+        return {"ok": False, "error": "bad data"}
+    if not _tmux_alive(sess):
+        return {"ok": False, "error": f"no tmux session: {sess}"}
+    # Map known control sequences to tmux send-keys symbolic names.
+    # Anything not mapped goes through with -l (literal) so URLs, paste
+    # buffers, and unicode all reach tmux intact.
+    SPECIALS = {
+        "\r": "Enter", "\n": "Enter",
+        "\x7f": "BSpace", "\x08": "BSpace",
+        "\t": "Tab",
+        "\x1b": "Escape",
+        "\x1b[A": "Up", "\x1b[B": "Down",
+        "\x1b[C": "Right", "\x1b[D": "Left",
+        "\x1b[H": "Home", "\x1b[F": "End",
+        "\x1b[3~": "DC",   # Delete
+        "\x1b[5~": "PPage", "\x1b[6~": "NPage",
+    }
+    if data in SPECIALS:
+        subprocess.run(["tmux", "send-keys", "-t", sess, SPECIALS[data]],
+                       capture_output=True)
+        return {"ok": True, "kind": "special"}
+    # Ctrl-A..Ctrl-Z (0x01..0x1A) → C-a..C-z
+    if len(data) == 1 and 1 <= ord(data) <= 26:
+        sym = "C-" + chr(ord(data) + ord('a') - 1)
+        subprocess.run(["tmux", "send-keys", "-t", sess, sym],
+                       capture_output=True)
+        return {"ok": True, "kind": "ctrl"}
+    # Literal multi-char paste: send the whole buffer with -l so tmux
+    # does NOT interpret it as keysym names (e.g., "Enter" inside the
+    # paste would otherwise fire an Enter).
+    subprocess.run(["tmux", "send-keys", "-t", sess, "-l", data],
+                   capture_output=True)
+    return {"ok": True, "kind": "literal"}
+
+
 @router.post("/agent/paste_oauth")
 async def agent_paste_oauth(request: Request):
     """Type an OAuth callback code into the Research Agent's tmux pane.

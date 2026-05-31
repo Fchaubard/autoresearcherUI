@@ -165,6 +165,14 @@ body.resizing{user-select:none}
 .term{margin:0;padding:10px 12px;font-family:var(--mono);font-size:11px;
   line-height:1.42;color:#cdd3da;white-space:pre-wrap;word-break:break-word;
   flex:1;min-height:0;overflow-y:auto;background:#0a0c0f}
+/* xterm.js host inside the rail. Same slot as .term — must flex-grow
+ * so xterm's measurements pick up a real width. .xterm itself is
+ * styled by the xterm.css CDN; we just give the host container size. */
+.xterm-wrap{flex:1;min-height:0;background:#0a0c0f;padding:6px 4px;
+  overflow:hidden;display:flex;flex-direction:column;
+  border-top:1px solid #1a1d22}
+.xterm-wrap .xterm{flex:1;min-height:0}
+.xterm-wrap .xterm-viewport{background:transparent !important}
 .sess-wrap{flex:1;min-height:0;display:flex;flex-direction:column}
 .sess-tabs{display:flex;flex-wrap:wrap;gap:5px;padding:8px;
   border-bottom:1px solid var(--border);background:#0e1115}

@@ -1457,8 +1457,25 @@ def bless_status() -> dict:
 
 
 def is_code_blessed() -> bool:
-    """True iff the council has approved the current codebase."""
-    return _bless_state_get().get("status") == "approved"
+    """True iff the council has approved the current codebase — OR if
+    there are no reviewers configured at all (Claude-only setups + the
+    e2e test, neither of which can sensibly produce a verdict, get the
+    gate auto-opened so they can launch runs).
+
+    The Setting row's actual status is still authoritative once the user
+    has configured reviewers and the agent has called /api/council/bless;
+    this only short-circuits the 'no reviewers ever => infinite block'
+    failure mode."""
+    st = _bless_state_get().get("status")
+    if st == "approved":
+        return True
+    # Defensive: a half-finished setup with no reviewers should not
+    # permanently block /api/track/run. The dashboard banner still tells
+    # the user no review happened.
+    cfg = _settings()
+    if not _available_reviewers(cfg):
+        return True
+    return False
 
 
 def _bless_worker(workspace: str) -> None:
