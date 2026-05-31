@@ -38,7 +38,12 @@ async def lifespan(app: FastAPI):
     # `claude` invocation from SSH picks up the API-key auth path.
     try:
         from .app.agent import RealAgent
-        RealAgent._ensure_claude_settings()
+        # _apply_tokens_to_env() above will have populated ANTHROPIC_API_KEY
+        # from the onboarding row if it exists — pass it so the
+        # "Use this API key?" dialog is pre-approved.
+        import os as _os
+        RealAgent._ensure_claude_settings(
+            _os.environ.get("ANTHROPIC_API_KEY", ""))
     except Exception as e:                              # noqa: BLE001
         print(f"[main] ensure_claude_settings failed: {e}", flush=True)
     notify.start_scheduler()          # periodic email digests (cadence-driven)

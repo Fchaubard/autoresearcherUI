@@ -284,7 +284,8 @@ def start(proposal_id: str = "") -> dict:
         # for the full explanation.
         try:
             from .agent import RealAgent
-            RealAgent._ensure_claude_settings()
+            RealAgent._ensure_claude_settings(
+                os.environ.get("ANTHROPIC_API_KEY", ""))
         except Exception as e:                              # noqa: BLE001
             print(f"[author] apiKeyHelper setup failed: {e}", flush=True)
     full = (f"cd {shlex.quote(str(folder))} && "

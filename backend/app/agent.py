@@ -80,7 +80,26 @@ class RealAgent:
         self.session = session
 
     @staticmethod
-    def _ensure_claude_settings() -> None:
+    def _api_key_truncation(key: str) -> str:
+        """Reproduce Claude Code's display-truncation for an API key.
+
+        Claude Code's "Do you want to use this API key?" prompt shows
+        the key as ``<first-7>...<last-20>`` (e.g. ``sk-ant-...Vx9j…QAA``).
+        The ``customApiKeyResponses.approved`` config field is a list of
+        those exact truncations — when our truncation is on the list,
+        the prompt is skipped entirely.
+
+        If the key is too short to truncate meaningfully, return it
+        as-is (worst case the prompt still appears and the poll
+        handler picks "1. Yes" anyway).
+        """
+        k = (key or "").strip()
+        if len(k) < 30:
+            return k
+        return f"{k[:7]}...{k[-20:]}"
+
+    @staticmethod
+    def _ensure_claude_settings(anthropic_key: str = "") -> None:
         """Pre-write Claude Code's config files so:
 
           1. Claude authenticates via our ``apiKeyHelper`` (= read the
@@ -89,6 +108,8 @@ class RealAgent:
              pre-accepted, so a fresh node never gets stuck on
              "1. No, exit / 2. Yes, I accept".
           3. The "Welcome to Claude Code" onboarding wizard is skipped.
+          4. The "Do you want to use this API key?" dialog is skipped
+             by registering the key's display-truncation as approved.
 
         Claude Code 1.x splits state across two locations depending on
         version. We write BOTH so the relevant one always exists:
@@ -104,7 +125,7 @@ class RealAgent:
         # (different versions read different keys). Unknown keys are
         # harmless — Claude Code ignores them. If even one of these
         # matches the current version, the consent screen is gone.
-        FORCE = {
+        FORCE: dict = {
             "apiKeyHelper": "printenv ANTHROPIC_API_KEY",
             "hasCompletedOnboarding": True,
             "bypassPermissionsModeAccepted": True,
@@ -121,6 +142,14 @@ class RealAgent:
                 "trustDialogAccepted": True,
             },
         }
+        # If we know the key, pre-approve its display-truncation so the
+        # "Do you want to use this API key?" prompt is skipped.
+        key = anthropic_key or os.environ.get("ANTHROPIC_API_KEY", "")
+        if key:
+            FORCE["customApiKeyResponses"] = {
+                "approved": [RealAgent._api_key_truncation(key)],
+                "rejected": [],
+            }
 
         def _merge_into(path: str) -> None:
             cur: dict = {}
@@ -141,6 +170,16 @@ class RealAgent:
                     continue
                 if k == "permissions" and isinstance(cur.get(k), dict):
                     cur[k].update(v)
+                elif k == "customApiKeyResponses" and isinstance(cur.get(k), dict):
+                    # Merge our approved truncation into any user-set list
+                    # so we don't clobber prior approvals.
+                    existing = cur[k]
+                    approved = list(existing.get("approved") or [])
+                    for t in v.get("approved", []):
+                        if t and t not in approved:
+                            approved.append(t)
+                    existing["approved"] = approved
+                    existing.setdefault("rejected", [])
                 else:
                     cur[k] = v
             try:
@@ -182,14 +221,16 @@ class RealAgent:
         if self.anthropic_key:
             env["ANTHROPIC_API_KEY"] = self.anthropic_key
             # Tell Claude Code to use the API key directly instead of
-            # falling back to its OAuth flow. Claude Code reads
+            # falling back to its OAuth flow. Pass the key so the
+            # "Do you want to use this API key?" prompt is pre-approved
+            # via customApiKeyResponses.approved. Claude Code reads
             # ~/.claude/settings.json on startup; when `apiKeyHelper` is
             # set, Claude runs that shell command and uses its stdout as
             # the API key for every request. That kills the OAuth path
             # entirely (no browser, no "Paste code here", no state
             # parameter dance) and means a fresh node only needs the
             # onboarding-saved Claude token to authenticate.
-            self._ensure_claude_settings()
+            self._ensure_claude_settings(self.anthropic_key)
         exports = " ".join(f"{k}={shlex.quote(v)}" for k, v in env.items())
         log = os.path.join(self.workspace, "agent.log")
 
@@ -242,36 +283,77 @@ class RealAgent:
             # REPL to be ready (input prompt or welcome banner) and hand
             # over the research brief. Hard cap at 90 s to never loop
             # forever on a real failure.
+            # Claude Code shows up to THREE distinct consent dialogs on a
+            # fresh ~/.claude — we handle each independently so order
+            # doesn't matter:
+            #
+            # (a) "Do you want to use this API key?"  (when
+            #     ANTHROPIC_API_KEY is set in env)  →  options are
+            #     1.Yes / 2.No (recommended). Default is NO — typing
+            #     Enter would reject the key. We must type "1" + Enter.
+            #
+            # (b) "Trust this folder" (Claude has never seen this dir)
+            #     → 1.Yes / 2.No; "Yes" is highlighted default, Enter
+            #     is enough.
+            #
+            # (c) "Bypass Permissions" / "Yes, I accept all responsibility"
+            #     (--dangerously-skip-permissions on a fresh install) →
+            #     1.No,exit / 2.Yes,I accept. Default is NO — must type
+            #     "2" + Enter.
+            #
+            # Each handler is idempotent and tracked separately so they
+            # can fire in any order. Once the REPL prompt is detected,
+            # the research brief is typed in.
             script = f"""set -u
 SESS={sess}
 BRIEF={shlex.quote(msg)}
-sent_consent=0
+sent_apikey=0
+sent_trust=0
+sent_bypass=0
 sent_brief=0
 for i in $(seq 1 90); do
   sleep 1
   PANE=$(tmux capture-pane -t "$SESS" -p -J -S -300 2>/dev/null || true)
-  if [ "$sent_consent" -eq 0 ]; then
-    # Bypass Permissions consent (option 2 = Yes)
+
+  # (a) "Do you want to use this API key?" — pick 1 (Yes). The
+  # default 2 (No, recommended) would REFUSE the key. Detect via
+  # the literal prompt + the "(recommended)" hint on option 2.
+  if [ "$sent_apikey" -eq 0 ]; then
+    if printf "%s" "$PANE" | grep -qiE 'use *this *API *key' \\
+       && printf "%s" "$PANE" | grep -qE 'No.*\\(recommended\\)'; then
+      tmux send-keys -t "$SESS" '1' >/dev/null 2>&1
+      sleep 0.4
+      tmux send-keys -t "$SESS" Enter >/dev/null 2>&1
+      sent_apikey=1
+      sleep 2
+      continue
+    fi
+  fi
+
+  # (b) Trust this folder — default is Yes, just Enter.
+  if [ "$sent_trust" -eq 0 ]; then
+    if printf "%s" "$PANE" | grep -qiE 'trust *this *folder|Do *you *trust' ; then
+      tmux send-keys -t "$SESS" Enter >/dev/null 2>&1
+      sent_trust=1
+      sleep 2
+      continue
+    fi
+  fi
+
+  # (c) Bypass Permissions consent — option 2 = Yes.
+  if [ "$sent_bypass" -eq 0 ]; then
     if printf "%s" "$PANE" | grep -qiE 'Yes, *I *accept|Bypass *Permissions' \\
        && printf "%s" "$PANE" | grep -qiE 'No, *exit'; then
       tmux send-keys -t "$SESS" '2' >/dev/null 2>&1
       sleep 0.4
       tmux send-keys -t "$SESS" Enter >/dev/null 2>&1
-      sent_consent=1
+      sent_bypass=1
       sleep 2
-      continue
-    fi
-    # Trust-this-folder dialog (option 1 = Yes, already highlighted —
-    # just press Enter). Different prompt, different default, separate
-    # branch so we don't accidentally pick "No" by sending '2'.
-    if printf "%s" "$PANE" | grep -qiE 'trust *this *folder|Do *you *trust' ; then
-      tmux send-keys -t "$SESS" Enter >/dev/null 2>&1
-      sleep 2
-      # don't set sent_consent=1 — the bypass-permissions screen often
-      # appears AFTER the trust dialog on a fresh install.
       continue
     fi
   fi
+
+  # REPL ready — type the research brief in.
   if [ "$sent_brief" -eq 0 ]; then
     if printf "%s" "$PANE" | grep -qE 'How can I help|Welcome to Claude|│ +>|❯ *$|^ *> *$'; then
       sleep 1
