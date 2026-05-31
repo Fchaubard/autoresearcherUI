@@ -734,6 +734,59 @@ async def agent_resize(request: Request):
             "stderr": (r.stderr or "")[:200]}
 
 
+@router.get("/emails/status")
+def emails_status():
+    """Whether the user has paused outbound emails in Settings.
+
+    The dashboard's Settings modal calls this to render the
+    Pause / Resume button label correctly."""
+    from . import notify
+    return {"paused": notify.emails_paused()}
+
+
+@router.post("/emails/pause")
+async def emails_pause():
+    """Pause ALL outgoing emails — digests, token failures, system
+    warnings, paper-mode digests, anti-pattern alerts. Sets
+    ``emails_paused: true`` on the onboarding settings row. Effect is
+    instant; the next scheduler tick / send() call early-returns."""
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(Setting.key == "onboarding").first()
+        if not row:
+            row = Setting(key="onboarding", value={})
+            db.add(row)
+        cur = dict(row.value) if isinstance(row.value, dict) else {}
+        cur["emails_paused"] = True
+        row.value = cur
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(row, "value")
+        db.commit()
+    finally:
+        db.close()
+    return {"ok": True, "paused": True}
+
+
+@router.post("/emails/resume")
+async def emails_resume():
+    """Re-enable outgoing emails. Counterpart of /emails/pause."""
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(Setting.key == "onboarding").first()
+        if not row:
+            row = Setting(key="onboarding", value={})
+            db.add(row)
+        cur = dict(row.value) if isinstance(row.value, dict) else {}
+        cur["emails_paused"] = False
+        row.value = cur
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(row, "value")
+        db.commit()
+    finally:
+        db.close()
+    return {"ok": True, "paused": False}
+
+
 @router.get("/agent/raw")
 def agent_raw_stream(session: str = "agent", offset: int = 0):
     """Byte-offset incremental read of a tmux session's RAW pane bytes.
@@ -1316,8 +1369,35 @@ async def post_onboarding(request: Request):
     db = SessionLocal()
     if not db.query(Project).first():
         metric = (cfg.get("metric") or "metric").strip()
-        direction = "maximize" if metric in (
-            "accuracy", "f1", "arc_score", "reward") else "minimize"
+        # Heuristic for higher-is-better vs lower-is-better. The
+        # explicit list is for the dropdown's well-known names, but
+        # users also paste custom metrics like ``gsm8k_test_acc`` or
+        # ``squad_em`` — we detect the family via substring so the
+        # dashboard's "↑ best run" arrow points the right way out of
+        # the box. Fallback is "minimize" (loss-like) which matches
+        # the original behaviour.
+        _ml = metric.lower()
+        _maximize_tokens = (
+            "accuracy", "_acc", "acc_", "acc@",      # accuracy variants
+            "f1", "exact_match", "em", "_em",        # NLP scores
+            "bleu", "rouge", "meteor", "chrf",       # MT / summarization
+            "score", "reward",                       # generic
+            "auc", "map", "ndcg", "hit", "mrr",      # IR / ranking
+            "pass@",                                 # code-eval
+            "win", "elo",                            # competitive eval
+        )
+        _minimize_tokens = (
+            "loss", "perplexity", "ppl", "error",
+            "rmse", "mse", "mae", "bpb", "bpc",
+            "fid", "kid",                            # generative
+            "divergence", "regret",
+        )
+        if any(t in _ml for t in _minimize_tokens):
+            direction = "minimize"
+        elif any(t in _ml for t in _maximize_tokens):
+            direction = "maximize"
+        else:
+            direction = "minimize"                   # original default
         db.add(Project(
             id="proj-" + (cfg.get("repo_name") or "project"),
             name=cfg.get("repo_name") or "project",

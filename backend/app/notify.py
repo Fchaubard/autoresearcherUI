@@ -233,8 +233,29 @@ def _deliver(subject, text, cfg, html=None, images=None) -> bool:
     return False
 
 
+def emails_paused() -> bool:
+    """Return True iff the user clicked 'Pause all emails' in Settings.
+
+    Single source of truth read by every email path. Stored on the
+    onboarding row (`emails_paused: bool`). Default False — emails go
+    out as configured."""
+    try:
+        cfg = _cfg() or {}
+        return bool(cfg.get("emails_paused"))
+    except Exception:                                       # noqa: BLE001
+        return False
+
+
 def send(subject, text, html=None, images=None) -> bool:
-    """Send a notification to the configured recipients. True on success."""
+    """Send a notification to the configured recipients. True on success.
+
+    Returns False (skipped) without attempting delivery when the user
+    has paused emails in Settings. This single check covers ALL email
+    paths — research digests, paper digests, token failures, system
+    warnings — because every notification eventually calls send()."""
+    if emails_paused():
+        print("[notify] emails paused by user — skipping send", flush=True)
+        return False
     return _deliver(subject, text, _cfg(), html, images)
 
 
@@ -674,6 +695,10 @@ def digest_email(window_hours: float):
 
 def send_digest_now() -> bool:
     """Send a digest immediately (used for verification / manual trigger)."""
+    if emails_paused():
+        print("[notify] digest skipped — emails paused by user",
+              flush=True)
+        return False
     cfg = _cfg()
     hrs = _cadence_hours(_cadence(cfg)) or 1.0
     subject, text, html, images = digest_email(hrs)
@@ -1178,9 +1203,14 @@ def _loop() -> None:
             if hrs is None:                           # off / immediate
                 continue
             if time.time() - last_sent >= hrs * 3600:
-                subject, text, html, images = digest_email(hrs)
-                if subject:
-                    send(subject, text, html, images)
+                # Cheap pre-check so a paused user doesn't pay the
+                # cost of building the digest's HTML + charts every
+                # cadence tick. send() also gates on emails_paused
+                # as the source of truth.
+                if not emails_paused():
+                    subject, text, html, images = digest_email(hrs)
+                    if subject:
+                        send(subject, text, html, images)
                 last_sent = time.time()
         except Exception as e:                       # noqa: BLE001
             print(f"[notify] scheduler error: {e}", flush=True)

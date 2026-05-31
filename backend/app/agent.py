@@ -229,6 +229,20 @@ class RealAgent:
             # --dangerously-skip-permissions in that sandboxed environment.
             "IS_SANDBOX": "1",
         }
+        # If the dashboard has a passcode set, expose it to the agent
+        # as ARUI_INGEST_TOKEN so the `arui` SDK + every curl call the
+        # agent makes to $ARUI_INGEST_URL/api/* auto-authenticates.
+        # Without this, the agent has to forensically discover the
+        # passcode (typically by querying the SQLite DB directly),
+        # which wastes minutes of agent time on every fresh boot.
+        try:
+            from . import auth as _auth
+            pc = _auth._saved_passcode()
+            if pc:
+                env["ARUI_INGEST_TOKEN"] = pc
+        except Exception as e:                          # noqa: BLE001
+            print(f"[agent] could not read passcode for env: {e}",
+                  flush=True)
         if self.anthropic_key:
             env["ANTHROPIC_API_KEY"] = self.anthropic_key
             # Pre-write Claude Code's config:

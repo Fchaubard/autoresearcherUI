@@ -274,7 +274,19 @@ def start(proposal_id: str = "") -> dict:
     # interactively (no piped stdin) and feed the prompt via `tmux send-keys`
     # after it has booted, otherwise Claude's REPL never starts.
     cmd_override = os.environ.get("ARUI_AUTHOR_CMD", "")
-    env_prefix = "IS_SANDBOX=1 "  # bypass the root+skip-perms refusal
+    # Expose the dashboard passcode (if any) so the author agent's
+    # arui SDK + curl calls auto-authenticate against the local
+    # backend — same reasoning as agent.py (avoid the "agent
+    # forensically discovers the passcode" detour).
+    _token_export = ""
+    try:
+        from . import auth as _auth
+        _pc = _auth._saved_passcode()
+        if _pc:
+            _token_export = f"ARUI_INGEST_TOKEN={shlex.quote(_pc)} "
+    except Exception:                                       # noqa: BLE001
+        pass
+    env_prefix = f"{_token_export}IS_SANDBOX=1 "  # bypass the root+skip-perms refusal
     if cmd_override:
         inner = cmd_override
     else:

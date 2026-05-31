@@ -51,6 +51,11 @@ async def lifespan(app: FastAPI):
     pi.start()                        # hourly PI oversight cycle
     paper_runner.start()              # paper-mode ablation scheduler
     paper_watcher.start()             # hourly anti-pattern nudges
+    try:                              # surface agent phases in activity feed
+        from .app import agent_watcher
+        agent_watcher.start()
+    except Exception as e:                              # noqa: BLE001
+        print(f"[main] agent_watcher start failed: {e}", flush=True)
     if AUTORUN:
         db = SessionLocal()
         has_project = db.query(Project).first() is not None

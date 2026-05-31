@@ -84,7 +84,11 @@ Every experiment MUST log via the `arui` SDK:
 The dashboard resolves each run's headline score from arui.summary["__METRIC__"].
 If you do not set that exact key the run cannot be scored. ALWAYS include the
 "what" and "why" keys in config — the dashboard shows them in the run drawer so
-the research stays readable. ARUI_INGEST_URL and ARUI_PROJECT are in your env.
+the research stays readable. ARUI_INGEST_URL, ARUI_PROJECT, and
+ARUI_INGEST_TOKEN are ALL already in your env — the SDK uses them
+automatically. For ad-hoc curl calls to the dashboard API, just use
+`-H "Authorization: Bearer $ARUI_INGEST_TOKEN"` (do NOT query the DB
+to find the passcode — it is already in $ARUI_INGEST_TOKEN).
 
 For EVAL-only runs (no training loop — e.g. evaluating an ensemble), STILL
 call arui.log per example or per ensemble member with the running cumulative

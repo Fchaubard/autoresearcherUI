@@ -2718,20 +2718,69 @@ PASSCODE=`;
   // where the button was live in the DOM but had no handler yet, which
   // is what caused "first click does nothing, second click works".
   const parseAndFill = () => {
-    const keymap = {};                       // case-insensitive lookup
-    Object.keys(inp).forEach(k => keymap[k.toLowerCase()] = inp[k]);
+    /* Build the lookup map. Keys are normalized:
+       - lowercased
+       - whitespace/underscores treated as the same separator
+       - common aliases mapped to the canonical OB_FIELDS key
+       This is what makes pasted snippets like
+           METRIC=gsm8k_test_acc
+           Validation metric: accuracy
+           Validation set: gsm8k test
+       fill the form even though the form field is just "metric". */
+    const norm = (s) => s.toLowerCase().replace(/[\s_-]+/g, '_').trim();
+    const keymap = {};
+    Object.keys(inp).forEach(k => keymap[norm(k)] = inp[k]);
+    // Aliases — extra keys users naturally write that map to OB_FIELDS keys.
+    const ALIASES = {
+      validation_metric: 'metric',
+      val_metric: 'metric',
+      eval_metric: 'metric',
+      headline_metric: 'metric',
+      validation_set: 'eval',
+      eval_set: 'eval',
+      evaluation: 'eval',
+      baseline_method: 'baseline',
+      baseline_methods: 'baseline',
+      project_name: 'repo_name',
+      name: 'repo_name',
+      claude_api_key: 'claude_token',
+      anthropic_api_key: 'claude_token',
+      openai_api_key: 'openai_token',
+      gemini_api_key: 'gemini_token',
+    };
+    Object.entries(ALIASES).forEach(([alias, real]) => {
+      if (inp[real] && !keymap[alias]) keymap[alias] = inp[real];
+    });
+
+    /* Setting a value on a <select> silently no-ops if the value isn't
+       in the options list — which is what was breaking metric=gsm8k_test_acc.
+       This helper adds the value as a new <option> first so the assignment
+       actually sticks. */
+    const setValue = (x, v) => {
+      if (x.tagName === 'SELECT') {
+        const opts = Array.from(x.options).map(o => o.value);
+        if (!opts.includes(v)) {
+          const op = document.createElement('option');
+          op.value = v; op.textContent = v + ' (from prompt)';
+          x.append(op);
+        }
+      }
+      x.value = v;
+    };
+
     let filled = 0;
     bpa.value.split('\n').forEach(line => {
       line = line.trim();
       if (!line || line.startsWith('#')) return;
       const i = line.search(/[:=]/);          // accept  key: value  or  key=value
       if (i < 1) return;
-      const x = keymap[line.slice(0, i).trim().toLowerCase()];
+      const rawKey = line.slice(0, i).trim();
+      const x = keymap[norm(rawKey)];
       if (!x) return;
       let v = line.slice(i + 1).trim();
       if (v.length > 1 && /^(['"]).*\1$/.test(v)) v = v.slice(1, -1);
       if (x.type === 'checkbox') x.checked = /^(true|yes|1|on)$/i.test(v);
-      else x.value = v;
+      else setValue(x, v);
       // Notify any listeners (and prevent the async defaults fetch from
       // clobbering — `!inp[k].value` becomes false after this) by firing
       // both 'input' and 'change' events the way a real keystroke would.
@@ -3301,6 +3350,45 @@ async function openSettings() {
     'to replace it. Most changes take effect on the next council / PI cycle; ' +
     'changes to the Research-agent model only apply on the next research run.'));
   m.append(form);
+
+  /* ── Pause / Resume all emails ─────────────────────────────────────
+     Single button below the form so users with email fatigue (or who
+     want to silence digests while debugging) can stop ALL outbound
+     mail in one click — digests, token-failure alerts, system
+     warnings, paper-mode digests, anti-pattern nudges. The state is
+     stored on the onboarding row (emails_paused: bool) and read by
+     notify.send() / notify._loop() so the gate covers every path. */
+  const emailBar = el('div', 'set-email-bar');
+  const emailLbl = el('div', 'set-email-lbl', 'Outgoing emails');
+  const emailBtn = el('button', 'btn xs', 'Pause all emails');
+  const emailHint = el('div', 'set-email-hint', '');
+  emailBar.append(emailLbl, emailBtn, emailHint);
+  const refreshEmailBtn = async () => {
+    try {
+      const d = await api('/emails/status');
+      if (d.paused) {
+        emailBtn.textContent = '▶ Resume all emails';
+        emailBtn.classList.add('pri');
+        emailHint.textContent = 'Paused — no digests or alerts will be sent.';
+      } else {
+        emailBtn.textContent = '⏸ Pause all emails';
+        emailBtn.classList.remove('pri');
+        emailHint.textContent = 'Active — digests + alerts go to ' +
+          ((initial.email || '').trim() || '(no recipient configured)');
+      }
+    } catch (e) { /* keep last */ }
+  };
+  emailBtn.onclick = async () => {
+    emailBtn.disabled = true;
+    const wasPaused = emailBtn.textContent.includes('Resume');
+    try {
+      await post(wasPaused ? '/emails/resume' : '/emails/pause', {});
+      await refreshEmailBtn();
+    } finally { emailBtn.disabled = false; }
+  };
+  refreshEmailBtn();
+  m.append(emailBar);
+
   const actions = el('div', 'modal-actions');
   const status = el('div', 'set-status');
   const save = el('button', 'btn pri', 'Save settings');
