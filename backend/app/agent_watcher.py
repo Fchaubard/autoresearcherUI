@@ -21,7 +21,6 @@ failures.
 from __future__ import annotations
 
 import os
-import random
 import re
 import threading
 import time
@@ -34,7 +33,10 @@ from .db import SessionLocal
 from .models import Event
 
 
-_rng = random.Random(20260531)
+def _event_id() -> str:
+    # 8 hex bytes (16 chars) of os.urandom — no seeding, no collisions
+    # across backend restarts. archive.py uses the same scheme.
+    return "ev-" + os.urandom(6).hex()
 
 
 def _iso() -> str:
@@ -108,7 +110,7 @@ def _emit(phase_key: str, severity: str, message: str) -> None:
     try:
         db = SessionLocal()
         ev = Event(
-            id=f"ev-{_rng.randrange(16**8):08x}",
+            id=_event_id(),
             type="agent_phase",
             severity=severity,
             actor="research_agent",

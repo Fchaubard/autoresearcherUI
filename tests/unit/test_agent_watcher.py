@@ -98,6 +98,20 @@ def test_scan_no_session_is_noop(watcher_env):
     assert captured == []
 
 
+def test_event_ids_are_unique_across_calls():
+    """Regression test: agent_watcher originally used a *seeded* RNG
+    (random.Random(20260531)) at module scope, so every backend
+    restart produced the same first-N event IDs — which collided
+    with the existing rows on disk and the SQLite UNIQUE constraint
+    rejected every emit. Now uses os.urandom; this test guards
+    against accidental re-seeding."""
+    from backend.app.agent_watcher import _event_id
+    ids = {_event_id() for _ in range(200)}
+    assert len(ids) == 200, "event IDs collided — RNG re-seeded?"
+    for x in ids:
+        assert x.startswith("ev-")
+
+
 def test_emit_uses_real_bus_instance_not_module():
     """Regression test for the original bug: ``from . import bus`` then
     ``bus.publish(...)`` resolves to the MODULE (no publish attr), not
