@@ -1300,13 +1300,34 @@ textarea.onb-in{resize:vertical;line-height:1.5}
   line-height:1.45;white-space:pre-wrap;border:0}
 .btn.xs{padding:3px 9px;font-size:11px}
 
-/* One-line "what does this agent do" header — shown at top of every rail tab */
+/* One-line "what does this agent do" header — shown at top of every rail tab.
+   Collapsible. Default state = collapsed (just a 'ⓘ what is this?' link)
+   to give the terminal more vertical real-estate. Click to expand. */
 .rail-agent-desc{padding:9px 12px;background:rgba(167,139,250,.06);
   border-bottom:1px solid rgba(167,139,250,.18);
-  color:var(--text-2);font-size:11.5px;line-height:1.55}
+  color:var(--text-2);font-size:11.5px;line-height:1.55;position:relative}
 .rail-agent-desc b{color:var(--text);font-weight:600}
 .rail-agent-desc code{font-family:var(--mono);font-size:10.5px;
   background:rgba(255,255,255,.05);padding:1px 5px;border-radius:3px}
+.rail-agent-desc.collapsed{padding:6px 12px}
+.rail-agent-desc.collapsed .rail-agent-desc-body{display:none}
+.rail-agent-desc-toggle{appearance:none;background:transparent;border:0;
+  color:var(--accent);font-size:11px;cursor:pointer;padding:0;
+  text-decoration:underline dotted;text-underline-offset:2px}
+.rail-agent-desc-toggle:hover{color:var(--text)}
+.rail-agent-desc-toggle:before{content:'ⓘ ';opacity:.7;margin-right:2px}
+.rail-agent-desc-body{margin-top:6px}
+
+/* Sessions-tab toolbar: tabs on the left, "+ new" pinned to the right. */
+.sess-tabbar{display:flex;align-items:center;gap:6px;
+  padding:4px 8px;border-bottom:1px solid rgba(255,255,255,.06)}
+.sess-tabbar .sess-tabs{flex:1;display:flex;flex-wrap:wrap;gap:4px;
+  overflow-x:auto;min-width:0}
+.sess-new{appearance:none;background:rgba(99,102,241,.16);
+  border:1px solid rgba(99,102,241,.4);color:var(--text);
+  font-size:11px;font-weight:600;padding:3px 9px;border-radius:5px;
+  cursor:pointer;white-space:nowrap;flex-shrink:0}
+.sess-new:hover{background:rgba(99,102,241,.28);border-color:rgba(99,102,241,.7)}
 /* Rail content uses flex column so the description sits at top + the
    terminal/feed below fills the rest. */
 .rail-content{display:flex;flex-direction:column;min-height:0;overflow:hidden}

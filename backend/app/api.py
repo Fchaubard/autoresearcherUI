@@ -1376,7 +1376,13 @@ async def post_onboarding(request: Request):
         # dashboard's "↑ best run" arrow points the right way out of
         # the box. Fallback is "minimize" (loss-like) which matches
         # the original behaviour.
-        _ml = metric.lower()
+        # Normalize whitespace + dashes to underscores BEFORE token
+        # substring check — users paste metrics in many shapes:
+        #     "gsm8k_val_acc", "GSM8K Val Acc", "gsm-8k val acc"
+        # all need to resolve the same way. Without this normalization,
+        # bare "acc" at the end of a tokenized phrase wouldn't match
+        # any of _acc / acc_ / acc@.
+        _ml = re.sub(r"[\s\-]+", "_", metric.strip().lower())
         _maximize_tokens = (
             "accuracy", "_acc", "acc_", "acc@",      # accuracy variants
             "f1", "exact_match", "em", "_em",        # NLP scores
@@ -1411,7 +1417,7 @@ async def post_onboarding(request: Request):
 
 # ──────────── tmux run sessions (the Sessions tab) ───────────────────────────
 
-_INFRA_SESSIONS = {"arui", "cf", "agent"}
+_INFRA_SESSIONS = {"arui", "arui-cf", "cf", "agent", "author"}
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9_.\-=]+$")   # run ids contain '='
 
 
@@ -1422,6 +1428,73 @@ def list_sessions():
                          capture_output=True, text=True)
     names = [n.strip() for n in out.stdout.splitlines() if n.strip()]
     return {"sessions": [n for n in names if n not in _INFRA_SESSIONS]}
+
+
+@router.post("/sessions/create")
+async def session_create(request: Request):
+    """Spawn an ad-hoc tmux session the user can attach to + type into.
+
+    Used by the "+ new" button on the Sessions tab. The session runs a
+    bare bash shell — same env as the research agent (workspace cwd,
+    ARUI_INGEST_TOKEN if set) — so the user can run nvidia-smi,
+    inspect logs, or kick off a manual debug run.
+
+    Refuses to clobber an existing session, and reserves the names of
+    the agent/infra sessions (agent, author, arui, arui-cf, …).
+
+    Body: {"session": "<name>"}
+    """
+    body = await _safe_json(request)
+    name = (body.get("session") or "").strip()
+    if not name or not _SAFE_NAME.match(name) or len(name) > 60:
+        return {"ok": False,
+                "error": "session name must be 1-60 chars "
+                         "of [A-Za-z0-9_.-=]"}
+    if name in _INFRA_SESSIONS:
+        return {"ok": False,
+                "error": f"'{name}' is reserved (infra session)"}
+    if subprocess.run(["tmux", "has-session", "-t", name],
+                      capture_output=True).returncode == 0:
+        return {"ok": False, "error": f"session '{name}' already exists"}
+    # Build env: copy passcode + the standard arui vars so the new
+    # shell behaves like the agent's. Workspace cwd defaults to the
+    # active project workspace if one exists, else /root.
+    env_parts = ["IS_SANDBOX=1"]
+    try:
+        from . import auth as _auth
+        pc = _auth._saved_passcode()
+        if pc:
+            env_parts.append(f"ARUI_INGEST_TOKEN={shlex.quote(pc)}")
+    except Exception:                                       # noqa: BLE001
+        pass
+    env_parts.append("ARUI_INGEST_URL=http://127.0.0.1:8000")
+    # Find a workspace dir if any project exists.
+    cwd = "/root"
+    try:
+        ws = DATA_DIR / "workspace"
+        if ws.exists():
+            for entry in ws.iterdir():
+                if entry.is_dir():
+                    cwd = str(entry)
+                    break
+    except Exception:                                       # noqa: BLE001
+        pass
+    cmd = f"cd {shlex.quote(cwd)} && {' '.join(env_parts)} bash"
+    r = subprocess.run(
+        ["tmux", "new-session", "-d", "-s", name, "-x", "120", "-y", "40", cmd],
+        capture_output=True, text=True, timeout=8)
+    if r.returncode != 0:
+        return {"ok": False,
+                "error": (r.stderr or "tmux new-session failed")[:200]}
+    # Hook pipe-pane so the new session's bytes flow into the rail
+    # xterm.js stream the same way as the agent session.
+    try:
+        from . import pane_stream
+        pane_stream.enable(name)
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[sessions] pane_stream.enable({name}) failed: {e}",
+              flush=True)
+    return {"ok": True, "session": name, "cwd": cwd}
 
 
 @router.get("/sessions/{name}")

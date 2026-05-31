@@ -1223,6 +1223,29 @@ async function deleteIdea(id, reason) {
 }
 
 let _termTimer = null;
+
+/* One-time event delegation for the rail-agent-desc toggle. The rail
+   description is rendered as part of renderLive() / renderAuthorLive(),
+   and we wrap the descriptive paragraph in a .collapsed container with
+   a "what is this agent?" button. Clicking the button toggles the
+   .collapsed class, which CSS uses to show/hide .rail-agent-desc-body.
+   Delegation means we don't need to re-attach the handler each time
+   the rail re-renders. */
+if (!window._railDescDelegated) {
+  window._railDescDelegated = true;
+  document.addEventListener('click', (e) => {
+    const t = e.target;
+    if (!(t instanceof Element)) return;
+    const btn = t.closest('[data-rail-desc-toggle]');
+    if (!btn) return;
+    const desc = btn.closest('[data-rail-desc]');
+    if (!desc) return;
+    e.preventDefault();
+    desc.classList.toggle('collapsed');
+    btn.textContent = desc.classList.contains('collapsed')
+      ? 'what is this agent?' : 'hide';
+  });
+}
 let _termHost = null;        // active xterm.js wrapper for the rail
 function stopTermPoll() {
   if (_termTimer) { clearInterval(_termTimer); _termTimer = null; }
@@ -1477,17 +1500,21 @@ function renderAuthorLive(c) {
       '<span class="author-rail-status" id="author-status">checking…</span>' +
       '<button class="btn xs" id="author-restart" title="Kill the author tmux and spawn a fresh one">↻ restart</button>' +
     '</div>' +
-    '<div class="rail-agent-desc">' +
-      '<b>What it does:</b> autonomous Claude Code loop that owns the paper ' +
-      'end-to-end — plans cross-dataset ablations, queues runs (via ' +
-      '<code>/paper/runs/queue</code>), kills divergers, integrates each ' +
-      'finished run into <code>main.tex</code> automatically, maintains ' +
-      '<code>claims.md</code> + <code>refs.bib</code>, recompiles the PDF. ' +
-      'Files <i>strategic</i> decisions only — citations, kill_claim, ' +
-      'approve_text, approve_figure. Ablation runs do NOT need your ' +
-      'approval. The <b>PI agent</b> watches it every hour and nudges if it ' +
-      'drifts. Click in the terminal below and type — keystrokes go ' +
-      'straight to the Claude session.' +
+    '<div class="rail-agent-desc collapsed" data-rail-desc>' +
+      '<button class="rail-agent-desc-toggle" data-rail-desc-toggle>' +
+        'what is this agent?</button>' +
+      '<div class="rail-agent-desc-body">' +
+        '<b>What it does:</b> autonomous Claude Code loop that owns the paper ' +
+        'end-to-end — plans cross-dataset ablations, queues runs (via ' +
+        '<code>/paper/runs/queue</code>), kills divergers, integrates each ' +
+        'finished run into <code>main.tex</code> automatically, maintains ' +
+        '<code>claims.md</code> + <code>refs.bib</code>, recompiles the PDF. ' +
+        'Files <i>strategic</i> decisions only — citations, kill_claim, ' +
+        'approve_text, approve_figure. Ablation runs do NOT need your ' +
+        'approval. The <b>PI agent</b> watches it every hour and nudges if it ' +
+        'drifts. Click in the terminal below and type — keystrokes go ' +
+        'straight to the Claude session.' +
+      '</div>' +
     '</div>';
   const termHost = createRailTerm('author');
   termHost.container.id = 'authorterm-host';
@@ -1539,15 +1566,19 @@ function renderLive(c) {
         'title="Kill the research tmux and spawn a fresh one — fixes a ' +
         'session stuck on the Claude Code consent prompt">↻ restart</button>' +
     '</div>' +
-    '<div class="rail-agent-desc">' +
-      '<b>What it does:</b> autonomous Claude Code loop that reads ' +
-      '<code>ideas.md</code>, decides what to try next, launches training ' +
-      'runs, kills divergers, and writes <code>lessons.md</code>. The ' +
-      '<b>PI agent</b> watches it every hour and types short nudges into ' +
-      'this tmux when GPUs go idle, runs diverge, or it ignores the ' +
-      'council. Click the terminal and type — keystrokes go straight to ' +
-      'the Claude session. <b>Job: discovery</b>; pauses automatically ' +
-      'when you flip to paper mode.' +
+    '<div class="rail-agent-desc collapsed" data-rail-desc>' +
+      '<button class="rail-agent-desc-toggle" data-rail-desc-toggle>' +
+        'what is this agent?</button>' +
+      '<div class="rail-agent-desc-body">' +
+        '<b>What it does:</b> autonomous Claude Code loop that reads ' +
+        '<code>ideas.md</code>, decides what to try next, launches training ' +
+        'runs, kills divergers, and writes <code>lessons.md</code>. The ' +
+        '<b>PI agent</b> watches it every hour and types short nudges into ' +
+        'this tmux when GPUs go idle, runs diverge, or it ignores the ' +
+        'council. Click the terminal and type — keystrokes go straight to ' +
+        'the Claude session. <b>Job: discovery</b>; pauses automatically ' +
+        'when you flip to paper mode.' +
+      '</div>' +
     '</div>' +
     pausedBanner;
   const termHost = createRailTerm('agent');
@@ -1593,17 +1624,50 @@ function renderLive(c) {
 
 function renderSessions(c) {
   c.innerHTML =
-    '<div class="rail-agent-desc">' +
-      '<b>What this is:</b> live tmux output for any individual training run ' +
-      '(research <code>diff_*</code> or paper <code>pr-*</code>). Pick a ' +
-      'session above to tail its log — useful when a specific run is ' +
-      'misbehaving and you want raw stdout/stderr instead of the aggregated ' +
-      'metric view.' +
+    '<div class="rail-agent-desc collapsed" data-rail-desc>' +
+      '<button class="rail-agent-desc-toggle" data-rail-desc-toggle>' +
+        'what is this view?</button>' +
+      '<div class="rail-agent-desc-body">' +
+        '<b>What this is:</b> live tmux output for any individual training run ' +
+        '(research <code>diff_*</code> or paper <code>pr-*</code>). Pick a ' +
+        'session above to tail its log — useful when a specific run is ' +
+        'misbehaving and you want raw stdout/stderr instead of the aggregated ' +
+        'metric view. Click <b>+ new</b> to spawn an ad-hoc tmux session you ' +
+        'can drive yourself (e.g. <code>nvidia-smi</code>, a debug Python ' +
+        'shell, a manual training run). It will appear as a new tab here.' +
+      '</div>' +
     '</div>' +
     '<div class="sess-wrap">' +
-    '<div class="sess-tabs" id="sesstabs"></div>' +
+    '<div class="sess-tabbar">' +
+      '<div class="sess-tabs" id="sesstabs"></div>' +
+      '<button class="sess-new" id="sessnew" title="Create a new tmux session you can type into">+ new</button>' +
+    '</div>' +
     '<pre class="term" id="sessterm">loading run sessions…</pre></div>';
   const tabsEl = c.querySelector('#sesstabs');
+  // ── "+ new" handler — prompt for a session name, POST /api/sessions/create,
+  //    then re-poll so the new tab appears + becomes active.
+  document.getElementById('sessnew').onclick = async () => {
+    const name = await aruiPrompt(
+      'New tmux session name (letters / digits / dash / underscore):',
+      { title: 'New ad-hoc tmux session', placeholder: 'my-debug-shell',
+        ok: 'Create' });
+    if (!name) return;
+    const clean = String(name).trim();
+    if (!clean) return;
+    try {
+      const r = await post('/sessions/create', { session: clean });
+      if (r && r.ok) {
+        S.sessTab = r.session || clean;
+        // Force the tab bar to re-poll so the new session appears
+        await poll();
+      } else {
+        aruiAlert((r && r.error) || 'Could not create session',
+          { title: 'Session create failed' });
+      }
+    } catch (e) {
+      aruiAlert(String(e), { title: 'Session create failed' });
+    }
+  };
   const term = c.querySelector('#sessterm');
   let known = '';
   const buildTabs = (names) => {
