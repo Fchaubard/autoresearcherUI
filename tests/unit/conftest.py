@@ -40,6 +40,7 @@ _RELOAD_MODULES = [
     "backend.app.seed",
     "backend.app.orchestrator",
     "backend.app.agent",
+    "backend.app.pane_stream",
     "backend.app.repo",
     "backend.app.authkeys",
     "backend.app.api",

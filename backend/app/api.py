@@ -678,6 +678,47 @@ def _tmux_alive(session: str = "agent") -> bool:
                           capture_output=True).returncode == 0
 
 
+@router.get("/agent/raw")
+def agent_raw_stream(session: str = "agent", offset: int = 0):
+    """Byte-offset incremental read of a tmux session's RAW pane bytes.
+
+    This is what the rail xterm.js subscribes to so the embedded terminal
+    feels like a real terminal: each call returns only the bytes emitted
+    since the caller's last ``offset``. xterm.js calls ``t.write(chunk)``
+    on the returned bytes — ANSI escapes, colors, cursor moves, spinners
+    all render natively because xterm is re-parsing the program's actual
+    output (mirrored via ``tmux pipe-pane``).
+
+    Response:
+        {
+          "chunk":  "<base64-encoded raw bytes>",
+          "offset": <new offset to send next time>,
+          "size":   <current total file size>,
+          "alive":  <bool — tmux session still running?>,
+          "rotated": <bool — true if we resynced from 0>
+        }
+
+    The client sends back ``offset`` on the next request to resume from
+    that point. If the file shrank (e.g. session restarted, raw file
+    truncated), the server resets ``offset`` to 0 and sets
+    ``rotated: true`` so xterm.js can call ``t.reset()`` first.
+    """
+    from . import pane_stream
+    import base64
+    if not session or len(session) > 80 or not _SAFE_NAME.match(session):
+        return {"error": "bad session"}
+    pre_size = pane_stream.size(session)
+    rotated = bool(offset and offset > pre_size)
+    chunk, new_off, size = pane_stream.read_range(session, offset)
+    return {
+        "chunk": base64.b64encode(chunk).decode("ascii"),
+        "offset": new_off,
+        "size": size,
+        "alive": _tmux_alive(session),
+        "rotated": rotated,
+    }
+
+
 @router.get("/agent/terminal")
 def agent_terminal():
     """Live contents of the agent's tmux session — drives the rail Live tab."""
@@ -1036,6 +1077,10 @@ def diag():
         out["app_js_size"] = len(appjs)
         out["has_xterm"] = "createRailTerm" in appjs
         out["has_xterm_apiwiring"] = "/agent/keys" in appjs
+        # /api/agent/raw streaming wiring — the upgrade that gives the
+        # rail terminal real ANSI rendering + low-latency typing.
+        out["has_raw_stream"] = ("/agent/raw" in appjs
+                                 and "startStream" in appjs)
         idx = (ROOT / "backend" / "app" / "static" / "index.html").read_text()
         out["index_has_xterm_cdn"] = "xterm@" in idx
         out["index_cache_bust"] = (idx.split("app.js?v=", 1)[1].split('"', 1)[0]
@@ -1071,7 +1116,17 @@ def diag():
         out["agent_tmux_tail"] = (r.stdout or "")[-2400:]
     except Exception as e:                              # noqa: BLE001
         out["agent_tmux_error"] = str(e)
-    # 5. anthropic key visible to the backend?
+    # 5. per-session raw byte stream sizes — these are what the rail
+    # xterm.js subscribes to. Non-zero == pipe-pane is plumbed.
+    try:
+        from . import pane_stream
+        out["pane_stream"] = {
+            "agent":  pane_stream.size("agent"),
+            "author": pane_stream.size("author"),
+        }
+    except Exception as e:                              # noqa: BLE001
+        out["pane_stream_error"] = str(e)
+    # 6. anthropic key visible to the backend?
     out["env_has_anthropic_key"] = bool(_os.environ.get("ANTHROPIC_API_KEY"))
     out["env_has_gemini_key"]    = bool(_os.environ.get("GEMINI_API_KEY"))
     out["env_has_openai_key"]    = bool(_os.environ.get("OPENAI_API_KEY"))

@@ -1254,16 +1254,25 @@ function paintRail() {
 
 /* ── xterm.js rail terminal ───────────────────────────────────────────── */
 // One factory shared by the Research-Agent rail and the Author-Agent
-// rail. Returns { container, write(text), dispose(), fallback }.
+// rail. Returns
+//   { container, startStream(), stopStream(), writeText(text),
+//     dispose(), fallback }.
 //
 // What the user gets:
+//   - REAL terminal: server streams raw bytes (with ANSI escapes —
+//     colors, cursor moves, in-place spinners) via /api/agent/raw and
+//     xterm.js renders them natively. No more `t.reset() + t.write()`
+//     polling that wiped selection + cursor every 2.5 s.
 //   - native text selection (drag, even across line-wraps), Cmd/Ctrl-C
-//     copies — finally a way to grab a long OAuth URL in one swipe
-//   - double-click selects a word, triple-click selects a line
+//     copies, double-click word, triple-click line
 //   - URLs are clickable (Ctrl/Cmd-click opens in a new tab) via the
 //     web-links addon
 //   - every keystroke types directly into the agent's tmux via
-//     POST /api/agent/keys — feels like a real terminal
+//     POST /api/agent/keys, fired IMMEDIATELY (no 90 ms coalesce). Feels
+//     like SSH into the box.
+//   - F-keys + Cmd-shortcuts that the browser would normally swallow
+//     are intercepted via attachCustomKeyEventHandler and passed
+//     through to tmux.
 //
 // If xterm.js failed to load (CDN blocked, offline), we fall back to a
 // plain <pre> so the rail still works, just with the old read-only UX.
@@ -1275,12 +1284,17 @@ function createRailTerm(session) {
       '<pre class="term" data-fallback="1">loading terminal…</pre>';
     const pre = container.firstChild;
     return { container, fallback: true,
-             write: (t) => { pre.textContent = t || ''; },
+             startStream: () => {},
+             stopStream: () => {},
+             writeText: (t) => { pre.textContent = t || ''; },
              dispose: () => {} };
   }
   const t = new window.Terminal({
-    convertEol: true,
-    cursorBlink: false,
+    // Raw mode: backend pipes the program's actual bytes (ANSI codes
+    // already include \r\n where appropriate). convertEol would
+    // double-CR-LF those, so keep it OFF.
+    convertEol: false,
+    cursorBlink: true,
     fontFamily: "'SF Mono','Menlo','Consolas',monospace",
     fontSize: 12,
     lineHeight: 1.15,
@@ -1314,46 +1328,104 @@ function createRailTerm(session) {
     ro = new ResizeObserver(refit);
     ro.observe(container);
   } catch (e) { /* not all browsers */ }
-  // Raw keystroke passthrough — every key the user presses while the
-  // term has focus is sent to the tmux session via send-keys. We don't
-  // try to echo locally; the next poll tick will show the new state.
-  let _pasteBuf = '', _pasteTimer = null;
-  const sendNow = async (data) => {
-    try { await post('/agent/keys', { session, data }); } catch (e) {}
+
+  /* ── Keystroke passthrough ───────────────────────────────────────────
+     Every key the user types goes to /api/agent/keys IMMEDIATELY.
+     - Single chars and special keys: one POST each.
+     - Multi-char paste: one POST with the whole buffer (xterm onData
+       already batches paste into a single call so we don't need to
+       coalesce on our side).
+     - No 90 ms delay. */
+  const sendNow = (data) => {
+    // Fire-and-forget: if the network coughs, the next keystroke goes
+    // through anyway. Don't await — we want zero latency feel.
+    post('/agent/keys', { session, data }).catch(() => {});
   };
-  t.onData((data) => {
-    // Coalesce typed-character bursts (paste) into one POST so we
-    // don't hammer the backend with 200 tiny send-keys calls. Special
-    // keys (Enter, arrows, Ctrl-*) go through immediately because the
-    // tmux mapping is per-key.
-    if (data.length > 1) { sendNow(data); return; }
-    const c = data.charCodeAt(0);
-    if (c === 13 /* Enter */ || c === 9 /* Tab */ ||
-        c === 27 /* Esc  */ || c === 127 /* Bksp */ ||
-        c === 8  /* ^H   */ || (c >= 1 && c <= 26 && c !== 9 && c !== 13)) {
-      // flush any pending typed buffer first so order is preserved
-      if (_pasteBuf) { sendNow(_pasteBuf); _pasteBuf = ''; }
-      if (_pasteTimer) { clearTimeout(_pasteTimer); _pasteTimer = null; }
-      sendNow(data);
-      return;
+  t.onData((data) => { sendNow(data); });
+
+  /* Browser-intercepted keys: let F-keys + most Cmd/Ctrl shortcuts go
+     through to tmux instead of triggering the browser. We deliberately
+     allow Cmd/Ctrl-C (copy), Cmd/Ctrl-V (paste — xterm's paste handler
+     will emit it via onData), Cmd-T (new tab), Cmd-W (close tab),
+     Cmd-Q (quit), Cmd-R (reload), and the user's other browser
+     shortcuts — pressing Cmd-T in a terminal SHOULD open a tab. */
+  t.attachCustomKeyEventHandler((ev) => {
+    if (ev.type !== 'keydown') return true;
+    const k = ev.key, isMod = ev.metaKey || ev.ctrlKey;
+    // Allow these to behave normally (copy, paste, new tab etc).
+    if (isMod && /^[cvtnwqrlf]$/i.test(k)) return true;
+    // F1-F12 → swallow browser default + forward as escape sequence.
+    if (/^F([1-9]|1[0-2])$/.test(k)) {
+      const fnum = parseInt(k.slice(1), 10);
+      // xterm/vt220 F-key sequences
+      const map = {
+        1: '\x1bOP', 2: '\x1bOQ', 3: '\x1bOR', 4: '\x1bOS',
+        5: '\x1b[15~', 6: '\x1b[17~', 7: '\x1b[18~', 8: '\x1b[19~',
+        9: '\x1b[20~', 10: '\x1b[21~', 11: '\x1b[23~', 12: '\x1b[24~',
+      };
+      sendNow(map[fnum] || '');
+      ev.preventDefault();
+      return false;
     }
-    _pasteBuf += data;
-    if (_pasteTimer) clearTimeout(_pasteTimer);
-    _pasteTimer = setTimeout(() => {
-      const buf = _pasteBuf; _pasteBuf = ''; _pasteTimer = null;
-      if (buf) sendNow(buf);
-    }, 90);
+    return true;
   });
+
+  /* ── Raw byte stream from server ─────────────────────────────────────
+     Poll /api/agent/raw for new bytes since the last offset and pass
+     them to xterm.write() AS-IS. The bytes already contain ANSI escape
+     sequences for colors, cursor positioning, in-place spinner
+     animation, etc — xterm.js re-parses them and the rendering matches
+     what `tmux attach -t agent` would show.
+
+     We use base64 transit because raw bytes in JSON would need
+     escaping; decoding to Uint8Array preserves every byte.
+
+     Poll interval: 250 ms when active, exponential back-off to 2 s
+     when there's been no new bytes — keeps the network quiet while
+     the agent thinks, snappy when it's emitting output. */
+  let _offset = 0, _streamTimer = null, _idleMs = 250;
+  const b64ToBytes = (b64) => {
+    if (!b64) return new Uint8Array(0);
+    try {
+      const bin = atob(b64);
+      const buf = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+      return buf;
+    } catch (e) { return new Uint8Array(0); }
+  };
+  const tick = async () => {
+    try {
+      const d = await api(
+        '/agent/raw?session=' + encodeURIComponent(session)
+        + '&offset=' + _offset);
+      if (d.rotated) { t.reset(); _offset = 0; }
+      const bytes = b64ToBytes(d.chunk);
+      if (bytes.length) {
+        t.write(bytes);
+        _offset = d.offset || (_offset + bytes.length);
+        _idleMs = 250;          // got data, stay snappy
+      } else {
+        // Make sure we know where the file ends even if we got 0 bytes
+        // (avoids re-fetching the same offset forever).
+        if (typeof d.offset === 'number') _offset = d.offset;
+        _idleMs = Math.min(_idleMs * 1.5, 2000);
+      }
+    } catch (e) { _idleMs = Math.min(_idleMs * 1.5, 2000); }
+    _streamTimer = setTimeout(tick, _idleMs);
+  };
+  const start = () => { if (!_streamTimer) tick(); };
+  const stop  = () => {
+    if (_streamTimer) { clearTimeout(_streamTimer); _streamTimer = null; }
+  };
+
   return {
     container, fallback: false,
-    write(text) {
-      // Reset + write full scrollback. xterm handles this fast (~1ms
-      // for typical agent output) and the user's scroll-pinned-to-
-      // bottom behaviour is preserved.
-      t.reset();
-      t.write(text || '');
-    },
+    startStream: start,
+    stopStream:  stop,
+    // Escape hatch — e.g. fallback message when stream is offline.
+    writeText(text) { t.write(text || ''); },
     dispose() {
+      stop();
       try { ro && ro.disconnect(); } catch (e) {}
       try { t.dispose(); } catch (e) {}
     },
@@ -1394,18 +1466,23 @@ function renderAuthorLive(c) {
     await post('/paper/author/restart', {});
     stat.textContent = 'restarted';
   };
-  const poll = async () => {
+  // Start streaming raw pane bytes (ANSI included) — this is what makes
+  // the terminal feel real. The /paper/author/terminal full-text poll is
+  // gone; instead we just hit /api/agent/raw incrementally inside
+  // termHost.startStream().
+  termHost.startStream();
+  // Separate light status poll just for the "● running / ○ not running"
+  // indicator. 4s is plenty — this isn't on the critical path of typing.
+  const statusTick = async () => {
     try {
-      const d = await api('/paper/author/terminal');
-      const text = ((d && d.text) || '').replace(/[ \t\r\n]+$/, '')
-        || '(no output yet)';
-      termHost.write(text);
-      stat.textContent = d.running ? '● running' : '○ not running';
-      stat.style.color = d.running ? 'var(--ok)' : 'var(--muted)';
-    } catch (e) { /* keep last frame */ }
+      const d = await api('/agent/raw?session=author&offset=999999999');
+      const running = !!d.alive;
+      stat.textContent = running ? '● running' : '○ not running';
+      stat.style.color = running ? 'var(--ok)' : 'var(--muted)';
+    } catch (e) { /* keep last */ }
   };
-  poll();
-  _termTimer = setInterval(poll, 2500);
+  statusTick();
+  _termTimer = setInterval(statusTick, 4000);
 }
 
 function renderLive(c) {
@@ -1457,22 +1534,24 @@ function renderLive(c) {
         { title: 'Could not restart agent' });
     }
   };
-  const poll = async () => {
+  // Start streaming raw pane bytes — ANSI escapes included. xterm.js
+  // renders them natively, so colors / spinners / cursor moves all
+  // match what `tmux attach -t agent` would show.
+  termHost.startStream();
+  // Separate light status poll just for the "● running / ○ not running"
+  // indicator. 4s is plenty.
+  const statusTick = async () => {
     try {
-      const d = await api('/agent/terminal');
-      const text = ((d && d.text) || '').replace(/[ \t\r\n]+$/, '')
-        || '(no output yet)';
-      termHost.write(text);
-      // running flag is on the response; fall back to "alive" if present
-      const running = d.running ?? d.alive ?? !!(d.text && d.text.length);
+      const d = await api('/agent/raw?session=agent&offset=999999999');
+      const running = !!d.alive;
       if (stat) {
         stat.textContent = running ? '● running' : '○ not running';
         stat.style.color = running ? 'var(--ok)' : 'var(--muted)';
       }
-    } catch (e) { /* keep last frame */ }
+    } catch (e) { /* keep last */ }
   };
-  poll();
-  _termTimer = setInterval(poll, 2500);
+  statusTick();
+  _termTimer = setInterval(statusTick, 4000);
 }
 
 function renderSessions(c) {

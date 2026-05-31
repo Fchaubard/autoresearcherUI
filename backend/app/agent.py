@@ -206,9 +206,13 @@ class RealAgent:
                        capture_output=True)
         subprocess.run(["tmux", "new-session", "-d", "-s", self.session,
                         "-x", "210", "-y", "52", full], check=True)
-        # mirror the live pane into agent.log for a persistent record
-        subprocess.run(["tmux", "pipe-pane", "-t", self.session, "-o",
-                        f"cat >> {shlex.quote(log)}"], capture_output=True)
+        # Mirror the live pane into BOTH a per-session raw-byte file
+        # (`pane_stream.term_file(session)`) — what the rail xterm.js
+        # streams from for true ANSI rendering — AND `agent.log` for a
+        # persistent per-workspace record. One pipe-pane invocation
+        # with `tee` does both.
+        from . import pane_stream
+        pane_stream.enable(self.session, mirror_to=log)
         # Once Claude Code has booted, hand it the research brief.
         #
         # Claude Code shows a one-time "Bypass Permissions mode" consent

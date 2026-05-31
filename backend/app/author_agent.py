@@ -296,10 +296,11 @@ def start(proposal_id: str = "") -> dict:
         subprocess.run(["tmux", "new-session", "-d", "-s", SESSION,
                         "-x", "210", "-y", "52", full],
                        capture_output=True, timeout=10)
-        # Mirror the pane to author.log for the dashboard tail.
-        subprocess.run(["tmux", "pipe-pane", "-t", SESSION, "-o",
-                        f"cat >> {shlex.quote(str(folder / 'author.log'))}"],
-                       capture_output=True, timeout=5)
+        # Mirror the pane to BOTH the per-session raw-byte file (rail
+        # xterm.js streaming source) AND author.log (per-workspace
+        # persistent log). See backend/app/pane_stream.py.
+        from . import pane_stream
+        pane_stream.enable(SESSION, mirror_to=str(folder / "author.log"))
         # Once Claude Code has booted, hand it the brief. Same dance as
         # agent.py: first auto-accept the (possible) one-time Bypass
         # Permissions consent by typing the literal "2" (the numeric

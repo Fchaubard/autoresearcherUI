@@ -49,6 +49,40 @@ def test_settings_put_does_not_clobber_blank_secrets(client, setting_setter):
     assert g["claude_token"] == "••••••••"
 
 
+def test_agent_raw_stream_returns_bytes_from_offset(client, monkeypatch):
+    """/api/agent/raw is what the rail xterm.js subscribes to. It should
+    return base64-encoded bytes for the given session+offset, and
+    advance the offset.
+    """
+    import base64
+    from backend.app import pane_stream
+    sess = "agent"
+    tf = pane_stream.term_file(sess)
+    tf.parent.mkdir(parents=True, exist_ok=True)
+    tf.write_bytes(b"\x1b[32mHello world!\x1b[0m\r\n")
+    r = client.get(f"/api/agent/raw?session={sess}&offset=0")
+    assert r.status_code == 200
+    body = r.json()
+    decoded = base64.b64decode(body["chunk"])
+    assert decoded == b"\x1b[32mHello world!\x1b[0m\r\n"
+    assert body["offset"] == len(decoded)
+    assert body["size"] == len(decoded)
+    assert "alive" in body
+    # Resume from offset == size returns no new bytes.
+    r2 = client.get(f"/api/agent/raw?session={sess}&offset={body['offset']}")
+    body2 = r2.json()
+    assert body2["chunk"] == ""
+    assert body2["offset"] == body["offset"]
+
+
+def test_agent_raw_stream_rejects_bad_session(client):
+    """Defensive — sanitization prevents injection / path traversal."""
+    r = client.get("/api/agent/raw?session=../etc/passwd&offset=0")
+    assert r.status_code == 200
+    body = r.json()
+    assert "error" in body
+
+
 def test_settings_put_ignores_mask_value(client, setting_setter):
     setting_setter("onboarding", {"openai_token": "real-tok"})
     r = client.put("/api/settings", json={"openai_token": "••••••••"})
