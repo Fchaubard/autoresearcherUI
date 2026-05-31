@@ -2493,8 +2493,19 @@ const OB_FIELDS = [
     'e.g. Take TRM (Tiny Recursive Model) as a baseline and improve on it for ARC-AGI-2…'],
   ['seed_ideas', 'Seed ideas', 'area', 'One idea per line…'],
   ['eval', 'Evaluation function / validation set', 'area', ''],
-  ['metric', 'Validation metric', 'select',
-    'val_loss|perplexity|accuracy|f1|rmse|mse|fid|bpb|arc_score|custom'],
+  // Validation metric is a FREE-TEXT input with a datalist of
+  // suggestions. Used to be a select but that silently rejected
+  // unknown values (gsm8k_val_acc, squad_em, custom benchmark names…)
+  // and the "custom" option had no follow-up text field — so picking
+  // it just saved the literal string "custom". Whatever the user
+  // types here is saved verbatim; direction (↑/↓) is derived
+  // server-side from the metric name (see api.py — _maximize_tokens
+  // / _minimize_tokens substring check).
+  ['metric', 'Validation metric (type anything — common ones suggested below)',
+    'metric',
+    'val_loss|val_acc|test_acc|gsm8k_val_acc|gsm8k_test_acc|'
+    + 'accuracy|f1|exact_match|perplexity|rmse|mse|mae|'
+    + 'fid|bpb|arc_score|bleu|rouge|pass@1|reward'],
   ['baseline', 'Baseline method(s) to run first', 'area',
     'e.g. TRM (Tiny Recursive Model)'],
   ['sec', 'Agent (advanced — leave the textarea alone for sensible defaults)'],
@@ -2605,6 +2616,23 @@ function buildSettingsForm({ initial = {}, hideFields = [] } = {}) {
         extra.split('|').forEach(o => {
           const op = el('option'); op.value = o; op.textContent = o; x.append(op);
         });
+      } else if (type === 'metric') {
+        // Free-text input + native <datalist> of suggestions. Behaves
+        // as a text input — anything you type sticks — but also gives
+        // a dropdown of common metric names when you focus it. See
+        // OB_FIELDS comment for why this replaced the old select.
+        x = el('input', 'onb-in');
+        x.type = 'text';
+        x.setAttribute('autocomplete', 'off');
+        x.setAttribute('spellcheck', 'false');
+        const listId = 'dl-' + k + '-' + Math.random().toString(36).slice(2, 8);
+        x.setAttribute('list', listId);
+        const dl = el('datalist'); dl.id = listId;
+        extra.split('|').forEach(o => {
+          if (!o) return;
+          const op = el('option'); op.value = o; dl.append(op);
+        });
+        row.append(dl);
       } else { x = el('input', 'onb-in'); x.type = type; }
       if (extra && type !== 'select') x.placeholder = extra;
       // Mitigate Chrome's "deceptive site / you entered a password"
