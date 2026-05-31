@@ -773,6 +773,38 @@ async def agent_send(request: Request):
     return {"ok": True}
 
 
+@router.get("/agent/oauth_url")
+def agent_oauth_url():
+    """Extract a Claude Code OAuth URL from the agent's tmux pane,
+    UN-WRAPPED across terminal line breaks.
+
+    tmux hard-wraps long URLs across the pane width (default 210
+    columns), so a 600-char OAuth URL spans 3 lines with `\n` mid-token.
+    `capture-pane -J` joins wrapped lines back together, which lets us
+    recover the full URL the user actually needs to click. The boot
+    overlay polls this endpoint when it detects the OAuth state in the
+    regular /agent/terminal output."""
+    try:
+        r = subprocess.run(
+            ["tmux", "capture-pane", "-t", "agent", "-p", "-J",
+             "-S", "-3000"],
+            capture_output=True, text=True, timeout=8)
+        text = r.stdout if r.returncode == 0 else ""
+    except Exception as e:                              # noqa: BLE001
+        return {"url": "", "error": str(e)}
+    # The OAuth URL starts at one of these patterns and continues
+    # uninterrupted to a terminator. With -J, line wraps are already
+    # collapsed, so a normal greedy scan to the next whitespace works.
+    import re as _re
+    m = _re.search(
+        r"https://(?:claude\.com/cai/oauth|platform\.claude\.com/oauth"
+        r"|console\.anthropic\.com|claude\.com/oauth)[^\s'\"]+",
+        text)
+    if not m:
+        return {"url": ""}
+    return {"url": m.group(0)}
+
+
 @router.post("/agent/paste_oauth")
 async def agent_paste_oauth(request: Request):
     """Type an OAuth callback code into the Research Agent's tmux pane.

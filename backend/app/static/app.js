@@ -2741,19 +2741,17 @@ function showAgentBootOverlay() {
     'Agent is queuing the baseline run…',
   ];
   // Detect Claude Code OAuth fallback. On a fresh ~/.claude with no
-  // ANTHROPIC_API_KEY in the env (or one that Claude Code declined to
-  // use), Claude Code prints an oauth/code URL + "Paste code here if
-  // prompted >". We pull the URL out and show a paste-back UI in the
-  // overlay instead of leaving the user staring at the spinner.
-  const detectOauth = (text) => {
-    const m = text.match(
-      /https:\/\/(?:platform\.|console\.|claude\.com|anthropic\.com)[^\s'"]+/);
-    if (!m) return null;
-    const url = m[0];
-    if (!/oauth/i.test(url) && !/code=|response_type=/i.test(url)) {
-      return null;
-    }
-    return url;
+  // ANTHROPIC_API_KEY honored, Claude Code prints an OAuth URL +
+  // "Paste code here if prompted >". This regex is fuzzy — the
+  // pane-captured text often has the URL hard-wrapped across multiple
+  // terminal lines with stray \n's mid-token. We detect that an OAuth
+  // flow is in progress here, then call /api/agent/oauth_url for the
+  // un-wrapped URL (which uses tmux capture-pane -J to join wraps).
+  const looksLikeOauth = (text) => {
+    return /Paste\s+code\s+here/i.test(text)
+        || /claude\.com\/cai\/oauth/i.test(text)
+        || /response_type=code/i.test(text)
+        || /code_challenge_method=S256/i.test(text);
   };
   // Best-effort stage detection from the actual tmux output.
   const detectStage = (text) => {
@@ -2819,6 +2817,18 @@ function showAgentBootOverlay() {
     if (interval) clearInterval(interval);
     const card = document.querySelector('.boot-card');
     if (!card) return;
+    const urlRow = url
+      ? '<div class="oauth-url-row">' +
+          '<a class="btn pri oauth-url-btn" target="_blank" rel="noopener" ' +
+          'href="' + esc(url) + '">Open Anthropic login →</a>' +
+          '<button class="btn" id="oauth-copy" type="button">' +
+          'Copy URL</button>' +
+        '</div>' +
+        '<div class="oauth-url-pre">' + esc(url) + '</div>'
+      : '<div class="boot-err-body" style="color:#FCA5A5">' +
+        'Could not extract the OAuth URL from the agent\'s pane. SSH ' +
+        'into the pod and run <code>tmux attach -t agent</code> to see ' +
+        'the full URL Claude printed.</div>';
     card.innerHTML =
       '<div class="boot-brand">autoresearcher<span>UI</span></div>' +
       '<div class="boot-err-icon" style="color:#A78BFA" aria-hidden="true">⚿</div>' +
@@ -2828,12 +2838,7 @@ function showAgentBootOverlay() {
         'Click the link below to sign in to your Anthropic account, then ' +
         'paste the code Claude gives you back into the box below.' +
       '</div>' +
-      '<div class="oauth-url-row">' +
-        '<a class="btn pri oauth-url-btn" target="_blank" rel="noopener" ' +
-        'href="' + esc(url) + '">Open Anthropic login →</a>' +
-        '<button class="btn" id="oauth-copy" type="button">Copy URL</button>' +
-      '</div>' +
-      '<div class="oauth-url-pre">' + esc(url) + '</div>' +
+      urlRow +
       '<input id="oauth-code" class="login-input" ' +
         'placeholder="Paste the code from your browser here…" ' +
         'autocomplete="off">' +
@@ -2849,7 +2854,7 @@ function showAgentBootOverlay() {
         'those credentials and skip this prompt.' +
       '</div>';
     const copyBtn = document.getElementById('oauth-copy');
-    if (copyBtn) copyBtn.onclick = () => {
+    if (copyBtn && url) copyBtn.onclick = () => {
       navigator.clipboard?.writeText(url);
       copyBtn.textContent = 'Copied ✓';
       setTimeout(() => copyBtn.textContent = 'Copy URL', 1400);
@@ -2949,10 +2954,20 @@ function showAgentBootOverlay() {
       // ── OAuth-prompt detection ──────────────────────────────────────
       // Claude Code on a fresh node falls back to OAuth when it can't
       // read ANTHROPIC_API_KEY. Surface a paste-back UI instead of
-      // letting the user stare at a spinner forever.
-      const oauthUrl = detectOauth(txt);
-      if (oauthUrl) {
-        return showOauthRecovery(oauthUrl, txt);
+      // letting the user stare at a spinner forever. We use a separate
+      // backend endpoint that captures the pane with line-joining,
+      // because tmux wraps long URLs across multiple lines and the
+      // regular /agent/terminal would give us a truncated URL.
+      if (looksLikeOauth(txt)) {
+        let urlResp = {};
+        try { urlResp = await api('/agent/oauth_url'); } catch (e) {}
+        const oauthUrl = (urlResp && urlResp.url) || '';
+        if (oauthUrl) {
+          return showOauthRecovery(oauthUrl, txt);
+        }
+        // Even if we couldn't extract the URL, surface the recovery
+        // card so the user knows what's happening — they can SSH in.
+        return showOauthRecovery('', txt);
       }
       // ── error detection on the live tmux text ───────────────────────
       if (matchesAny(txt, AUTH_ERROR_PATTERNS)) {
