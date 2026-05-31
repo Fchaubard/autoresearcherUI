@@ -28,7 +28,8 @@ import time
 import datetime as dt
 from typing import Iterable
 
-from . import bus, pane_stream
+from . import pane_stream
+from .bus import bus
 from .db import SessionLocal
 from .models import Event
 

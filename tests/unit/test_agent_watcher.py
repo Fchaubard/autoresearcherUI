@@ -98,6 +98,22 @@ def test_scan_no_session_is_noop(watcher_env):
     assert captured == []
 
 
+def test_emit_uses_real_bus_instance_not_module():
+    """Regression test for the original bug: ``from . import bus`` then
+    ``bus.publish(...)`` resolves to the MODULE (no publish attr), not
+    the Bus instance. Every other module does ``from .bus import bus``;
+    agent_watcher must do the same.
+
+    Check: agent_watcher.bus is the Bus INSTANCE and has a callable
+    `publish` method. If someone changes the import line in the future,
+    this test will fail loudly instead of silently breaking the
+    activity feed."""
+    from backend.app import agent_watcher
+    from backend.app.bus import bus as real_bus
+    assert agent_watcher.bus is real_bus
+    assert callable(getattr(agent_watcher.bus, "publish", None))
+
+
 def test_council_approved_distinct_from_rejected(watcher_env):
     """Approval and rejection are different phases — both should be
     detectable from their JSON payload signatures."""
