@@ -111,7 +111,62 @@ if ! command -v claude >/dev/null 2>&1; then
   fi
 fi
 
-# ── 4c. cloudflared (for the public URL) ────────────────────────────────
+# ── 4c. one-time Claude Code authentication ─────────────────────────────
+# Modern Claude Code (`@anthropic-ai/claude-code` npm package) prefers
+# its persisted OAuth credentials at ~/.claude/* over ANTHROPIC_API_KEY
+# in --dangerously-skip-permissions mode. On a fresh node with no prior
+# `claude` login, it falls back to interactive OAuth — which the
+# autonomous tmux-spawned agent can't complete because there's no human
+# in front of that pane. So we do OAuth ONCE HERE, in the foreground,
+# before the backend starts.
+NEEDS_CLAUDE_AUTH=0
+if command -v claude >/dev/null 2>&1; then
+  # Heuristic: ~/.claude/ either doesn't exist or is empty → never logged in.
+  if [ ! -d "$HOME/.claude" ] || [ -z "$(ls -A "$HOME/.claude" 2>/dev/null)" ]; then
+    NEEDS_CLAUDE_AUTH=1
+  fi
+fi
+if [ "$NEEDS_CLAUDE_AUTH" -eq 1 ]; then
+  echo
+  bold "┌──────────────────────────────────────────────────────────────┐"
+  bold "│  One-time Claude Code authentication                          │"
+  bold "└──────────────────────────────────────────────────────────────┘"
+  echo
+  echo "  Claude Code needs to authenticate ONCE on this node. We're"
+  echo "  launching it interactively now. You'll see three things:"
+  echo
+  echo "    1. \"Bypass Permissions\" consent  →  press  2  then  Enter"
+  echo "    2. An OAuth URL  →  open it in your browser, sign in to"
+  echo "       Anthropic, copy the code it shows, paste it back here."
+  echo "    3. The Claude REPL ('How can I help…')  →  type  /exit"
+  echo
+  echo "  After this, the autoresearcher agent reuses these credentials"
+  echo "  automatically — no OAuth prompt during onboarding or restarts."
+  echo
+  if [ "$YES" -eq 1 ]; then
+    warn "--yes was passed; skipping interactive auth."
+    warn "AFTER setup completes, run:  IS_SANDBOX=1 claude --dangerously-skip-permissions"
+    warn "and finish OAuth before using the dashboard."
+  else
+    read -r -p "  Press Enter to launch Claude Code (Ctrl-C to skip)…" _ || true
+    # Run claude in the foreground. The user clicks through consent +
+    # OAuth + types /exit. IS_SANDBOX=1 lets root use the
+    # --dangerously-skip-permissions flag in containers (the autoresearcher
+    # agent does the same dance, so set it here to mirror the runtime env).
+    IS_SANDBOX=1 claude --dangerously-skip-permissions || true
+    echo
+    if [ -d "$HOME/.claude" ] && [ -n "$(ls -A "$HOME/.claude" 2>/dev/null)" ]; then
+      ok "Claude Code authenticated — credentials persisted to ~/.claude/"
+    else
+      warn "Claude Code may not have completed authentication."
+      warn "If the dashboard shows an OAuth prompt later, run:"
+      warn "    IS_SANDBOX=1 claude --dangerously-skip-permissions"
+      warn "and finish the flow, then restart the agent from the dashboard."
+    fi
+  fi
+fi
+
+# ── 4d. cloudflared (for the public URL) ────────────────────────────────
 if [ "$NO_TUNNEL" -eq 0 ] && ! command -v cloudflared >/dev/null 2>&1; then
   step "installing cloudflared (gives you a public https URL)…"
   ARCH=$(uname -m)

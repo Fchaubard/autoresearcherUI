@@ -2849,9 +2849,13 @@ function showAgentBootOverlay() {
         'retry agent</button>' +
       '</div>' +
       '<div class="boot-help">' +
-        'Alternative: SSH into the pod and run <code>claude</code> once ' +
-        'manually to finish OAuth. Subsequent agent restarts will reuse ' +
-        'those credentials and skip this prompt.' +
+        'Alternative (recommended): SSH into the pod, kill this session ' +
+        'with <code>tmux kill-session -t agent</code>, run ' +
+        '<code>IS_SANDBOX=1 claude --dangerously-skip-permissions</code> ' +
+        'manually, finish OAuth in your browser + paste the code back, ' +
+        'type <code>/exit</code> to close, then click <b>Skip &amp; retry ' +
+        'agent</b> above. Subsequent restarts on this node will reuse the ' +
+        'persisted credentials in <code>~/.claude/</code> and skip OAuth.' +
       '</div>';
     const copyBtn = document.getElementById('oauth-copy');
     if (copyBtn && url) copyBtn.onclick = () => {

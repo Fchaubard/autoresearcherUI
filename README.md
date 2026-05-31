@@ -28,9 +28,20 @@ bash dev.sh                # or:  python -m backend.main
 # → http://localhost:8000
 ```
 
-The full installer is one script — system deps, `uv`, Python deps, the backend
-in tmux, and a cloudflared quick-tunnel so the dashboard is reachable from
-anywhere on earth. Re-running `setup.sh` is safe; it restarts everything.
+The full installer is one script — system deps, Node.js, Claude Code, `uv`,
+Python deps, **a one-time interactive Claude Code OAuth login** (so the
+autonomous agent never blocks on it later), the backend in tmux, and a
+cloudflared quick-tunnel so the dashboard is reachable from anywhere on
+earth. Re-running `setup.sh` is safe; if `~/.claude/` already has credentials
+the OAuth step is skipped. Re-runs restart everything else.
+
+**About the one-time Claude OAuth in setup**: when `~/.claude/` is empty,
+setup.sh pauses and runs `claude --dangerously-skip-permissions` interactively
+so you can complete OAuth in your browser ONCE while you're still at the
+keyboard. After that, the autonomous research agent reuses the persisted
+credentials and the dashboard never has to show an OAuth prompt mid-onboarding.
+Pass `--yes` to skip this step (you'll have to run `claude` manually before
+using the dashboard).
 
 ## What you get
 
