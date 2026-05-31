@@ -272,6 +272,12 @@ class RealAgent:
         # with `tee` does both.
         from . import pane_stream
         pane_stream.enable(self.session, mirror_to=log)
+        # If the frontend's xterm has reported dimensions for this
+        # session in a prior life, restore them now — otherwise the
+        # rail will see Claude rendering at 120x40 (our spawn default)
+        # until the user happens to drag the resize handle, which is
+        # bad UX after `/api/agent/restart`.
+        pane_stream.apply_remembered_size(self.session)
         # Once Claude Code has booted, hand it the research brief.
         #
         # Claude Code shows a one-time "Bypass Permissions mode" consent

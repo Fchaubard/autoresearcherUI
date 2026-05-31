@@ -305,6 +305,8 @@ def start(proposal_id: str = "") -> dict:
         # persistent log). See backend/app/pane_stream.py.
         from . import pane_stream
         pane_stream.enable(SESSION, mirror_to=str(folder / "author.log"))
+        # Restore any cached xterm dimensions (see RealAgent.start).
+        pane_stream.apply_remembered_size(SESSION)
         # Once Claude Code has booted, hand it the brief. Same dance as
         # agent.py: first auto-accept the (possible) one-time Bypass
         # Permissions consent by typing the literal "2" (the numeric

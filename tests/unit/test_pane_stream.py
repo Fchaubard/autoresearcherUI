@@ -159,3 +159,46 @@ def test_read_range_handles_negative_offset(ps):
     chunk, off, size = ps.read_range(sess, -5)
     assert chunk == b"hello"
     assert off == 5
+
+
+def test_remember_and_get_last_size(ps):
+    sess = "dim_test"
+    assert ps.get_last_size(sess) is None
+    ps.remember_size(sess, 110, 36)
+    assert ps.get_last_size(sess) == (110, 36)
+    # Update overwrites
+    ps.remember_size(sess, 200, 50)
+    assert ps.get_last_size(sess) == (200, 50)
+
+
+def test_apply_remembered_size_no_cache_is_noop(ps, monkeypatch):
+    """If the frontend has never reported dimensions, apply_remembered_size
+    should silently return False — RealAgent.start() can call it
+    unconditionally on every spawn."""
+    import subprocess as _sp
+    calls = []
+    monkeypatch.setattr(_sp, "run", lambda *a, **kw: calls.append(a) or
+                        type("R", (), {"returncode": 0})())
+    out = ps.apply_remembered_size("never_seen_session")
+    assert out is False
+    assert calls == []                  # no tmux call issued
+
+
+def test_apply_remembered_size_issues_tmux_resize(ps, monkeypatch):
+    """When we have cached dimensions, apply_remembered_size must
+    call tmux resize-window with those dimensions. This is what makes
+    agent restart restore the rail-matched pane size, instead of
+    falling back to 120x40."""
+    sess = "restore_test"
+    ps.remember_size(sess, 130, 42)
+    import subprocess as _sp
+    calls = []
+    monkeypatch.setattr(_sp, "run", lambda *a, **kw: calls.append(list(a[0]))
+                        or type("R", (), {"returncode": 0})())
+    out = ps.apply_remembered_size(sess)
+    assert out is True
+    assert len(calls) == 1
+    cmd = " ".join(calls[0])
+    assert "resize-window" in cmd
+    assert "-x 130" in cmd and "-y 42" in cmd
+    assert f"-t {sess}" in cmd

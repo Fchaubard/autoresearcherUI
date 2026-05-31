@@ -723,6 +723,13 @@ async def agent_resize(request: Request):
     # Ctrl-L → Claude redraws at the new dimensions.
     subprocess.run(["tmux", "send-keys", "-t", sess, "C-l"],
                    capture_output=True)
+    # Cache for restart restoration — when the agent is respawned via
+    # /api/agent/restart, RealAgent.start() will re-apply these so the
+    # new pane comes up at the rail's actual width (instead of the
+    # 120x40 default that produces garbled wrapping in any narrower
+    # rail).
+    from . import pane_stream
+    pane_stream.remember_size(sess, cols, rows)
     return {"ok": True, "cols": cols, "rows": rows,
             "stderr": (r.stderr or "")[:200]}
 

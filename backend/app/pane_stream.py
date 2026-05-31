@@ -112,3 +112,40 @@ def size(session: str) -> int:
         return tf.stat().st_size
     except OSError:
         return 0
+
+
+# Per-session last-known xterm dimensions. The frontend POSTs these
+# to /api/agent/resize after FitAddon.fit(); we cache so that when
+# the agent process is restarted (tmux respawned), we can re-apply
+# the same size — otherwise the new tmux defaults to 120x40 and
+# Claude renders too wide / too narrow for the rail until the user
+# physically drags the resize handle.
+_last_size: dict = {}
+
+
+def remember_size(session: str, cols: int, rows: int) -> None:
+    """Cache the latest xterm dimensions for a session. Called from
+    /api/agent/resize."""
+    _last_size[session] = (int(cols), int(rows))
+
+
+def get_last_size(session: str) -> tuple[int, int] | None:
+    """Return cached dimensions, or None if the frontend has never
+    reported them."""
+    return _last_size.get(session)
+
+
+def apply_remembered_size(session: str) -> bool:
+    """If we have a cached size for this session, immediately call
+    tmux resize-window to match. Returns True if a resize was issued.
+    Used by RealAgent.start() to restore the xterm-matched size
+    after re-spawning the agent's tmux session."""
+    cur = _last_size.get(session)
+    if not cur:
+        return False
+    cols, rows = cur
+    subprocess.run(
+        ["tmux", "resize-window", "-t", session, "-x", str(cols),
+         "-y", str(rows), "-A"],
+        capture_output=True)
+    return True

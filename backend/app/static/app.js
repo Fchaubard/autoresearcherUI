@@ -1426,7 +1426,16 @@ function createRailTerm(session) {
       const d = await api(
         '/agent/raw?session=' + encodeURIComponent(session)
         + '&offset=' + _offset);
-      if (d.rotated) { t.reset(); _offset = 0; }
+      if (d.rotated) {
+        t.reset();
+        _offset = 0;
+        // Agent was restarted server-side. Our last dimensions cache
+        // is invalidated — force a re-push so the fresh tmux pane
+        // gets sized to our actual rail width instead of the 120x40
+        // spawn default.
+        _lastSize = '';
+        if (t.cols && t.rows) pushSize(t.cols, t.rows);
+      }
       const bytes = b64ToBytes(d.chunk);
       if (bytes.length) {
         t.write(bytes);
