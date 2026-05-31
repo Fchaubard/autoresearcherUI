@@ -1007,6 +1007,77 @@ async def put_settings(request: Request):
     return {"status": "ok"}
 
 
+@router.get("/diag")
+def diag():
+    """Self-diagnostic for deployment debugging. Tells you in one call
+    whether the running code has the recent UI changes, whether Claude
+    Code's settings.json is pre-seeded, and what the agent's tmux is
+    showing right now. Open in a browser or curl — both work.
+
+    Public (auth gate excluded) so you can hit it BEFORE figuring out
+    the passcode."""
+    import os as _os
+    out: dict = {}
+    # 1. git sha of what's running on this node
+    try:
+        r = subprocess.run(["git", "rev-parse", "HEAD"],
+                           cwd=str(ROOT), capture_output=True, text=True,
+                           timeout=4)
+        out["git_sha"] = r.stdout.strip()[:12] if r.returncode == 0 else None
+        r = subprocess.run(["git", "log", "-1", "--format=%s"],
+                           cwd=str(ROOT), capture_output=True, text=True,
+                           timeout=4)
+        out["git_subject"] = r.stdout.strip()[:120] if r.returncode == 0 else ""
+    except Exception as e:                              # noqa: BLE001
+        out["git_error"] = str(e)
+    # 2. does the served app.js have the new xterm wiring?
+    try:
+        appjs = (ROOT / "backend" / "app" / "static" / "app.js").read_text()
+        out["app_js_size"] = len(appjs)
+        out["has_xterm"] = "createRailTerm" in appjs
+        out["has_xterm_apiwiring"] = "/agent/keys" in appjs
+        idx = (ROOT / "backend" / "app" / "static" / "index.html").read_text()
+        out["index_has_xterm_cdn"] = "xterm@" in idx
+        out["index_cache_bust"] = (idx.split("app.js?v=", 1)[1].split('"', 1)[0]
+                                    if "app.js?v=" in idx else None)
+    except Exception as e:                              # noqa: BLE001
+        out["static_error"] = str(e)
+    # 3. Claude config pre-seeded?
+    claude_files = {}
+    for p in (_os.path.expanduser("~/.claude.json"),
+              _os.path.expanduser("~/.claude/settings.json")):
+        try:
+            if _os.path.exists(p):
+                with open(p) as f:
+                    txt = f.read()
+                claude_files[p] = {
+                    "size": len(txt),
+                    "has_apiKeyHelper": "apiKeyHelper" in txt,
+                    "has_bypass_accepted": (
+                        "bypassPermissionsModeAccepted" in txt
+                        or "dangerouslySkipPermissionsModeAccepted" in txt),
+                }
+            else:
+                claude_files[p] = {"missing": True}
+        except Exception as e:                          # noqa: BLE001
+            claude_files[p] = {"error": str(e)}
+    out["claude_config"] = claude_files
+    # 4. agent tmux state — captured with -J so wrapped URLs are intact
+    try:
+        r = subprocess.run(
+            ["tmux", "capture-pane", "-t", "agent", "-p", "-J", "-S", "-40"],
+            capture_output=True, text=True, timeout=4)
+        out["agent_tmux_alive"] = (r.returncode == 0)
+        out["agent_tmux_tail"] = (r.stdout or "")[-2400:]
+    except Exception as e:                              # noqa: BLE001
+        out["agent_tmux_error"] = str(e)
+    # 5. anthropic key visible to the backend?
+    out["env_has_anthropic_key"] = bool(_os.environ.get("ANTHROPIC_API_KEY"))
+    out["env_has_gemini_key"]    = bool(_os.environ.get("GEMINI_API_KEY"))
+    out["env_has_openai_key"]    = bool(_os.environ.get("OPENAI_API_KEY"))
+    return out
+
+
 @router.get("/passcode/check")
 def passcode_check(request: Request):
     """The login screen polls this to know whether a passcode is set
