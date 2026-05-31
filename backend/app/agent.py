@@ -81,54 +81,79 @@ class RealAgent:
 
     @staticmethod
     def _ensure_claude_settings() -> None:
-        """Pre-write ~/.claude/settings.json so Claude Code authenticates
-        with our API key via the documented ``apiKeyHelper`` mechanism
-        and NEVER falls into its interactive OAuth flow.
+        """Pre-write Claude Code's config files so:
 
-        When Claude Code starts it reads ``~/.claude/settings.json``. If
-        ``apiKeyHelper`` is set, Claude runs that shell command and uses
-        the command's stdout as the Anthropic API key for every request.
-        We point it at ``printenv ANTHROPIC_API_KEY`` so the key only
-        lives in the process env (where our spawn already puts it), not
-        in any file on disk. That means:
-          - no OAuth URL, no 'Paste code here', no state-parameter dance
-          - no need for a foreground 'claude' login during setup.sh
-          - rotating the key is just a Settings update + agent restart
-          - the file is safe to ship in container images / dotfiles
+          1. Claude authenticates via our ``apiKeyHelper`` (= read the
+             ANTHROPIC_API_KEY env var) instead of falling into OAuth.
+          2. The one-time "Bypass Permissions" consent screen is
+             pre-accepted, so a fresh node never gets stuck on
+             "1. No, exit / 2. Yes, I accept".
+          3. The "Welcome to Claude Code" onboarding wizard is skipped.
 
-        Idempotent: if a settings.json already exists with apiKeyHelper
-        configured, we leave it alone.
+        Claude Code 1.x splits state across two locations depending on
+        version. We write BOTH so the relevant one always exists:
+          - ~/.claude.json          (single-file user config, newer)
+          - ~/.claude/settings.json (folder-style config, older)
+
+        We merge into existing JSON if present rather than clobber it,
+        so a user who's already done OAuth keeps their credentials.
         """
         import json as _json
-        d = os.path.expanduser("~/.claude")
-        try:
-            os.makedirs(d, exist_ok=True)
-        except OSError as e:
-            print(f"[agent] could not create {d}: {e}", flush=True)
-            return
-        path = os.path.join(d, "settings.json")
-        cur: dict = {}
-        if os.path.exists(path):
-            try:
-                with open(path) as f:
-                    cur = _json.load(f) or {}
-                if not isinstance(cur, dict):
+        # The fields we set. apiKeyHelper is the documented one;
+        # the consent flags are best-effort across Claude Code versions
+        # (different versions read different keys). Unknown keys are
+        # harmless — Claude Code ignores them. If even one of these
+        # matches the current version, the consent screen is gone.
+        FORCE = {
+            "apiKeyHelper": "printenv ANTHROPIC_API_KEY",
+            "hasCompletedOnboarding": True,
+            "bypassPermissionsModeAccepted": True,
+            "dangerouslySkipPermissionsModeAccepted": True,
+            "hasAcceptedDangerouslySkipPermissions": True,
+            "permissions": {
+                "bypassModeAccepted": True,
+                "dangerouslySkipPermissionsAccepted": True,
+            },
+        }
+
+        def _merge_into(path: str) -> None:
+            cur: dict = {}
+            if os.path.exists(path):
+                try:
+                    with open(path) as f:
+                        cur = _json.load(f) or {}
+                    if not isinstance(cur, dict):
+                        cur = {}
+                except (OSError, ValueError):
                     cur = {}
-            except (OSError, ValueError):
-                cur = {}
-        if cur.get("apiKeyHelper"):
-            return                       # respect existing config
-        cur["apiKeyHelper"] = "printenv ANTHROPIC_API_KEY"
-        try:
-            tmp = path + ".tmp"
-            with open(tmp, "w") as f:
-                _json.dump(cur, f, indent=2)
-            os.replace(tmp, path)
-            print(f"[agent] wrote apiKeyHelper into {path} — Claude Code "
-                  "will use ANTHROPIC_API_KEY directly, no OAuth needed",
-                  flush=True)
-        except OSError as e:
-            print(f"[agent] could not write {path}: {e}", flush=True)
+            # Only overwrite each key if the user hasn't set their own
+            # value (idempotent on re-runs); but DO set the consent
+            # flags every time since they're booleans with no user
+            # preference to preserve.
+            for k, v in FORCE.items():
+                if k == "apiKeyHelper" and cur.get("apiKeyHelper"):
+                    continue
+                if k == "permissions" and isinstance(cur.get(k), dict):
+                    cur[k].update(v)
+                else:
+                    cur[k] = v
+            try:
+                d = os.path.dirname(path)
+                if d:
+                    os.makedirs(d, exist_ok=True)
+                tmp = path + ".tmp"
+                with open(tmp, "w") as f:
+                    _json.dump(cur, f, indent=2)
+                os.replace(tmp, path)
+            except OSError as e:
+                print(f"[agent] could not write {path}: {e}", flush=True)
+
+        home = os.path.expanduser("~")
+        _merge_into(os.path.join(home, ".claude.json"))
+        _merge_into(os.path.join(home, ".claude", "settings.json"))
+        print("[agent] pre-accepted Claude Code consent + apiKeyHelper "
+              "set — no OAuth or bypass-permissions prompt should appear",
+              flush=True)
 
     def start(self) -> str:
         """Prepare the workspace and launch the agent in a tmux session.
@@ -197,18 +222,52 @@ class RealAgent:
             msg = ("Read the file _setup_prompt.txt in this directory and "
                    "carry out the research it describes. Do not stop.")
             sess = shlex.quote(self.session)
-            script = (
-                # 1) wait for the splash + consent prompt to draw
-                "sleep 6 && "
-                # 2) accept via numeric shortcut ("2" = "Yes, I accept")
-                f"tmux send-keys -t {sess} '2' && sleep 0.5 && "
-                f"tmux send-keys -t {sess} Enter && "
-                # 3) wait for the REPL to actually be ready
-                "sleep 10 && "
-                # 4) hand it the research brief
-                f"tmux send-keys -t {sess} -l {shlex.quote(msg)} && "
-                "sleep 1 && "
-                f"tmux send-keys -t {sess} Enter")
+            # POLL-based auto-accept. Old code used a fixed `sleep 6`
+            # before sending "2"+Enter — but on a slow fresh node Claude
+            # Code can take 10–15 s to even draw the consent screen, so
+            # the keystroke fired before the prompt existed and the user
+            # was left staring at "1. No, exit / 2. Yes, I accept".
+            # Instead: every 1 s, capture the pane, look for the consent
+            # text; when it appears, press 2 + Enter. Then wait for the
+            # REPL to be ready (input prompt or welcome banner) and hand
+            # over the research brief. Hard cap at 90 s to never loop
+            # forever on a real failure.
+            script = f"""set -u
+SESS={sess}
+BRIEF={shlex.quote(msg)}
+sent_consent=0
+sent_brief=0
+for i in $(seq 1 90); do
+  sleep 1
+  PANE=$(tmux capture-pane -t "$SESS" -p -J -S -300 2>/dev/null || true)
+  if [ "$sent_consent" -eq 0 ]; then
+    if printf "%s" "$PANE" | grep -qiE 'Yes, *I *accept|Bypass *Permissions' \\
+       && printf "%s" "$PANE" | grep -qiE 'No, *exit'; then
+      tmux send-keys -t "$SESS" '2' >/dev/null 2>&1
+      sleep 0.4
+      tmux send-keys -t "$SESS" Enter >/dev/null 2>&1
+      sent_consent=1
+      sleep 2
+      continue
+    fi
+  fi
+  if [ "$sent_brief" -eq 0 ]; then
+    if printf "%s" "$PANE" | grep -qE 'How can I help|Welcome to Claude|│ +>|❯ *$|^ *> *$'; then
+      sleep 1
+      tmux send-keys -t "$SESS" -l "$BRIEF" >/dev/null 2>&1
+      sleep 0.5
+      tmux send-keys -t "$SESS" Enter >/dev/null 2>&1
+      sent_brief=1
+      break
+    fi
+  fi
+done
+if [ "$sent_brief" -eq 0 ]; then
+  tmux send-keys -t "$SESS" -l "$BRIEF" >/dev/null 2>&1
+  sleep 0.5
+  tmux send-keys -t "$SESS" Enter >/dev/null 2>&1
+fi
+"""
             subprocess.Popen(["sh", "-c", script])
         return self.session
 
