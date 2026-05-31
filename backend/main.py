@@ -32,6 +32,15 @@ async def lifespan(app: FastAPI):
         _api._apply_tokens_to_env()
     except Exception as e:                              # noqa: BLE001
         print(f"[main] apply_tokens_to_env failed: {e}", flush=True)
+    # Pre-write Claude Code's settings.json with apiKeyHelper so Claude
+    # uses ANTHROPIC_API_KEY directly and never falls into OAuth. Doing
+    # this at startup (not just at agent spawn) means even a manual
+    # `claude` invocation from SSH picks up the API-key auth path.
+    try:
+        from .app.agent import RealAgent
+        RealAgent._ensure_claude_settings()
+    except Exception as e:                              # noqa: BLE001
+        print(f"[main] ensure_claude_settings failed: {e}", flush=True)
     notify.start_scheduler()          # periodic email digests (cadence-driven)
     monitor.start()                   # gpu telemetry + run reconciliation
     pi.start()                        # hourly PI oversight cycle

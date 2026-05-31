@@ -279,6 +279,14 @@ def start(proposal_id: str = "") -> dict:
         inner = cmd_override
     else:
         inner = "claude --dangerously-skip-permissions"
+        # Make sure Claude uses the API key (set in env) instead of
+        # falling into its OAuth flow. See agent.RealAgent._ensure_claude_settings
+        # for the full explanation.
+        try:
+            from .agent import RealAgent
+            RealAgent._ensure_claude_settings()
+        except Exception as e:                              # noqa: BLE001
+            print(f"[author] apiKeyHelper setup failed: {e}", flush=True)
     full = (f"cd {shlex.quote(str(folder))} && "
             f"{env_prefix}{inner}")
     try:

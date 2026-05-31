@@ -79,6 +79,57 @@ class RealAgent:
         self.setup_prompt = setup_prompt
         self.session = session
 
+    @staticmethod
+    def _ensure_claude_settings() -> None:
+        """Pre-write ~/.claude/settings.json so Claude Code authenticates
+        with our API key via the documented ``apiKeyHelper`` mechanism
+        and NEVER falls into its interactive OAuth flow.
+
+        When Claude Code starts it reads ``~/.claude/settings.json``. If
+        ``apiKeyHelper`` is set, Claude runs that shell command and uses
+        the command's stdout as the Anthropic API key for every request.
+        We point it at ``printenv ANTHROPIC_API_KEY`` so the key only
+        lives in the process env (where our spawn already puts it), not
+        in any file on disk. That means:
+          - no OAuth URL, no 'Paste code here', no state-parameter dance
+          - no need for a foreground 'claude' login during setup.sh
+          - rotating the key is just a Settings update + agent restart
+          - the file is safe to ship in container images / dotfiles
+
+        Idempotent: if a settings.json already exists with apiKeyHelper
+        configured, we leave it alone.
+        """
+        import json as _json
+        d = os.path.expanduser("~/.claude")
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError as e:
+            print(f"[agent] could not create {d}: {e}", flush=True)
+            return
+        path = os.path.join(d, "settings.json")
+        cur: dict = {}
+        if os.path.exists(path):
+            try:
+                with open(path) as f:
+                    cur = _json.load(f) or {}
+                if not isinstance(cur, dict):
+                    cur = {}
+            except (OSError, ValueError):
+                cur = {}
+        if cur.get("apiKeyHelper"):
+            return                       # respect existing config
+        cur["apiKeyHelper"] = "printenv ANTHROPIC_API_KEY"
+        try:
+            tmp = path + ".tmp"
+            with open(tmp, "w") as f:
+                _json.dump(cur, f, indent=2)
+            os.replace(tmp, path)
+            print(f"[agent] wrote apiKeyHelper into {path} — Claude Code "
+                  "will use ANTHROPIC_API_KEY directly, no OAuth needed",
+                  flush=True)
+        except OSError as e:
+            print(f"[agent] could not write {path}: {e}", flush=True)
+
     def start(self) -> str:
         """Prepare the workspace and launch the agent in a tmux session.
 
@@ -99,6 +150,15 @@ class RealAgent:
         }
         if self.anthropic_key:
             env["ANTHROPIC_API_KEY"] = self.anthropic_key
+            # Tell Claude Code to use the API key directly instead of
+            # falling back to its OAuth flow. Claude Code reads
+            # ~/.claude/settings.json on startup; when `apiKeyHelper` is
+            # set, Claude runs that shell command and uses its stdout as
+            # the API key for every request. That kills the OAuth path
+            # entirely (no browser, no "Paste code here", no state
+            # parameter dance) and means a fresh node only needs the
+            # onboarding-saved Claude token to authenticate.
+            self._ensure_claude_settings()
         exports = " ".join(f"{k}={shlex.quote(v)}" for k, v in env.items())
         log = os.path.join(self.workspace, "agent.log")
 
