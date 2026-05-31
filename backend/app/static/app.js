@@ -2004,9 +2004,26 @@ function renderSummary(c) {
   scroll.append(wrap);
 
   const compact = el('details', 'feed-compact');
+  // EXPANDED by default — users want to see what's happening without
+  // having to click first. They can collapse it any time by clicking
+  // the "Activity feed" header; their choice persists in localStorage
+  // so the dashboard remembers it across reloads.
+  const _feedKey = 'arui.feed.collapsed';
+  const _wasCollapsed =
+    (() => { try { return localStorage.getItem(_feedKey) === '1'; }
+             catch (e) { return false; } })();
+  if (!_wasCollapsed) compact.setAttribute('open', '');
   compact.innerHTML = '<summary>Activity feed</summary>';
   const feed = el('div', 'feed'); feed.id = 'feed';
   compact.append(feed);
+  // Persist collapse/expand choice. <details> fires 'toggle' on every
+  // open/close — write the new state to localStorage so a reload picks
+  // up the user's preference.
+  compact.addEventListener('toggle', () => {
+    try {
+      localStorage.setItem(_feedKey, compact.open ? '0' : '1');
+    } catch (e) { /* private mode — best-effort only */ }
+  });
   scroll.append(compact);
 
   // floating 'jump to latest' button (only when user has scrolled up)
