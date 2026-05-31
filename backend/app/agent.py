@@ -371,9 +371,16 @@ for i in $(seq 1 90); do
     fi
   fi
 
-  # REPL ready — type the research brief in.
+  # REPL ready — type the research brief in. Detection is broad
+  # because Claude Code reformats the welcome screen across versions:
+  #   - 2.0.x said "How can I help" + a bare "│ >" prompt
+  #   - 2.1.158+ says "Welcome back!" + a "❯ Try ..." placeholder line
+  # The "⏵⏵ bypass permissions on" status line appears only AFTER all
+  # consent dialogs have cleared and the REPL is fully ready, so it
+  # is the single most reliable marker.
   if [ "$sent_brief" -eq 0 ]; then
-    if printf "%s" "$PANE" | grep -qE 'How can I help|Welcome to Claude|│ +>|❯ *$|^ *> *$'; then
+    if printf "%s" "$PANE" | grep -qE \
+         "How can I help|Welcome to Claude|Welcome back|bypass permissions on|^❯ |│ +> |❯ *Try" ; then
       sleep 1
       tmux send-keys -t "$SESS" -l "$BRIEF" >/dev/null 2>&1
       sleep 0.5

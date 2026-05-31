@@ -126,6 +126,50 @@ def test_ensure_claude_settings_no_key_skips_approval(tmp_path, monkeypatch):
     assert "apiKeyHelper" not in cfg
 
 
+def test_repl_detection_matches_old_and_new_welcome_screens():
+    """The REPL-detection regex in agent.py must match Claude Code
+    welcome screens across versions, OR the brief never gets typed
+    and the agent sits idle waiting for the user.
+
+    Captured live from real Claude Code panes:
+      - 2.0.x: 'How can I help today?' + a bare '│ > ' input row
+      - 2.1.158+: 'Welcome back!' header + placeholder '❯ Try "..."'
+        + status row '⏵⏵ bypass permissions on (shift+tab to cycle)'
+    """
+    import re
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[2]
+           / "backend" / "app" / "agent.py").read_text()
+    # Extract the REPL-detect regex (the one used in the poll script's
+    # brief-send branch). The grep -qE pattern lives on one line.
+    m = re.search(r'grep -qE \\?\n?\s*"([^"]+(?:How can I help|Welcome to '
+                  r'Claude|Welcome back|bypass permissions)[^"]+)"',
+                  src, re.MULTILINE)
+    assert m, "REPL-detect regex not found in agent.py poll script"
+    pattern = m.group(1)
+    # Build an ERE-compatible regex Python can apply (Python's re is
+    # close enough to grep -E for these patterns).
+    py_pat = re.compile(pattern)
+
+    pane_211 = (
+        "╭─── Claude Code v2.1.159 ───╮\n"
+        "│   Welcome back!            │\n"
+        "│   Opus 4.8                 │\n"
+        "╰────────────────────────────╯\n"
+        "❯ Try \"create a util logging.py that...\"\n"
+        "  ⏵⏵ bypass permissions on (shift+tab to cycle)\n"
+    )
+    pane_20 = (
+        "Claude Code v2.0.4\n"
+        "How can I help today?\n"
+        "│ > \n"
+    )
+    assert py_pat.search(pane_211), \
+        f"REPL regex does NOT match Claude 2.1.x pane: {pattern!r}"
+    assert py_pat.search(pane_20), \
+        f"REPL regex does NOT match Claude 2.0.x pane: {pattern!r}"
+
+
 def test_consent_script_handles_all_three_dialogs():
     """The poll script embedded in RealAgent.start() must contain
     detection branches for ALL THREE Claude Code consent dialogs:
