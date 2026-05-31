@@ -26,8 +26,6 @@ for a in "$@"; do
   case "$a" in
     --yes) YES=1 ;;
     --no-tunnel) NO_TUNNEL=1 ;;
-    --force-claude-auth) ;;   # handled later
-    --skip-claude-auth) ;;    # handled later
   esac
 done
 
@@ -113,115 +111,7 @@ if ! command -v claude >/dev/null 2>&1; then
   fi
 fi
 
-# ── 4c. one-time Claude Code authentication ─────────────────────────────
-# Modern Claude Code (`@anthropic-ai/claude-code` npm package) prefers
-# its persisted OAuth credentials over ANTHROPIC_API_KEY when running
-# --dangerously-skip-permissions. On a fresh node with no prior login,
-# it falls back to interactive OAuth — which the autonomous tmux-spawned
-# agent CANNOT complete because there's no human in front of that pane.
-# So we do OAuth ONCE HERE, in the foreground, BEFORE we install
-# cloudflared / start the backend / open the tunnel.
-#
-# Detection has to be careful: a previous FAILED OAuth attempt leaves
-# bookkeeping files in ~/.claude/ (config, projects, settings.json) but
-# NO credentials file — and the older check "is the dir empty?" wrongly
-# skipped the auth step in that case. So we look for known credential
-# filenames specifically, and we ALSO honour an explicit override flag
-# in case the detection is wrong for some Claude Code version.
-
-# Allow the user to force or skip claude auth on re-runs.
-FORCE_CLAUDE_AUTH=0
-SKIP_CLAUDE_AUTH=0
-for a in "$@"; do
-  case "$a" in
-    --force-claude-auth) FORCE_CLAUDE_AUTH=1 ;;
-    --skip-claude-auth)  SKIP_CLAUDE_AUTH=1 ;;
-  esac
-done
-
-claude_has_creds() {
-  # Return 0 (true) iff a non-empty credential file exists in any
-  # location Claude Code is known to use across versions.
-  for f in \
-      "$HOME/.claude/.credentials.json" \
-      "$HOME/.claude/credentials.json" \
-      "$HOME/.claude/auth.json" \
-      "$HOME/.claude.json" \
-      "$HOME/.config/claude/credentials.json" \
-      "$HOME/.config/claude/.credentials.json"; do
-    [ -s "$f" ] && return 0
-  done
-  return 1
-}
-
-NEEDS_CLAUDE_AUTH=0
-if command -v claude >/dev/null 2>&1; then
-  if [ "$FORCE_CLAUDE_AUTH" -eq 1 ]; then
-    NEEDS_CLAUDE_AUTH=1
-  elif [ "$SKIP_CLAUDE_AUTH" -eq 1 ]; then
-    NEEDS_CLAUDE_AUTH=0
-  elif claude_has_creds; then
-    ok "Claude Code already authenticated (credentials in ~/.claude)"
-  else
-    NEEDS_CLAUDE_AUTH=1
-  fi
-fi
-
-if [ "$NEEDS_CLAUDE_AUTH" -eq 1 ]; then
-  echo
-  bold "┌──────────────────────────────────────────────────────────────┐"
-  bold "│  One-time Claude Code authentication (required)              │"
-  bold "└──────────────────────────────────────────────────────────────┘"
-  echo
-  echo "  Claude Code needs to authenticate ONCE on this node BEFORE the"
-  echo "  backend can start the autonomous research agent. We're launching"
-  echo "  Claude interactively now. You will see three things:"
-  echo
-  echo "    1. \"Bypass Permissions\" consent  →  press  2  then  Enter"
-  echo "    2. An OAuth URL  →  open it in your browser, sign in to"
-  echo "       Anthropic, copy the code it shows, paste it back here."
-  echo "    3. The Claude REPL ('How can I help…')  →  type:  /exit"
-  echo
-  echo "  After this, the autoresearcher agent reuses these credentials"
-  echo "  automatically — no OAuth prompt during onboarding or restarts."
-  echo
-  echo "  (Re-run setup.sh with --force-claude-auth to re-do this later,"
-  echo "  or --skip-claude-auth to suppress this step entirely.)"
-  echo
-  if [ "$YES" -eq 1 ]; then
-    warn "--yes was passed; SKIPPING interactive auth."
-    warn "Before using the dashboard, SSH back in and run:"
-    warn "    IS_SANDBOX=1 claude --dangerously-skip-permissions"
-    warn "and finish the OAuth flow."
-  else
-    read -r -p "  Press Enter to launch Claude Code (Ctrl-C to skip)…" _ || true
-    # Foreground claude — user clicks through consent + OAuth + /exit.
-    # IS_SANDBOX=1 lets root use --dangerously-skip-permissions in
-    # containers (the autoresearcher agent sets the same flag, so we
-    # mirror that env here for max parity).
-    IS_SANDBOX=1 claude --dangerously-skip-permissions || true
-    echo
-    if claude_has_creds; then
-      ok "Claude Code authenticated — credentials persisted to ~/.claude/"
-    else
-      warn "Claude Code may NOT have completed authentication."
-      warn "Verify with:  ls -la ~/.claude"
-      warn "If the dashboard shows an OAuth prompt later, SSH back in"
-      warn "and run:    IS_SANDBOX=1 claude --dangerously-skip-permissions"
-      warn "to finish the flow, then restart the agent from the dashboard."
-      if [ "$FORCE_CLAUDE_AUTH" -eq 0 ]; then
-        read -r -p "  Continue with setup anyway? [y/N] " ans || true
-        case "$ans" in
-          y|Y|yes|YES) ;;
-          *) echo "  Aborting. Re-run setup.sh once auth is sorted."
-             exit 1 ;;
-        esac
-      fi
-    fi
-  fi
-fi
-
-# ── 4d. cloudflared (for the public URL) ────────────────────────────────
+# ── 4c. cloudflared (for the public URL) ────────────────────────────────
 if [ "$NO_TUNNEL" -eq 0 ] && ! command -v cloudflared >/dev/null 2>&1; then
   step "installing cloudflared (gives you a public https URL)…"
   ARCH=$(uname -m)
