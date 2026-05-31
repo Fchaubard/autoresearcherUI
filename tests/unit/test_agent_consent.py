@@ -35,19 +35,23 @@ def test_api_key_truncation_short_key_returned_as_is():
     assert RealAgent._api_key_truncation("short") == "short"
 
 
-def test_ensure_claude_settings_writes_apikey_helper_and_approval(tmp_path,
+def test_ensure_claude_settings_writes_consent_flags_and_approval(tmp_path,
                                                                    monkeypatch):
     """Calling _ensure_claude_settings(key) should populate both
-    ~/.claude.json and ~/.claude/settings.json with the apiKeyHelper,
-    consent flags, AND the customApiKeyResponses.approved truncation
-    so the "Use this API key?" prompt is skipped."""
+    ~/.claude.json and ~/.claude/settings.json with the consent flags
+    AND the customApiKeyResponses.approved truncation so the
+    "Use this API key?" prompt is skipped.
+
+    It must NOT write apiKeyHelper — Claude Code 2.1.159+ warns when
+    both apiKeyHelper and ANTHROPIC_API_KEY env are set."""
     monkeypatch.setenv("HOME", str(tmp_path))
     from backend.app.agent import RealAgent
     key = "sk-ant-api03-" + "Y" * 80 + "Vx9jKu6kGQw-kUHWKQAA"
     RealAgent._ensure_claude_settings(key)
     for rel in (".claude.json", ".claude/settings.json"):
         cfg = json.loads((tmp_path / rel).read_text())
-        assert cfg["apiKeyHelper"] == "printenv ANTHROPIC_API_KEY"
+        # NO apiKeyHelper — env-var path only, avoids the auth-conflict warning.
+        assert "apiKeyHelper" not in cfg
         assert cfg["bypassPermissionsModeAccepted"] is True
         assert cfg["hasTrustDialogAccepted"] is True
         # The "Use this API key?" dialog is skipped via this exact field.
@@ -55,6 +59,30 @@ def test_ensure_claude_settings_writes_apikey_helper_and_approval(tmp_path,
         assert isinstance(car["approved"], list)
         assert RealAgent._api_key_truncation(key) in car["approved"]
         assert car["rejected"] == []
+
+
+def test_ensure_claude_settings_scrubs_stale_apikeyhelper(tmp_path, monkeypatch):
+    """If a prior install wrote apiKeyHelper into ~/.claude.json,
+    _ensure_claude_settings must DELETE it on re-merge — otherwise
+    upgrading users would keep hitting the auth-conflict warning."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cfg_path = tmp_path / ".claude.json"
+    cfg_path.write_text(json.dumps({
+        "apiKeyHelper": "printenv ANTHROPIC_API_KEY",
+        "somethingElse": "preserved",
+    }))
+    (tmp_path / ".claude").mkdir(exist_ok=True)
+    (tmp_path / ".claude" / "settings.json").write_text(json.dumps({
+        "apiKeyHelper": "printenv ANTHROPIC_API_KEY",
+    }))
+    from backend.app.agent import RealAgent
+    RealAgent._ensure_claude_settings("sk-ant-test")
+    for rel in (".claude.json", ".claude/settings.json"):
+        cfg = json.loads((tmp_path / rel).read_text())
+        assert "apiKeyHelper" not in cfg
+    # Unrelated user keys preserved.
+    cfg = json.loads(cfg_path.read_text())
+    assert cfg.get("somethingElse") == "preserved"
 
 
 def test_ensure_claude_settings_merges_existing_approvals(tmp_path, monkeypatch):
@@ -82,16 +110,20 @@ def test_ensure_claude_settings_merges_existing_approvals(tmp_path, monkeypatch)
 
 def test_ensure_claude_settings_no_key_skips_approval(tmp_path, monkeypatch):
     """Called with no key (e.g. backend startup before onboarding),
-    don't write customApiKeyResponses — there's nothing to approve."""
+    don't write customApiKeyResponses — there's nothing to approve.
+    Consent flags are still set so they apply once the user does
+    onboard."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     from backend.app.agent import RealAgent
     RealAgent._ensure_claude_settings("")
     cfg = json.loads((tmp_path / ".claude.json").read_text())
     assert "customApiKeyResponses" not in cfg
-    # But the rest is still pre-written so consent dialogs are pre-accepted.
-    assert cfg["apiKeyHelper"] == "printenv ANTHROPIC_API_KEY"
+    # Consent dialogs pre-accepted.
     assert cfg["bypassPermissionsModeAccepted"] is True
+    assert cfg["hasTrustDialogAccepted"] is True
+    # And NO apiKeyHelper (we use ANTHROPIC_API_KEY env var instead).
+    assert "apiKeyHelper" not in cfg
 
 
 def test_consent_script_handles_all_three_dialogs():

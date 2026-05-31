@@ -102,16 +102,24 @@ class RealAgent:
     def _ensure_claude_settings(anthropic_key: str = "") -> None:
         """Pre-write Claude Code's config files so:
 
-          1. Claude authenticates via our ``apiKeyHelper`` (= read the
-             ANTHROPIC_API_KEY env var) instead of falling into OAuth.
-          2. The one-time "Bypass Permissions" consent screen is
-             pre-accepted, so a fresh node never gets stuck on
+          1. The one-time "Bypass Permissions" consent is pre-accepted,
+             so a fresh node never gets stuck on
              "1. No, exit / 2. Yes, I accept".
-          3. The "Welcome to Claude Code" onboarding wizard is skipped.
+          2. The "Welcome to Claude Code" onboarding wizard is skipped.
+          3. The "Trust this folder" dialog is pre-accepted.
           4. The "Do you want to use this API key?" dialog is skipped
              by registering the key's display-truncation as approved.
 
-        Claude Code 1.x splits state across two locations depending on
+        We rely on ``ANTHROPIC_API_KEY`` in the spawned process's env
+        (set by ``RealAgent.start()``) for authentication. We do NOT
+        write ``apiKeyHelper`` — Claude Code 2.1.159 emits a noisy
+        "Auth conflict: both apiKeyHelper AND ANTHROPIC_API_KEY are
+        set" warning when both are present, and ANTHROPIC_API_KEY in
+        env alone (combined with the customApiKeyResponses approval)
+        is enough to bypass every prompt. If we find an existing
+        apiKeyHelper from a prior install, we DELETE it on merge.
+
+        Claude Code splits state across two locations depending on
         version. We write BOTH so the relevant one always exists:
           - ~/.claude.json          (single-file user config, newer)
           - ~/.claude/settings.json (folder-style config, older)
@@ -120,13 +128,12 @@ class RealAgent:
         so a user who's already done OAuth keeps their credentials.
         """
         import json as _json
-        # The fields we set. apiKeyHelper is the documented one;
-        # the consent flags are best-effort across Claude Code versions
-        # (different versions read different keys). Unknown keys are
-        # harmless — Claude Code ignores them. If even one of these
-        # matches the current version, the consent screen is gone.
+        # The fields we set. The consent flags are best-effort across
+        # Claude Code versions (different versions read different keys).
+        # Unknown keys are harmless — Claude Code ignores them. If even
+        # one of these matches the current version, the consent screen
+        # is gone.
         FORCE: dict = {
-            "apiKeyHelper": "printenv ANTHROPIC_API_KEY",
             "hasCompletedOnboarding": True,
             "bypassPermissionsModeAccepted": True,
             "dangerouslySkipPermissionsModeAccepted": True,
@@ -161,13 +168,15 @@ class RealAgent:
                         cur = {}
                 except (OSError, ValueError):
                     cur = {}
-            # Only overwrite each key if the user hasn't set their own
-            # value (idempotent on re-runs); but DO set the consent
-            # flags every time since they're booleans with no user
-            # preference to preserve.
+            # Remove a previously-written apiKeyHelper — Claude Code
+            # 2.1.159+ warns when both apiKeyHelper AND
+            # ANTHROPIC_API_KEY env are present. We use the env var, so
+            # apiKeyHelper is redundant and noisy.
+            if "apiKeyHelper" in cur:
+                del cur["apiKeyHelper"]
+            # Apply FORCE: overwrite each key (consent flags are
+            # booleans with no user preference to preserve).
             for k, v in FORCE.items():
-                if k == "apiKeyHelper" and cur.get("apiKeyHelper"):
-                    continue
                 if k == "permissions" and isinstance(cur.get(k), dict):
                     cur[k].update(v)
                 elif k == "customApiKeyResponses" and isinstance(cur.get(k), dict):
@@ -196,8 +205,10 @@ class RealAgent:
         home = os.path.expanduser("~")
         _merge_into(os.path.join(home, ".claude.json"))
         _merge_into(os.path.join(home, ".claude", "settings.json"))
-        print("[agent] pre-accepted Claude Code consent + apiKeyHelper "
-              "set — no OAuth or bypass-permissions prompt should appear",
+        print("[agent] pre-accepted Claude Code consent dialogs + "
+              "approved API-key truncation — no OAuth or "
+              "bypass-permissions / trust-folder / 'use this API key?' "
+              "prompt should appear",
               flush=True)
 
     def start(self) -> str:
@@ -220,16 +231,16 @@ class RealAgent:
         }
         if self.anthropic_key:
             env["ANTHROPIC_API_KEY"] = self.anthropic_key
-            # Tell Claude Code to use the API key directly instead of
-            # falling back to its OAuth flow. Pass the key so the
-            # "Do you want to use this API key?" prompt is pre-approved
-            # via customApiKeyResponses.approved. Claude Code reads
-            # ~/.claude/settings.json on startup; when `apiKeyHelper` is
-            # set, Claude runs that shell command and uses its stdout as
-            # the API key for every request. That kills the OAuth path
-            # entirely (no browser, no "Paste code here", no state
-            # parameter dance) and means a fresh node only needs the
-            # onboarding-saved Claude token to authenticate.
+            # Pre-write Claude Code's config:
+            #  - Pre-accept all consent dialogs (bypass perms, trust
+            #    folder, dangerously-skip-permissions)
+            #  - Pre-approve this key's display-truncation so the
+            #    "Do you want to use this API key?" prompt is skipped
+            # Claude Code 2.1.159+ reads ANTHROPIC_API_KEY directly
+            # from env when no apiKeyHelper is set, so the env var
+            # above is sufficient for auth — and avoids the noisy
+            # "Auth conflict" warning that fires when BOTH apiKeyHelper
+            # and ANTHROPIC_API_KEY are set.
             self._ensure_claude_settings(self.anthropic_key)
         exports = " ".join(f"{k}={shlex.quote(v)}" for k, v in env.items())
         log = os.path.join(self.workspace, "agent.log")

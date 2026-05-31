@@ -1146,10 +1146,18 @@ def diag():
                     txt = f.read()
                 claude_files[p] = {
                     "size": len(txt),
-                    "has_apiKeyHelper": "apiKeyHelper" in txt,
+                    # Negative-signal check: apiKeyHelper should NOT be
+                    # present after our scrub (Claude 2.1.159 warns
+                    # when both apiKeyHelper and ANTHROPIC_API_KEY env
+                    # are set). Surfaces as True if a stale config
+                    # still has it.
+                    "has_stale_apiKeyHelper": "apiKeyHelper" in txt,
                     "has_bypass_accepted": (
                         "bypassPermissionsModeAccepted" in txt
                         or "dangerouslySkipPermissionsModeAccepted" in txt),
+                    "has_approved_key_truncation": (
+                        "customApiKeyResponses" in txt
+                        and "approved" in txt),
                 }
             else:
                 claude_files[p] = {"missing": True}
