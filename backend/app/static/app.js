@@ -1329,6 +1329,34 @@ function createRailTerm(session) {
     ro.observe(container);
   } catch (e) { /* not all browsers */ }
 
+  /* ── Tell the server to resize tmux to match xterm dimensions.
+     Without this, Claude Code renders its UI at tmux's spawn size
+     (210x52) but the browser's xterm is narrower, so every status
+     line wraps mid-character and the terminal looks garbled.
+
+     xterm fires onResize after FitAddon.fit() with the new (cols,
+     rows). We debounce by 200ms so a drag-resize doesn't fire 60
+     POSTs/sec, and POST to /api/agent/resize which calls
+     `tmux resize-window` + sends Ctrl-L so Claude redraws clean. */
+  let _resizeTimer = null, _lastSize = '';
+  const pushSize = (cols, rows) => {
+    const key = cols + 'x' + rows;
+    if (key === _lastSize) return;
+    _lastSize = key;
+    if (_resizeTimer) clearTimeout(_resizeTimer);
+    _resizeTimer = setTimeout(() => {
+      _resizeTimer = null;
+      post('/agent/resize', { session, cols, rows }).catch(() => {});
+    }, 200);
+  };
+  t.onResize(({ cols, rows }) => pushSize(cols, rows));
+  // After the initial fit (which fires onResize), Claude may already
+  // have drawn at the old size. Force one more push + Ctrl-L just to
+  // be sure the dimensions match before the user looks at the term.
+  setTimeout(() => {
+    if (t.cols && t.rows) pushSize(t.cols, t.rows);
+  }, 600);
+
   /* ── Keystroke passthrough ───────────────────────────────────────────
      Every key the user types goes to /api/agent/keys IMMEDIATELY.
      - Single chars and special keys: one POST each.

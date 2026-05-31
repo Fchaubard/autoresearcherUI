@@ -678,6 +678,55 @@ def _tmux_alive(session: str = "agent") -> bool:
                           capture_output=True).returncode == 0
 
 
+@router.post("/agent/resize")
+async def agent_resize(request: Request):
+    """Resize a tmux pane so it matches the xterm.js dimensions.
+
+    Without this, Claude Code (running inside tmux) renders its UI
+    at whatever -x/-y we spawned tmux with (default 210x52). When the
+    browser's xterm.js is narrower than that, every Claude status
+    line wraps mid-character and the terminal looks like garbage.
+
+    The frontend hooks xterm's onResize after FitAddon.fit() and
+    POSTs the new (cols, rows) here. We:
+      1. tmux resize-window -x cols -y rows -t <session>
+      2. send Ctrl-L so Claude clears + redraws at the new size
+         (its in-place spinner / status bar are positioned with
+         absolute escapes that don't auto-reflow).
+
+    Body: {"session": "agent"|"author"|<run_id>, "cols": N, "rows": N}
+    """
+    body = await _safe_json(request)
+    sess = (body.get("session") or "agent").strip()
+    try:
+        cols = int(body.get("cols") or 0)
+        rows = int(body.get("rows") or 0)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "cols/rows must be int"}
+    if (not sess or len(sess) > 80 or not _SAFE_NAME.match(sess)
+            or cols < 20 or cols > 500 or rows < 5 or rows > 200):
+        return {"ok": False, "error": "bad session/cols/rows"}
+    if not _tmux_alive(sess):
+        return {"ok": False, "error": f"no tmux session: {sess}"}
+    # resize-window works on the whole window (the right level for our
+    # single-pane sessions). -A makes the constraint absolute.
+    r = subprocess.run(
+        ["tmux", "resize-window", "-t", sess, "-x", str(cols),
+         "-y", str(rows), "-A"],
+        capture_output=True, text=True, timeout=4)
+    if r.returncode != 0:
+        # Older tmux without resize-window: fall back to resize-pane.
+        r = subprocess.run(
+            ["tmux", "resize-pane", "-t", sess, "-x", str(cols),
+             "-y", str(rows)],
+            capture_output=True, text=True, timeout=4)
+    # Ctrl-L → Claude redraws at the new dimensions.
+    subprocess.run(["tmux", "send-keys", "-t", sess, "C-l"],
+                   capture_output=True)
+    return {"ok": True, "cols": cols, "rows": rows,
+            "stderr": (r.stderr or "")[:200]}
+
+
 @router.get("/agent/raw")
 def agent_raw_stream(session: str = "agent", offset: int = 0):
     """Byte-offset incremental read of a tmux session's RAW pane bytes.

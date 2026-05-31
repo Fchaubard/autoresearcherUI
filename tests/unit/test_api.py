@@ -83,6 +83,38 @@ def test_agent_raw_stream_rejects_bad_session(client):
     assert "error" in body
 
 
+def test_agent_resize_calls_tmux_resize_window(client, fake_subprocess):
+    """xterm.js POSTs (cols, rows) to /api/agent/resize after FitAddon
+    runs. The endpoint must call `tmux resize-window` so Claude Code
+    redraws at the correct width — otherwise its 210-wide UI wraps
+    mid-character and the rail terminal is illegible (the bug Francois
+    hit on 2026-05-31)."""
+    r = client.post("/api/agent/resize",
+                    json={"session": "agent", "cols": 110, "rows": 38})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["cols"] == 110 and body["rows"] == 38
+    # Confirm we issued resize-window AND a Ctrl-L redraw.
+    cmds = [" ".join(c["args"]) for c in fake_subprocess]
+    assert any("resize-window" in c and "-x 110" in c and "-y 38" in c
+               for c in cmds), cmds
+    assert any("send-keys" in c and "C-l" in c for c in cmds), cmds
+
+
+def test_agent_resize_rejects_out_of_range_dimensions(client, fake_subprocess):
+    """Cols/rows are bounds-checked so a malformed client can't
+    crash tmux with absurd values."""
+    for bad in ({"cols": 5, "rows": 30},   # cols too small
+                {"cols": 1000, "rows": 30}, # cols too large
+                {"cols": 100, "rows": 3},   # rows too small
+                {"cols": 100, "rows": 500}, # rows too large
+                ):
+        r = client.post("/api/agent/resize",
+                        json={"session": "agent", **bad})
+        assert r.json().get("ok") is False, bad
+
+
 def test_settings_put_ignores_mask_value(client, setting_setter):
     setting_setter("onboarding", {"openai_token": "real-tok"})
     r = client.put("/api/settings", json={"openai_token": "••••••••"})

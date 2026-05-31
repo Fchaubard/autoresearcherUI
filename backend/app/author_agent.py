@@ -294,8 +294,11 @@ def start(proposal_id: str = "") -> dict:
         # Kill any stale session first (cleanup).
         subprocess.run(["tmux", "kill-session", "-t", SESSION],
                        capture_output=True, timeout=5)
+        # Initial size: frontend xterm.js will POST its real dimensions
+        # to /api/agent/resize. 120x40 is a safe default that won't look
+        # garbled in any reasonable rail width before the resize.
         subprocess.run(["tmux", "new-session", "-d", "-s", SESSION,
-                        "-x", "210", "-y", "52", full],
+                        "-x", "120", "-y", "40", full],
                        capture_output=True, timeout=10)
         # Mirror the pane to BOTH the per-session raw-byte file (rail
         # xterm.js streaming source) AND author.log (per-workspace

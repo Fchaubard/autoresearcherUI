@@ -245,8 +245,15 @@ class RealAgent:
         full = f"cd {shlex.quote(self.workspace)} && {exports} {inner}"
         subprocess.run(["tmux", "kill-session", "-t", self.session],
                        capture_output=True)
+        # Initial tmux pane size. The frontend's xterm.js will POST its
+        # real dimensions to /api/agent/resize on connect, which calls
+        # `tmux resize-window` to match. We start at 120x40 — wider
+        # than most rail layouts but narrow enough that initial paint
+        # before the resize-handshake completes is still legible. (The
+        # old 210x52 default made first-paint look garbled in any rail
+        # narrower than 210 cols.)
         subprocess.run(["tmux", "new-session", "-d", "-s", self.session,
-                        "-x", "210", "-y", "52", full], check=True)
+                        "-x", "120", "-y", "40", full], check=True)
         # Mirror the live pane into BOTH a per-session raw-byte file
         # (`pane_stream.term_file(session)`) — what the rail xterm.js
         # streams from for true ANSI rendering — AND `agent.log` for a
