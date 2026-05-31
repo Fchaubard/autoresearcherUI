@@ -110,9 +110,15 @@ class RealAgent:
             "bypassPermissionsModeAccepted": True,
             "dangerouslySkipPermissionsModeAccepted": True,
             "hasAcceptedDangerouslySkipPermissions": True,
+            # "Trust this folder" dialog (different from bypass-perms;
+            # appears the first time Claude is run in any new dir).
+            "hasTrustDialogAccepted": True,
+            "trustDialogAccepted": True,
+            "hasAcceptedTrustDialog": True,
             "permissions": {
                 "bypassModeAccepted": True,
                 "dangerouslySkipPermissionsAccepted": True,
+                "trustDialogAccepted": True,
             },
         }
 
@@ -241,6 +247,7 @@ for i in $(seq 1 90); do
   sleep 1
   PANE=$(tmux capture-pane -t "$SESS" -p -J -S -300 2>/dev/null || true)
   if [ "$sent_consent" -eq 0 ]; then
+    # Bypass Permissions consent (option 2 = Yes)
     if printf "%s" "$PANE" | grep -qiE 'Yes, *I *accept|Bypass *Permissions' \\
        && printf "%s" "$PANE" | grep -qiE 'No, *exit'; then
       tmux send-keys -t "$SESS" '2' >/dev/null 2>&1
@@ -248,6 +255,16 @@ for i in $(seq 1 90); do
       tmux send-keys -t "$SESS" Enter >/dev/null 2>&1
       sent_consent=1
       sleep 2
+      continue
+    fi
+    # Trust-this-folder dialog (option 1 = Yes, already highlighted —
+    # just press Enter). Different prompt, different default, separate
+    # branch so we don't accidentally pick "No" by sending '2'.
+    if printf "%s" "$PANE" | grep -qiE 'trust *this *folder|Do *you *trust' ; then
+      tmux send-keys -t "$SESS" Enter >/dev/null 2>&1
+      sleep 2
+      # don't set sent_consent=1 — the bypass-permissions screen often
+      # appears AFTER the trust dialog on a fresh install.
       continue
     fi
   fi
