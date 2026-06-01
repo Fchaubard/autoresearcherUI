@@ -1396,7 +1396,19 @@ def _collect_codebase(workspace: str | os.PathLike) -> str:
     for p in sorted(ws.rglob("*")):
         if not p.is_file():
             continue
-        if any(part in SKIP_DIRS for part in p.parts):
+        # SKIP_DIRS must match only directory components RELATIVE to
+        # the workspace, not absolute-path ancestors. Every
+        # autoresearcherUI workspace lives under data/workspace/...
+        # by setup convention, so a naive `part in SKIP_DIRS for part
+        # in p.parts` skipped EVERY file because the ancestor "data"
+        # always matched. Council then saw an empty codebase and
+        # auto-rejected (the bug Francois hit on 2026-05-31, found
+        # and one-line-fixed by the research agent in-flight).
+        try:
+            rel_parts = p.relative_to(ws).parts
+        except ValueError:
+            continue                                # outside workspace
+        if any(part in SKIP_DIRS for part in rel_parts[:-1]):
             continue
         if p.suffix.lower() not in EXT and p.name not in (
                 "Dockerfile", "Makefile"):

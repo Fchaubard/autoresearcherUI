@@ -734,6 +734,32 @@ async def agent_resize(request: Request):
             "stderr": (r.stderr or "")[:200]}
 
 
+@router.get("/url")
+def public_url():
+    """Return the current cloudflared public URL.
+
+    The cloudflared quick-tunnel rotates the hostname every time it
+    respawns, and users frequently lose the URL they bookmarked. This
+    endpoint tails `data/cloudflared.log` for the most recent
+    `https://*.trycloudflare.com` line, which is the URL the tunnel
+    is currently registered under. Empty string if the log is missing
+    or the tunnel hasn't started yet.
+
+    Local-only access: this is only useful from inside the pod — the
+    cloudflared tunnel itself would have to be UP for an external
+    caller to reach this endpoint in the first place. Doubles as a
+    debug ping ("is the backend alive and can I read the log?")."""
+    import re as _re
+    log = DATA_DIR / "cloudflared.log"
+    try:
+        txt = log.read_text(errors="ignore") if log.exists() else ""
+    except OSError:
+        txt = ""
+    urls = _re.findall(r"https://[a-z0-9-]+\.trycloudflare\.com", txt)
+    return {"url": urls[-1] if urls else "",
+            "all_urls": list(dict.fromkeys(urls[-10:]))}
+
+
 @router.get("/emails/status")
 def emails_status():
     """Whether the user has paused outbound emails in Settings.

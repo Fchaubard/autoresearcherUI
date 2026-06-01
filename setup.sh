@@ -156,8 +156,15 @@ if [ "$NO_TUNNEL" -eq 0 ] && command -v cloudflared >/dev/null 2>&1; then
   CFLOG="$ROOT/data/cloudflared.log"
   : > "$CFLOG"
   tmux kill-session -t arui-cf 2>/dev/null || true
+  # SUPERVISE the tunnel — wrap cloudflared in a while-loop so the
+  # tunnel auto-respawns when it dies. Without this, ANY backend
+  # restart (or a network blip) kills cloudflared permanently and the
+  # bookmarked URL goes to NXDOMAIN. trycloudflare assigns a fresh
+  # random hostname on each respawn, so the user grabs it via the
+  # `/api/url` endpoint (or by tailing data/cloudflared.log) — the
+  # important thing is the tunnel never just dies and stays dead.
   tmux new-session -d -s arui-cf \
-    "cloudflared tunnel --url http://localhost:$PORT 2>&1 | tee -a $CFLOG"
+    "while true; do cloudflared tunnel --url http://localhost:$PORT 2>&1 | tee -a $CFLOG; echo '[arui-cf] cloudflared exited; respawning in 2s' >>$CFLOG; sleep 2; done"
   # parse the public URL out of cloudflared's log
   for i in $(seq 1 40); do
     PUB=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$CFLOG" \

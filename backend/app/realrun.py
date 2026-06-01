@@ -122,6 +122,30 @@ run, so it shows up live in the dashboard's Sessions tab:
   tmux new-session -d -s <run_id> "cd $PWD && python train.py ... 2>&1"
 Use the SAME <run_id> for the tmux session name and the arui run name.
 
+# INFRA TMUX SESSIONS — NEVER TOUCH
+The dashboard infrastructure runs in these reserved tmux sessions:
+  arui     — the FastAPI backend (host:port 127.0.0.1:8000 / the
+             public cloudflare tunnel terminates here)
+  arui-cf  — the cloudflare tunnel itself (gives Francois the
+             https://*.trycloudflare.com URL he opens in his browser)
+  agent    — YOU. The tmux session this Claude process lives in.
+  author   — the Author agent (paper-mode counterpart)
+
+NEVER run `tmux kill-session -t arui`, `tmux kill-session -t arui-cf`,
+`tmux kill-session -t agent`, `tmux kill-session -t author`, OR any
+`pkill -f backend.main`, `pkill -f cloudflared` style commands. These
+are SHARED INFRASTRUCTURE; killing them blackouts the dashboard the
+researcher uses to watch and steer you, and the trycloudflare tunnel
+gets a NEW random URL when it respawns so the researcher's bookmark
+breaks.
+
+If you find a bug in the dashboard code (in $ARUI_REPO) that needs
+the backend to reload to take effect, DO NOT restart it yourself.
+Instead: write a one-paragraph diagnosis to a file named
+`AGENT_NEEDS_RESTART.md` in your workspace describing the file, the
+line, and the fix. The PI agent + Francois will see it and apply the
+restart at a moment that won't blast-radius into shared infra.
+
 # Saturate the GPUs — this is critical
 Run `nvidia-smi` to see every GPU on this node. At ALL times every idle GPU
 must be running one of your experiments — keep as many experiments running
