@@ -1,14 +1,18 @@
 # autoresearcherUI
 
-**`v0.0.1`** &nbsp;·&nbsp; **MIT** &nbsp;·&nbsp; **self-hosted** &nbsp;·&nbsp; **no API keys required**
+**`v0.0.1`** &nbsp;·&nbsp; **MIT** &nbsp;·&nbsp; **self-hosted** &nbsp;·&nbsp; 
 
-> **AutoresearcherUI = Autoresearcher + wandb + datadog + overleaf + claude code. All local and all free! No api keys! Just boot up a node, git clone, fill out the onboarding form and let it rip! Grab the URL and you are in anywhere on earth.**
+> **AutoresearcherUI = Autoresearcher + wandb + datadog + overleaf + iTerm + claude code. All local and all free! Just boot up a node, git clone, bash setup.sh, fill out the onboarding form and let it research rip! Login to the research cockpit URL anywhere on earth.**
 
-A single-binary cockpit for autonomous ML research. Rent a GPU box, clone,
-`setup.sh`, get a public URL. Open it, fill the onboarding form, and a Claude
-Code agent spins up a fresh research repo, writes `train.py`, queues ideas,
-and runs them around the clock — while a live dashboard streams plots, the
-agent's terminal, a decision queue, and an auto-drafted LaTeX paper.
+AutoresearcherUI is a opensource, single-binary cockpit that makes you the PI with as many autonomous researchers as you want writing papers for you. 
+
+Basic AutoresearcherUI flow per node:
+1. Rent a GPU box
+2. git clone
+3. `bash setup.sh`
+4. copy the URL
+5. Open it and fill out the onboarding form (namely the research purpose and objective function)
+6. Then the research agent is good to go! Leave it alone and let it hillclimb. It will create a fresh research repo, write the `train.py`, spin up a council of agents to review the code, do a baseline run, then try to beat it, maintain a priority queue of ideas, and runs them around the clock updating you via email and the live dashboard until you are ready for your research to stop exploring and start writing the paper. Then the researcher agent will hand off the control of the GPUs to an author agent to nail down and prove specific claims and auto-draft the LaTeX paper and do all required ablation runs to support the claims of the paper. More detail below.
 
 ---
 
@@ -17,31 +21,15 @@ agent's terminal, a decision queue, and an auto-drafted LaTeX paper.
 ```bash
 git clone https://github.com/Fchaubard/autoresearcherui
 cd autoresearcherui && bash setup.sh
-# → setup prints a public https://<id>.trycloudflare.com URL
-# → open it, fill onboarding, let it rip
 ```
 
-For local-only development without the public tunnel:
-
-```bash
-bash dev.sh                # or:  python -m backend.main
-# → http://localhost:8000
-```
-
-The full installer is one script — system deps, Node.js, Claude Code, `uv`,
-Python deps, **a one-time interactive Claude Code OAuth login** (so the
-autonomous agent never blocks on it later), the backend in tmux, and a
+The full installer is one script that installs all system deps, Node.js, Claude Code, `uv`,
+Python deps, auto-login to Claude Code from your api key, the backend in tmux, and a
 cloudflared quick-tunnel so the dashboard is reachable from anywhere on
-earth. Re-running `setup.sh` is safe; if `~/.claude/` already has credentials
-the OAuth step is skipped. Re-runs restart everything else.
+earth. You can specify a passcode as you need to lock down the node. 
 
-**About the one-time Claude OAuth in setup**: when `~/.claude/` is empty,
-setup.sh pauses and runs `claude --dangerously-skip-permissions` interactively
-so you can complete OAuth in your browser ONCE while you're still at the
-keyboard. After that, the autonomous research agent reuses the persisted
-credentials and the dashboard never has to show an OAuth prompt mid-onboarding.
-Pass `--yes` to skip this step (you'll have to run `claude` manually before
-using the dashboard).
+Re-running `setup.sh` is safe; if `~/.claude/` already has credentials
+the OAuth step is skipped. Re-runs restart everything else.
 
 ## What you get
 
@@ -50,28 +38,25 @@ none of these services need to be reachable, paid for, or signed up for.
 
 | You used to need | autoresearcherUI gives you |
 |---|---|
-| **wandb / mlflow** for tracking | The `arui` SDK (drop-in `wandb`-compatible API) writing into local DuckDB, live charts with shared-hover, an Analysis tab with filters/eye-toggles, and a per-run drawer with full plots and logs. |
-| **datadog / grafana** for ops | Live GPU strip, per-GPU utilization and memory, run reconciler, system-stats block (disk / RAM / GPU) in every email, and two one-click disk-purge buttons. |
-| **overleaf** for the paper | Paper Mode: a real LaTeX repo under `paper/`, an Author Agent that integrates finished ablations into figures and sections, a Critical Path Gantt, a Decision Queue, and a `/p/<token>` share link for co-authors. |
-| **claude code** + a tmux babysitter | Research Agent + Author Agent running as named tmux sessions, an hourly PI Agent that nags whichever one is active, and a Council (Gemini + GPT-5, Claude tiebreaker) reviewing every kept run. |
-| **karpathy's autoresearcher** | Same `program.md` / `train.py` / `ideas.md` philosophy, plus a UI, a scheduler that keeps every GPU saturated, and a research journal that writes itself. |
-
-One process. One port. No external dashboards.
+| **karpathy-style autoresearcher agent + iTerm + council** | Same `program.md` / `train.py` / `ideas.md` philosophy, plus a web terminal UI that allows you to control the node, a scheduler that keeps every GPU saturated, and a research journal that writes itself. We also have a council of agents (Gemini/GPT/Claude) to review work and improve code/ideas. |
+| **wandb / neptune / mlflow** | for tracking and analysis. The `arui` SDK (drop-in `wandb`-compatible API) writing into local DuckDB, live charts with shared-hover, an Analysis tab with filters/eye-toggles, and a per-run drawer with full plots and logs. |
+| **datadog / grafana** | Live per-GPU utilization and memory monitoring, run reconciler, system-stats block (disk / RAM / GPU) alerts in every email and systems. |
+| **overleaf** | Paper Mode: a real LaTeX repo under `paper/`, an Author Agent that takes runs that win and ablates them to see if they will scale, hardening claims, and integrates finished ablations into figures and sections. |
+| **PI Agent / Council** | An hourly PI Agent that nags whichever one is active (research agent or author agent), and a Council (Gemini + GPT-5, Claude tiebreaker) to review all code and reviewing every kept run to generate lessons and next ideas to try. |
 
 ## Two modes
 
-**Research Mode** is the default. You write a one-paragraph purpose and seed a
+**Research Mode** is the default. You write a one paragraph purpose and you can seed a
 few ideas. The Research Agent (Claude Code, autonomous, in a `tmux` session
-called `agent`) extends `ideas.md`, edits `train.py`, queues runs, and the
-orchestrator bin-packs them across your GPUs. The Council reviews each kept
+called `agent`) edits karpathy's `train.py`, queues runs, extends `ideas.md`, and the
+orchestrator fans them across your GPUs. The Council reviews all code and each kept
 result and feeds "lessons learned" back into the ideas queue. The PI Agent
-checks in hourly: idle GPUs, diverging runs, off-track queues — it types
-messages straight into the agent's tmux as if a real PI walked by. You can
-walk away for a week.
+checks in hourly helping with: idle GPUs, diverging runs, off-track queues, it types
+messages straight into the agent's tmux as if a real PI walked by. 
 
-**Paper Mode** is for when you've found something worth publishing. Flip the
-toggle in the *Write the paper* tab. The Research Agent pauses. The Author
-Agent (Claude Code, in a `tmux` session called `author`) takes over: it owns
+**Paper Mode** is for when you think you've found something worth publishing. Flip the
+toggle in the *Write the paper* tab to switch agents. The Research Agent pauses research runs. The Author
+Agent (Claude Code, in a `tmux` session called `author`) takes over for ablation: writes the paper, it owns
 the ablation queue, picks the experiments that will fill the figures, watches
 results stream in via `arui`, kills divergers, and integrates every finished
 run into the LaTeX. You approve a small Decision Queue (claim wording,
@@ -132,11 +117,10 @@ arXiv + Semantic Scholar. Flip back to Research at any time.
 
 **No training runs launch until the council has reviewed and approved
 the codebase.** This is the default behaviour, on by default, and you
-cannot turn it off through the UI — it's the most important guardrail
-between an enthusiastic agent and a 10-GPU-hour run that was logging the
-wrong metric the entire time.
+cannot turn it off through the UI. It's the most important guardrail
+to make sure the original code is functioning properly and avoids hallucinations.
 
-The dance, every time the Research Agent (re)spawns a new project:
+Every time the Research Agent (re)spawns a new project:
 
 ```
 agent: scaffolds program.md, train.py, prepare.py, ideas.md
@@ -158,7 +142,7 @@ agent: polls GET /api/council/bless/status every ~10 s
                    POST /api/council/bless again
 ```
 
-Server-side enforcement, not trust-based: `POST /api/track/run` returns
+Server-side enforcement: `POST /api/track/run` returns
 **HTTP 423 Locked** unless `code_blessed=true`. The agent's `arui.init()`
 call fails immediately, the agent reads the JSON body's `bless_status`
 field, and knows exactly what to fix. (Run names starting with `_probe`
@@ -172,100 +156,116 @@ missing; metric direction mismatch (logging loss while the project says
 match `program.md`; script crashes on import; never calls `.backward()`;
 off-by-ones in epoch/step counting; dataset path that doesn't exist on
 this node. What it explicitly DOESN'T flag: style, hyperparameter
-choices, "consider also trying X" — those are research decisions.
+choices, "consider also trying X".
 
 You see the verdict live on the dashboard:
 
 | State | Banner |
 |---|---|
-| `approved` | small green ✓ **code blessed** pill in the header |
+| `approved` | small green ✓ **code blessed** notification in the header |
 | `pending` | violet banner: *"Council is reviewing the codebase…"* |
 | `rejected` | red banner listing every blocker as bullets + *Clear & await re-review* button |
 | `not_requested` | grey *"Awaiting code review"* note |
 
 If you have no OpenAI or Gemini key configured, the bless auto-approves
-with an honest "no reviewers configured — auto-approved" note. So you
+with an honest "no reviewers configured, auto-approved" note. So you
 can still run autoresearcherUI Claude-only; you just don't get the
 code-bless protection on the baseline.
 
 Want to force a re-review (e.g., the agent fixed something the council
 flagged)? Hit **Clear & await re-review** on the banner, or
-`POST /api/council/bless/reset` — the next run attempt will trigger a
+`POST /api/council/bless/reset`, the next run attempt will trigger a
 fresh review.
 
 ## Screens
 
-![Onboarding / Settings](docs/screenshots/onboarding-settings.png)
 **Onboarding & Settings** — one form is the entire config surface. Email
 for alerts, optional GitHub creds for repo sync, optional Claude / Gemini /
 OpenAI tokens (Claude unlocks the agents; Gemini + OpenAI unlock the
 council), the project's research question, seed ideas, validation metric,
 baseline, the dangerously-skip-permissions toggle, and the agent's raw
 `program.md`. Everything is editable later from the Settings modal.
+![Onboarding / Settings](docs/screenshots/onboarding-settings.png)
 
-![Dashboard](docs/screenshots/dashboard.png)
+
+
 **Dashboard** — the live cockpit. Headline metric vs. baseline plotted
 across every experiment ever run, a per-GPU heat strip up top, the
 running-best vs. baseline summary cards, a sortable / filterable table of
 all runs, and the right-rail Research Agent terminal so you can see what
 Claude is actually thinking. The amber banner is fired when the research
 agent is intentionally paused (paper mode).
+![Dashboard](docs/screenshots/dashboard.png)
 
-![Analysis](docs/screenshots/analysis.png)
+
+
 **Analysis** — W&B-style multi-run charts. Eye-toggle column to control
 which runs are drawn, filter modal (status / metric / config), shared-hover
 across every panel, two-way row↔line hover, smoothing slider, log toggle,
 and expand-any-panel-to-full-pane. Click a row to open the per-run drawer
 with every plot, the raw logs, and the council's review.
+![Analysis](docs/screenshots/analysis.png)
 
-![Lessons learned](docs/screenshots/lessons-learned.png)
+
+
 **Lessons learned** — auto-written by the Council after each strategic
 review. Every entry summarizes a batch of runs ("twelfth batch in a row
 repeats the same y=5 bf16 diffusion jobs…"), names what to do next, and
 links the run ids it's reasoning over. The Research Agent reads these on
-every tick — it's how the system avoids re-trying ideas that already
+every tick. It's how the system avoids re-trying ideas that already
 failed.
+![Lessons learned](docs/screenshots/lessons-learned.png)
 
-![Tmux Sessions](docs/screenshots/tmux-sessions.png)
+
+
 **Sessions** — live tmux output for any training run, the research agent,
 or the author agent. Useful for the times when a specific run is
 misbehaving and you want raw stdout/stderr instead of the aggregated
 metric view.
+![Tmux Sessions](docs/screenshots/tmux-sessions.png)
 
-![Write the paper](docs/screenshots/write-the-paper.png)
+
+
 **Write the paper (Paper Mode)** — flip the toggle and the Research Agent
 pauses, the Author Agent starts. Live LaTeX PDF preview on the left,
 sub-tabs across the bottom (Today, Claim Coverage, Paper Plan, Critical
 Path, Related Work, Versions, Rebuttal, Share), and the Author Agent
 terminal on the right showing it integrating finished ablations into the
 draft in real time.
+![Write the paper](docs/screenshots/write-the-paper.png)
 
-![Send the paper / share link](docs/screenshots/send-the-paper.png)
+
 **Read-only share link** at `/p/<token>` — mint it from the Share tab,
 send it to a co-author. They see the latest PDF, the claims (with
-evidence-strength chips), and the section-status pills — no login, no
+evidence-strength chips), and the section-status pills: no login, no
 write access, no risk of someone editing your in-flight LaTeX.
+![Send the paper / share link](docs/screenshots/send-the-paper.png)
 
-![System Stats](docs/screenshots/system-stats.png)
+
+
 **System Stats** — per-GPU utilization + VRAM + temperature, host CPU /
 RAM / disk-free, API latency. Two **Maintenance** buttons that have saved
 my pod twice this week: *Purge old run logs* (configurable age + bottom-%)
-and *Keep SOTA only* (aggressive — drops every checkpoint except the
+and *Keep SOTA only* (aggressive: drops every checkpoint except the
 project-best run).
+![System Stats](docs/screenshots/system-stats.png)
 
-![Research-mode email](docs/screenshots/email-researcher.png)
+
 **Research-mode email digest** — hourly by default (configurable
 `immediate` / `1h` / `4h` / `12h` / `24h` / `off`). Headline progress
 chart, what beat baseline, what's training now with ETAs, what's next on
 deck. The "node health" block at the bottom (not shown here) shows disk
 and RAM with a warning chip if anything is low.
+![Research-mode email](docs/screenshots/email-researcher.png)
 
-![Paper-mode email](docs/screenshots/email-author.png)
+
 **Paper-mode email digest** — daily. Different content: claims completed,
 days to deadline, decisions waiting on you, citations the Lit Agent
 pulled, ablations finished and integrated, author-agent commits. The
 forward-to-co-author button drops them straight onto the read-only share
 view.
+![Paper-mode email](docs/screenshots/email-author.png)
+
 
 ## Emails
 
@@ -281,7 +281,7 @@ view.
 
 ### Getting a Gmail app password
 
-If you set `EMAIL` to a Gmail address, you need an **app password** in
+If you want emails, you need to set `EMAIL` to a Gmail address during onboarding, you need an **app password** from
 `GMAIL_APP_PW` (your normal login won't work — Google blocks SMTP for it).
 
 1. Turn on **2-Step Verification** at
@@ -291,29 +291,22 @@ If you set `EMAIL` to a Gmail address, you need an **app password** in
 3. Type `autoresearcherUI` (or anything) in the "App name" box and click
    **Create**.
 4. Google shows a 16-character code formatted like `abcd efgh ijkl mnop`.
-   **Strip the spaces** and paste it into `GMAIL_APP_PW=`.
+   **Strip the spaces** and paste it into `GMAIL_APP_PW=` during onboarding.
 
 If you don't see an "App passwords" page at all, 2-Step Verification isn't
-on yet — that's the only thing that's ever wrong. Once set, the SMTP path
-in `notify.py` will use it transparently and you'll get the hourly /
-daily digest with embedded charts.
+on yet. 
 
 ## Configuration
 
-All config lives in the onboarding form: project purpose, validation metric,
+All config lives in the onboarding form and then the settings tab: project purpose, validation metric,
 optional API keys (Gemini, OpenAI, Anthropic), passcode gate, email recipients,
 digest cadence, extra GPU nodes (SSH paste-in), and the raw `program.md` for
-hand-tuning the agent's setup prompt. Keys are optional. Adding them unlocks:
-
-- **Anthropic** → the Research / Author Agents (otherwise FakeAgent runs the
-  e2e and the demo).
-- **Gemini + OpenAI** → the Council's dual-reviewer debate (Claude tiebreaks).
-- **Any LLM key** → Lit Agent + PI Agent.
+hand-tuning the agent's setup prompt. 
 
 ## Disk maintenance
 
-Pods fill up fast — tmux scrollback and checkpoints. Two one-click janitors
-in System Stats:
+Pods fill up fast with checkpoints and logs (we recommend a least 1TB on the node for this reason) — tmux scrollback and checkpoints. Two one-click cleanups
+in System Stats if you need:
 
 - **Purge old run logs** — drops stdout/stderr files of bottom-half runs older
   than N days. Run rows, metrics, reviews stay. Frees GBs in seconds.
