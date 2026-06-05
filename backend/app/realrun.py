@@ -623,6 +623,30 @@ def start_real(cfg: dict, resume: bool = False) -> RealAgent:
         kill_criteria=(cfg.get("kill_criteria") or "1 hour").strip()
                        or "1 hour")
     _agent.start()
+    # Kick off the council-led watchdog review in the background. The
+    # review is idempotent (skips if already done), so calling it on
+    # both fresh onboarding AND resume is safe. We use a thread because
+    # the council call takes ~30s and we don't want to block agent
+    # spawn on it. The agent meanwhile gets the default config; the
+    # overrides land within a minute.
+    if not resume:
+        try:
+            import threading as _th
+            def _bg_watchdog_review():
+                try:
+                    from .watchdog import onboarding as _wd_ob
+                    out = _wd_ob.review_with_council()
+                    print(f"[realrun] watchdog onboarding review -> {out}",
+                          flush=True)
+                except Exception as e:                       # noqa: BLE001
+                    print(f"[realrun] watchdog review crashed: {e}",
+                          flush=True)
+            _th.Thread(target=_bg_watchdog_review,
+                       name="watchdog-onboarding-review",
+                       daemon=True).start()
+        except Exception as e:                              # noqa: BLE001
+            print(f"[realrun] could not start watchdog review: {e}",
+                  flush=True)
     return _agent
 
 

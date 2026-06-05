@@ -596,6 +596,27 @@ def run_watchdog_now():
         return {"ok": False, "error": str(e)[:240]}
 
 
+@router.post("/watchdog/review")
+async def review_watchdog_config(request: Request):
+    """Ask the council whether the watchdog defaults make sense for
+    THIS research project. Idempotent: once applied, returns
+    skipped/already_reviewed on subsequent calls unless body has
+    {"force": true}. Called automatically after onboarding completes
+    (see realrun.start_real) and also exposed for manual re-review
+    when the operator changes the project purpose."""
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:                                       # noqa: BLE001
+        pass
+    force = bool(body.get("force"))
+    try:
+        from .watchdog import onboarding as wd_onboarding
+        return wd_onboarding.review_with_council(force=force)
+    except Exception as e:                                  # noqa: BLE001
+        return {"status": "error", "error": str(e)[:240]}
+
+
 @router.get("/health")
 def get_health(db: Session = Depends(get_session)):
     """The dashboard pill, modal, and PI all consume this. Source of

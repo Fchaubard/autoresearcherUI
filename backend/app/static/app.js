@@ -4137,6 +4137,93 @@ async function openSettings() {
   refreshResBtn();
   m.append(resBar);
 
+  /* ── Watchdog config panel (PR 5 of state-control rewrite) ─────────
+     Read-only-ish view of the active per-script monitor config + a
+     button to ask the council to re-review for THIS project. Each row
+     shows the script name, its describe() text, current params
+     (editable inline), and an Enabled toggle. Saving POSTs to
+     /api/watchdog/config; "Ask council" POSTs to /api/watchdog/review
+     with force=true so the council re-evaluates defaults against the
+     current project purpose. */
+  const wdBar = el('div', 'set-wd-bar');
+  const wdLbl = el('div', 'set-email-lbl', 'Watchdog monitors');
+  const wdInfo = el('div', 'set-email-hint',
+    'These scripts page the agent (via tmux) when a run looks broken.');
+  const wdReview = el('button', 'btn xs',
+    'Ask council to re-review for this project');
+  const wdHost = el('div', 'set-wd-host');
+  wdBar.append(wdLbl, wdInfo, wdReview, wdHost);
+  m.append(wdBar);
+
+  const renderWdRows = (scripts, config) => {
+    wdHost.innerHTML = '';
+    scripts.forEach(s => {
+      const cur = (config && config[s.name]) || {};
+      const enabled = cur.enabled !== false;
+      const params = { ...(s.default_params || {}), ...(cur.params || {}) };
+      const row = el('div', 'set-wd-row');
+      const head = el('div', 'set-wd-row-hd');
+      const tog = el('input', '');
+      tog.type = 'checkbox'; tog.checked = enabled;
+      tog.dataset.script = s.name; tog.dataset.kind = 'enabled';
+      const nm = el('span', 'set-wd-name', s.name);
+      const kills = s.kills_run
+        ? el('span', 'set-wd-kills', 'kills run')
+        : el('span', 'set-wd-soft', 'soft');
+      head.append(tog, nm, kills);
+      row.append(head);
+      const desc = el('div', 'set-wd-desc', s.describe || '');
+      row.append(desc);
+      Object.entries(params).forEach(([k, v]) => {
+        const pp = el('div', 'set-wd-param');
+        const lab = el('label', '', k);
+        const ipt = el('input', '');
+        ipt.type = (typeof v === 'number') ? 'number' : 'text';
+        ipt.value = (typeof v === 'object') ? JSON.stringify(v) : v;
+        ipt.dataset.script = s.name; ipt.dataset.kind = 'param';
+        ipt.dataset.param = k;
+        pp.append(lab, ipt);
+        row.append(pp);
+      });
+      wdHost.append(row);
+    });
+  };
+
+  const loadWatchdog = async () => {
+    try {
+      const [scripts, config] = await Promise.all([
+        api('/watchdog/scripts').then(d => d.scripts || []),
+        api('/watchdog/config').then(d => d.config || {}),
+      ]);
+      renderWdRows(scripts, config);
+    } catch (e) {
+      wdHost.innerHTML =
+        '<p class="muted">Could not load watchdog config: ' + esc(e) + '</p>';
+    }
+  };
+
+  wdReview.onclick = async () => {
+    wdReview.disabled = true;
+    const orig = wdReview.textContent;
+    wdReview.textContent = 'Asking council…';
+    try {
+      const r = await post('/watchdog/review', { force: true });
+      wdReview.textContent = r && r.status === 'applied'
+        ? ('Applied ' + Object.keys(r.overrides || {}).length
+           + ' override(s) ✓')
+        : ('Skipped: ' + (r.reason || r.error || 'unknown'));
+      await loadWatchdog();
+    } catch (e) {
+      wdReview.textContent = 'Failed: ' + e;
+    } finally {
+      setTimeout(() => {
+        wdReview.disabled = false;
+        wdReview.textContent = orig;
+      }, 4000);
+    }
+  };
+  loadWatchdog();
+
   const actions = el('div', 'modal-actions');
   const status = el('div', 'set-status');
   const save = el('button', 'btn pri', 'Save settings');
@@ -4146,6 +4233,32 @@ async function openSettings() {
     Object.entries(inp).forEach(([k, x]) => {
       upd[k] = x.type === 'checkbox' ? x.checked : x.value;
     });
+    // Collect watchdog edits — group by script, coerce numerics, persist
+    // before saving the regular onboarding settings so a failure on
+    // either is independently visible.
+    const wdUpdate = {};
+    wdHost.querySelectorAll('input').forEach(x => {
+      const sc = x.dataset.script;
+      const kind = x.dataset.kind;
+      if (!sc) return;
+      wdUpdate[sc] = wdUpdate[sc] || { params: {} };
+      if (kind === 'enabled') {
+        wdUpdate[sc].enabled = x.checked;
+      } else if (kind === 'param') {
+        let v = x.value;
+        if (x.type === 'number') v = Number(v);
+        try { if (typeof v === 'string' && (v.startsWith('[') || v.startsWith('{')))
+          v = JSON.parse(v);
+        } catch (e) { /* keep as string */ }
+        wdUpdate[sc].params[x.dataset.param] = v;
+      }
+    });
+    try {
+      if (Object.keys(wdUpdate).length) {
+        await post('/watchdog/config',
+                   { config: wdUpdate, source: 'operator' });
+      }
+    } catch (e) { /* swallowed; main settings save still runs */ }
     try {
       const r = await fetch('/api/settings', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
