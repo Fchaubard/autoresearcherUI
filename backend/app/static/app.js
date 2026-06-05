@@ -958,7 +958,21 @@ async function _renderPaperProposalsHistory() {
   try { data = await api('/paper/proposals'); }
   catch (e) { host.innerHTML = ''; return; }
   const rows = (data && data.proposals) || [];
-  if (!rows.length) { host.innerHTML = ''; return; }
+  // ALWAYS render the section header — even with 0 proposals — so the
+  // user can SEE that paper-proposal history is a thing that will show
+  // up here after they switch to paper mode. Previously this function
+  // emptied the container when rows was empty, making the whole
+  // feature invisible to Research-mode users.
+  if (!rows.length) {
+    host.innerHTML =
+      `<div class="pp-hist-h">Past paper proposals` +
+      `<span class="pp-hist-count">0</span></div>` +
+      `<div class="pp-hist-sub">No proposals yet. Once you click ` +
+      `<b>Start the Paper Proposal</b> above, every council review is ` +
+      `saved here. You can revisit and accept any later proposal — ` +
+      `dismissing one no longer loses it.</div>`;
+    return;
+  }
   const statusChip = (s) => {
     const cls = s === 'accepted' ? 'ok'
       : s === 'ready'     ? 'pri'
@@ -2266,11 +2280,22 @@ function renderSummary(c) {
   c.innerHTML = '';
   const inPaperMode = (S.mode && S.mode.mode === 'paper');
   const otherTab = inPaperMode ? '<b>Author agent</b>' : '<b>Research agent</b>';
-  const desc = el('div', 'rail-agent-desc',
-    '<b>What this is:</b> at-a-glance project status — current mode, ' +
-    'frontier results, recent agent activity. Not an agent — no chat here. ' +
-    `Use the ${otherTab} tab to steer the live agent, or the ` +
-    '<b>Sessions</b> tab to inspect any single run\'s logs.');
+  // Collapsed-by-default rail description (same pattern as the
+  // Research/Author/Sessions rails). The Summary tab is the FIRST tab
+  // the user sees, so an always-on description ate the most vertical
+  // space — collapsing it gives the brief + cards more room. The toggle
+  // is wired by the global delegated handler near the top of this file.
+  const desc = el('div', 'rail-agent-desc collapsed');
+  desc.setAttribute('data-rail-desc', '');
+  desc.innerHTML =
+    '<button class="rail-agent-desc-toggle" data-rail-desc-toggle>' +
+      'what is this view?</button>' +
+    '<div class="rail-agent-desc-body">' +
+      '<b>What this is:</b> at-a-glance project status — current mode, ' +
+      'frontier results, recent agent activity. Not an agent — no chat here. ' +
+      `Use the ${otherTab} tab to steer the live agent, or the ` +
+      '<b>Sessions</b> tab to inspect any single run\'s logs.' +
+    '</div>';
   c.append(desc);
   const brief = el('div', 'brief'); brief.id = 'brief';
   c.append(brief);
