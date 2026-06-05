@@ -499,10 +499,27 @@ async function pollResearchHealth() {
     const pill = document.getElementById('research-health');
     if (!pill) return;
     const state = s.state || 'healthy';
-    const labels = { healthy: 'Healthy', nagged: 'Nagged',
-                     stalled: 'Stalled', looping: 'Looping', dry: 'Dry' };
+    // BUG FIX: this labels map was missing 'needs_direction' and
+    // 'degraded', so when stuck_detector returned those states the
+    // pill silently fell back to "Healthy" — the user saw a green
+    // pill while the modal correctly showed needs_direction. Every
+    // state the backend can emit MUST have a label here, otherwise
+    // the dashboard lies to the user.
+    const labels = {
+      healthy:         'Healthy',
+      nagged:          'Nagged',
+      stalled:         'Stalled',
+      looping:         'Looping',
+      dry:             'Dry',
+      needs_direction: 'Needs direction',
+      degraded:        'Degraded',
+    };
     pill.className = 'pill rh-pill rh-' + state;
-    pill.innerHTML = '<span class="dot"></span>' + (labels[state] || 'Healthy');
+    // Default to the literal state name (not 'Healthy') for any
+    // unknown state so a new backend state is at least visible
+    // instead of silently hidden.
+    pill.innerHTML = '<span class="dot"></span>'
+      + (labels[state] || state);
     pill.title = (s.reason || 'Research loop is healthy.')
       + '  (click for details)';
   };

@@ -57,6 +57,12 @@ button{cursor:pointer}
 .rh-pill.rh-nagged{background:#f59e0b22;color:#fbbf24}
 .rh-pill.rh-looping{background:#f59e0b22;color:#fbbf24}
 .rh-pill.rh-dry{background:#f59e0b22;color:#fbbf24}
+/* needs_direction: agent has correctly stopped duplicating but the
+   queue is empty — this is INFO not a problem; show blue, not amber.
+   Telling the user "click into the agent terminal and give it a
+   directive" is action-oriented, not panic. */
+.rh-pill.rh-needs_direction{background:#3b82f622;color:#60a5fa}
+.rh-pill.rh-degraded{background:#f59e0b22;color:#fbbf24}
 .rh-pill.rh-stalled{background:#f43f5e22;color:#f87171;
   animation:rh-pulse 1.6s infinite}
 @keyframes rh-pulse{
