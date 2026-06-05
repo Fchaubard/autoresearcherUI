@@ -519,34 +519,39 @@ def compute_state() -> dict:
     details["kept_novel_window"] = DRY_WINDOW
 
     if coll > LOOPING_COLLISION_RATE:
-        # Pick which sub-state actually applies. Order matters: if the
-        # agent is holding AND not rejecting we ALWAYS report
-        # needs_direction (the agent isn't the problem, the mandate is).
-        if recent_rejections == 0 and agent_state == "holding":
+        # Pick which sub-state actually applies. The recent-rejection
+        # signal (last hour) ALWAYS dominates the historical collision
+        # rate (last 20 runs across all of time): if the agent has
+        # STOPPED launching duplicates, the system isn't "looping"
+        # even if it spent the last 30 minutes looping before stopping.
+        # That distinction is the whole point of the
+        # needs_direction state.
+        if recent_rejections == 0:
+            # No recent dup launches — agent has stopped (whether the
+            # tmux pane reads "holding", is offline, or is empty).
+            # Historical collision rate is stale; show needs_direction.
+            tail = (" Agent pane suggests it's holding."
+                    if agent_state == "holding" else "")
             reasons.append((NEEDS_DIRECTION,
-                "Agent is holding — it has no novel directive to run. "
+                "Agent has stopped launching duplicate configs. "
+                "Historical collision rate was "
+                f"{int(coll * 100)}% but no novelty-gate rejection "
+                f"in the last {RECENT_REJECTION_WINDOW_SEC // 60} min. "
                 "Provide a new directive via the agent terminal "
-                "(right rail) or pause research."))
-        elif recent_rejections > 0 and novel > 0:
+                "(right rail) or pause research." + tail))
+        elif novel > 0:
             reasons.append((DEGRADED,
                 f"Agent is launching some novel configs but the "
                 f"novelty gate is also rejecting duplicates "
                 f"({recent_rejections} in the last "
                 f"{RECENT_REJECTION_WINDOW_SEC // 60} min)."))
-        elif recent_rejections > 0:
+        else:
             reasons.append((LOOPING,
                 f"{int(coll * 100)}% of the last {LOOPING_WINDOW} "
                 f"finished runs are duplicate configurations AND the "
                 f"agent is still trying to launch dups "
                 f"({recent_rejections} novelty-gate rejections in the "
                 f"last {RECENT_REJECTION_WINDOW_SEC // 60} min)."))
-        else:
-            # Defensive: high collision rate but no recent rejections
-            # AND no hold cue. Agent might be wedged silently — keep
-            # the original looping label so the user investigates.
-            reasons.append((LOOPING,
-                f"{int(coll * 100)}% of the last {LOOPING_WINDOW} "
-                f"finished runs are duplicate configurations."))
     else:
         # Collision rate is fine — but we may still want to surface
         # needs_direction if the agent is explicitly holding (GPUs
