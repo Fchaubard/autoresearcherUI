@@ -54,6 +54,11 @@ button{cursor:pointer}
    The pill polls /api/research_health every 8s and updates in place. */
 .rh-pill{transition:background .25s,color .25s}
 .rh-pill.rh-healthy{background:#22c55e1f;color:var(--ok)}
+/* setting_up: brand-new project, agent is mid-SOP (scaffolding +
+   preflight). Render as cyan/teal — "info, working" — distinct from
+   the green of "healthy + has data" so the operator can tell at a
+   glance that the loop is still spinning up. */
+.rh-pill.rh-setting_up{background:#06b6d422;color:#22d3ee}
 .rh-pill.rh-nagged{background:#f59e0b22;color:#fbbf24}
 .rh-pill.rh-looping{background:#f59e0b22;color:#fbbf24}
 .rh-pill.rh-dry{background:#f59e0b22;color:#fbbf24}

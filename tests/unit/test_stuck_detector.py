@@ -236,6 +236,52 @@ def test_compute_state_returns_well_formed_payload(arui_env, db_session):
     from backend.app import stuck_detector
     snap = stuck_detector.compute_state()
     assert "state" in snap and "details" in snap and "reason" in snap
-    assert snap["state"] in {"healthy", "nagged", "stalled",
-                               "looping", "dry"}
+    assert snap["state"] in {"healthy", "setting_up", "nagged", "stalled",
+                               "looping", "dry", "needs_direction"}
     assert isinstance(snap["details"], dict)
+
+
+# ─────────────────────────── setting_up ───────────────────────────────
+
+
+def test_setting_up_when_onboarded_with_no_runs_and_unblessed(
+        arui_env, db_session, make_project):
+    """Operator just finished onboarding (Project row has a purpose)
+    AND no runs have been launched yet AND preflight hasn't blessed:
+    that is the SOP phase, not 'needs_direction'."""
+    from backend.app import stuck_detector
+    make_project(purpose=("Investigate whether SPSA gradient noise floors "
+                          "improve over Adam in toy MLPs."))
+    snap = stuck_detector.compute_state()
+    assert snap["state"] == "setting_up", snap
+    assert "scaffold" in snap["reason"].lower() \
+        or "preflight" in snap["reason"].lower()
+
+
+def test_setting_up_falls_back_to_healthy_when_blessed(
+        arui_env, db_session, make_project):
+    """Once preflight is blessed and the first run hasn't yet started,
+    the setting_up signal must stop firing (we don't want the cyan pill
+    sticking around forever on a stalled-pre-launch project)."""
+    import os
+    from backend.app import stuck_detector
+    from backend.app.models import Setting
+    make_project(purpose="Some real research question that justifies SOP.")
+    db_session.add(Setting(key="preflight_blessed",
+                           value={"blessed": True,
+                                  "at": _iso(seconds_ago=10)}))
+    db_session.commit()
+    snap = stuck_detector.compute_state()
+    # With bless set + no runs + no holding cue, the detector falls
+    # through to healthy (nothing wrong, just waiting on launch).
+    assert snap["state"] in ("healthy", "needs_direction"), snap
+
+
+def test_setting_up_skipped_when_no_project_onboarded(arui_env, db_session):
+    """Fresh DB, NO Project row at all — must stay healthy. The
+    setting_up state should only ever appear *after* onboarding.
+    This protects the marketing-screen / pre-onboarding view from
+    showing a misleading cyan 'Setting up' pill."""
+    from backend.app import stuck_detector
+    snap = stuck_detector.compute_state()
+    assert snap["state"] == "healthy", snap

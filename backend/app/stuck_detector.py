@@ -65,6 +65,7 @@ from .models import ChatMessage, Event, Run, Setting
 # The user-visible state names in worst-first order. ``healthy`` is the
 # absence of every signal; the other states are emitted by compute_state.
 HEALTHY = "healthy"
+SETTING_UP = "setting_up"             # info — agent is mid-SOP, healthy
 NEEDS_DIRECTION = "needs_direction"   # info, NOT a problem to fix
 NAGGED = "nagged"
 STALLED = "stalled"
@@ -93,7 +94,7 @@ COMPLETE = "complete"
 # conclusion-state row says so. They are NOT meant to lose to a stale
 # nagged/looping signal: when the agent has declared done, that is the
 # foreground story.
-_SEVERITY = {HEALTHY: 0, NEEDS_DIRECTION: 0,
+_SEVERITY = {HEALTHY: 0, SETTING_UP: 0, NEEDS_DIRECTION: 0,
              AWAITING_COMPLETION_REVIEW: 0, COMPLETE: 0,
              NAGGED: 1, LOOPING: 2, DEGRADED: 2, DRY: 3, STALLED: 4}
 
@@ -130,6 +131,31 @@ _HOLD_KEYWORDS = (
     "standing by",
     "idle — ",
     "idle--",
+)
+
+# Keywords that indicate the agent is in the SETUP phase — scaffolding code,
+# running preflight checks, requesting bless. This is a NORMAL state for a
+# brand-new project and must NOT trip needs_direction (no runs yet but the
+# agent is actively working, so the operator shouldn't be told to "provide
+# a directive"). Detected via tmux pane content because the project's
+# directives.jsonl and runs table are both empty at this stage.
+_SETUP_KEYWORDS = (
+    "preflight",
+    "static overfit",
+    "static-batch overfit",
+    "uniform init",
+    "init probe",
+    "scaffold",
+    "scaffolding",
+    "council bless",
+    "request bless",
+    "writing train.py",
+    "writing prepare.py",
+    "writing program.md",
+    "writing ideas.md",
+    "writing directives",
+    "build m_bad",                  # current pod's task-list line
+    "passing preflight",
 )
 
 # How many trailing lines of the agent pane to look at when classifying
@@ -397,6 +423,12 @@ def _classify_agent_state(pane_text: str) -> str:
     if not pane_text:
         return "unknown"
     txt = pane_text.lower()
+    # Check setup keywords FIRST — a pane that mentions both 'preflight'
+    # (setup) and 'holding' (hold) is in the middle of setup and the setup
+    # signal wins. The compute_state logic also uses 0-runs as a guard.
+    for kw in _SETUP_KEYWORDS:
+        if kw in txt:
+            return "setting_up"
     for kw in _HOLD_KEYWORDS:
         if kw in txt:
             return "holding"
@@ -542,6 +574,77 @@ def compute_state() -> dict:
     # prompt tells the agent to read missing_evidence and upsert a new
     # SCIENCE directive.
 
+    # ── setting_up short-circuit: brand-new project where the agent is
+    # mid-SOP (scaffolding train.py, running preflight, requesting
+    # bless). The dashboard would otherwise flag "needs_direction" because
+    # there are zero kept runs AND the agent's tmux pane might match
+    # generic hold cues — but the agent IS working, this is the normal
+    # post-onboarding spinup. We require BOTH:
+    #   • zero finished runs (project has never produced output), AND
+    #   • either preflight is not blessed yet, OR the agent pane
+    #     contains a setup keyword (init_probe.py, scaffolding,
+    #     "passing preflight", etc).
+    # This must run BEFORE the rejection/looping/needs_direction logic
+    # below — otherwise a fresh project trips needs_direction on its
+    # first hour and the operator sees a misleading "Provide a directive"
+    # message while the agent is actually building the repo.
+    try:
+        from .models import Run as _Run, Setting as _Setting, Project as _Project
+        _db = SessionLocal()
+        try:
+            total_kept = (_db.query(_Run)
+                          .filter(_Run.status.in_(("kept_novel",
+                                                   "kept_replication",
+                                                   "kept",
+                                                   "running"))).count())
+            total_any = _db.query(_Run).count()
+            # preflight bless state: api.py persists into Setting rows.
+            bless_row = (_db.query(_Setting)
+                         .filter(_Setting.key == "preflight_blessed").first())
+            blessed = bool(bless_row and bless_row.value
+                            and bless_row.value.get("blessed"))
+            # "Has the operator actually onboarded?" — without a Project
+            # row with a purpose, the agent isn't doing anything and
+            # there's nothing to set up. Fresh-DB unit tests rely on
+            # this guard returning "healthy" (the default reason).
+            proj_row = _db.query(_Project).first()
+            has_onboarded = bool(proj_row
+                                  and (proj_row.purpose or "").strip())
+        finally:
+            _db.close()
+    except Exception:                                       # noqa: BLE001
+        total_kept = total_any = 0
+        blessed = False
+        has_onboarded = False
+
+    # Peek at agent pane EARLY so the setting_up branch can use it.
+    _pane_text_early = _agent_pane_text()
+    _agent_state_early = _classify_agent_state(_pane_text_early)
+    details["agent_state"] = _agent_state_early    # may be overwritten below
+
+    # The setting_up gate trips in two cases:
+    #   (a) Truly fresh: onboarded but no runs at all yet — definitely
+    #       in SOP.
+    #   (b) Pre-bless setup phase: agent pane explicitly shows setup
+    #       activity (init_probe / overfit_smoke / scaffolding /
+    #       preflight) AND preflight hasn't been blessed yet. The agent
+    #       may have launched probe runs to verify the code works —
+    #       those count as runs but are NOT real experiments. We do not
+    #       want to call this "needs_direction" while the agent is
+    #       actively building the rig.
+    if has_onboarded and not blessed and (
+            total_any == 0
+            or _agent_state_early == "setting_up"):
+        details["total_runs"] = total_any
+        details["preflight_blessed"] = blessed
+        return {"state": SETTING_UP,
+                "details": details,
+                "reason": ("Agent is in initial SOP — scaffolding code "
+                           "and running preflight checks. This typically "
+                           "takes 5–15 minutes; the dashboard will turn "
+                           "green once preflight is blessed and the "
+                           "first real experiment is launched.")}
+
     # ── stalled / nagged: count consecutive reviews on the same top dir.
     top_sig = _top_idea_signature()
     streak = _consecutive_review_streak(top_sig)
@@ -585,8 +688,10 @@ def compute_state() -> dict:
     details["collision_rate"] = round(coll, 3)
     details["collision_window"] = LOOPING_WINDOW
 
-    pane_text = _agent_pane_text()
-    agent_state = _classify_agent_state(pane_text)
+    # Reuse the agent_state we computed for the setting_up gate (one
+    # tmux capture-pane is plenty per tick).
+    pane_text = _pane_text_early
+    agent_state = _agent_state_early
     details["agent_state"] = agent_state
 
     recent_rejections = _recent_novelty_rejections()

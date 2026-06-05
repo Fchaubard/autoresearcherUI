@@ -507,6 +507,7 @@ async function pollResearchHealth() {
     // the dashboard lies to the user.
     const labels = {
       healthy:         'Healthy',
+      setting_up:      'Setting up',
       nagged:          'Nagged',
       stalled:         'Stalled',
       looping:         'Looping',
