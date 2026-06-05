@@ -4076,8 +4076,19 @@ async function renderLatex(c) {
       '</div>' +
       // Saved-reviews history: every council review the user has ever
       // run is preserved here so a dismissed proposal isn't lost. The
-      // _renderPaperProposalsHistory() call below fills this in.
-      '<div class="pp-hist" id="paper-proposals-history"></div>' +
+      // empty-state header is rendered SYNCHRONOUSLY here so the
+      // section is always visible — even if renderLatex() is called
+      // a second time (SSE event arrival, popstate, etc.) before the
+      // async _renderPaperProposalsHistory() AJAX completes, the user
+      // still sees the "Past paper proposals" feature exists.
+      // _renderPaperProposalsHistory() below overlays real data once
+      // /api/paper/proposals resolves. CSS rule `.pp-hist:empty{display:none}`
+      // would otherwise hide an empty container, masking the feature.
+      '<div class="pp-hist" id="paper-proposals-history">' +
+        '<div class="pp-hist-h">Past paper proposals' +
+          '<span class="pp-hist-count">…</span></div>' +
+        '<div class="pp-hist-sub">Loading saved council reviews…</div>' +
+      '</div>' +
       '</div>';
     const cta = c.querySelector('#paper-cta');
     if (cta) cta.onclick = openPaperProposal;
