@@ -1490,16 +1490,39 @@ def research_health():
                     collision_rate, kept_novel_in_window, ...},
        "reason": "<one-line human summary>"}
 
-    Cheap to call — pure DB reads + one workspace file read. Used by
-    the dashboard's "Research Health" pill which polls every few
-    seconds and paints green / amber / red depending on the state.
-    See backend/app/stuck_detector.py for the trigger conditions
-    (RESEARCH_IMPROVEMENT_PLAN.md item #8)."""
+    DEPRECATED (PR 6 of state-control rewrite, 2026-06-05). Use
+    ``GET /api/health`` — this endpoint now wraps the new
+    HealthSnapshot in the legacy ``{state, details, reason}`` shape so
+    older frontends keep working until the next session reload picks
+    up the new app.js. The state column maps phase → legacy enum:
+
+        bootstrap → "setting_up"
+        watching_runs + no issues → "healthy"
+        any issue → "needs_direction"
+    """
     try:
-        from . import stuck_detector
-        return stuck_detector.compute_state()
+        from .health import service as _hs
+        snap = _hs.compute()
+        phase = snap.phase.phase
+        issues = snap.issues or []
+        top = issues[0] if issues else None
+        if phase == "bootstrap":
+            state = "setting_up"
+        elif top is not None:
+            state = "needs_direction"
+        else:
+            state = "healthy"
+        return {
+            "state": state,
+            "details": {
+                "phase": phase,
+                "phase_fallback_used": snap.phase.fallback_used,
+                "n_issues": len(issues),
+                "issues": [i.as_dict() for i in issues[:5]],
+            },
+            "reason": snap.summary,
+        }
     except Exception as e:                                  # noqa: BLE001
-        # Never 500 the header pill — degrade to healthy on error.
         return {"state": "healthy",
                 "details": {"error": str(e)[:200]},
                 "reason": "health probe failed; defaulting to healthy"}

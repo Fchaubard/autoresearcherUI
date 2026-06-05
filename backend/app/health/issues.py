@@ -163,12 +163,36 @@ def directives_ignored(db: Session, *,
     trigger the dreaded ESCALATION_HALT; in the new design it's just
     a warning issue with a "view council history" action.
     """
-    # Reuse the deterministic streak count from stuck_detector for now —
-    # PR 7 will move it into a council helper.
+    # Streak count is computed directly from Event rows now (PR 6 of
+    # state-control rewrite removed stuck_detector). We look for the
+    # most recent ``strategic_review`` Events tagged with a directive
+    # id and count consecutive "implemented=NO" entries.
     try:
-        from .. import stuck_detector
-        top_sig = stuck_detector._top_idea_signature()
-        streak = stuck_detector._consecutive_review_streak(top_sig)
+        from ..models import Event
+        rows = (db.query(Event)
+                .filter(Event.type == "strategic_review")
+                .order_by(Event.created_at.desc())
+                .limit(20).all())
+        streak = 0
+        top_sig = ""
+        for r in rows:
+            msg = (r.message or "")
+            # Best-effort parse — councils write structured strings here.
+            # Bail if we can't even identify the directive id.
+            if "implemented=NO" not in msg.lower() and \
+                    "unimplemented" not in msg.lower():
+                break
+            # First row sets the signature; mismatch breaks the streak.
+            sig = ""
+            for token in msg.split():
+                if token.startswith("d-") and len(token) >= 6:
+                    sig = token.rstrip(",.;:")
+                    break
+            if not top_sig:
+                top_sig = sig
+            elif sig and sig != top_sig:
+                break
+            streak += 1
     except Exception:                                       # noqa: BLE001
         return None
     if streak < streak_threshold:

@@ -41,15 +41,27 @@ def test_digest_includes_council_health_section_text(
 
 def test_digest_health_status_promotes_to_stalled(
         arui_env, db_session, make_project, monkeypatch):
-    """When stuck_detector says stalled, digest body bolds STALLED."""
-    from backend.app import notify, stuck_detector
+    """When the health service surfaces a critical issue, digest body
+    bolds STALLED. (Updated 2026-06-05 — PR 6 of state-control rewrite
+    routes the digest's council_health snapshot through health.service
+    instead of stuck_detector.)"""
+    from backend.app import notify
+    from backend.app.health import service as _hs, schema as _hsch
     _make_research_project(make_project)
-    # Force compute_state to report stalled.
-    monkeypatch.setattr(stuck_detector, "compute_state",
-        lambda: {"state": "stalled",
-                  "details": {"consecutive_unimplemented_reviews": 12,
-                               "top_directive": "build trusted_eval"},
-                  "reason": "12 ignored reviews"})
+    fake_snap = _hsch.HealthSnapshot(
+        phase=_hsch.Phase(phase="watching_runs",
+                           at="2026-06-05T00:00:00Z",
+                           detail={}, fallback_used=False),
+        summary="12 ignored reviews",
+        issues=[_hsch.Issue(
+            code="directives_ignored",
+            severity=_hsch.SEV_CRITICAL,
+            summary="12 consecutive strategic reviews on same directive",
+            evidence={"streak": 12,
+                       "top_signature": "build trusted_eval"},
+            since="2026-06-05T00:00:00Z")],
+        facts={})
+    monkeypatch.setattr(_hs, "compute", lambda: fake_snap)
     subj, text, html, _images = notify.digest_email(1.0)
     assert "STALLED" in text
     assert "Status:" in html
@@ -93,16 +105,26 @@ def test_council_health_section_renders_above_baseline_cards_html(
 
 def test_stalled_override_forces_send_regardless_of_cadence(
         arui_env, db_session, make_project, monkeypatch):
-    """When state is stalled the scheduler must call send() even though
-    user cadence is 'off'."""
-    from backend.app import notify, stuck_detector
+    """When the health service surfaces a critical issue the scheduler
+    must call send() even though user cadence is 'off'.
+    (Updated 2026-06-05 — PR 6 routes _stalled_override_active through
+    health.service instead of stuck_detector.)"""
+    from backend.app import notify
+    from backend.app.health import service as _hs, schema as _hsch
     _make_research_project(make_project)
-    monkeypatch.setattr(stuck_detector, "compute_state",
-        lambda: {"state": "stalled",
-                  "details": {"consecutive_unimplemented_reviews": 7,
-                               "top_directive": "x"},
-                  "reason": "stalled"})
-    # User explicitly set cadence to off — but stalled overrides it.
+    fake = _hsch.HealthSnapshot(
+        phase=_hsch.Phase(phase="watching_runs",
+                           at="2026-06-05T00:00:00Z",
+                           detail={}, fallback_used=False),
+        summary="stalled",
+        issues=[_hsch.Issue(
+            code="directives_ignored",
+            severity=_hsch.SEV_CRITICAL,
+            summary="7 ignored reviews",
+            evidence={"streak": 7, "top_signature": "x"},
+            since="2026-06-05T00:00:00Z")],
+        facts={})
+    monkeypatch.setattr(_hs, "compute", lambda: fake)
     assert notify._stalled_override_active() is True
 
 

@@ -641,43 +641,45 @@ def _mark_auto_propose_now() -> None:
 
 
 def _last_stuck_state() -> dict:
-    """Read the persisted stuck_detector snapshot Setting row.
-
-    Returns a dict with at least ``state`` and ``at`` keys (or
-    ``{"state": "healthy"}`` if missing). This is what the
-    auto-propose threshold check uses so it sees a consistent
-    state across PI ticks."""
+    """Read the persisted HealthSnapshot Setting row (PR 6 of
+    state-control rewrite). Returns a small legacy-shape dict so the
+    auto-propose pathway in ``_maybe_propose_next_move`` keeps
+    working unchanged."""
     try:
         db = SessionLocal()
         try:
             row = (db.query(Setting)
-                   .filter(Setting.key == "stuck_detector_state").first())
+                   .filter(Setting.key == "health.snapshot").first())
             if row and isinstance(row.value, dict):
-                return dict(row.value)
+                v = row.value
+                phase = (v.get("phase") or {}).get("phase") or ""
+                issues = v.get("issues") or []
+                state = ("setting_up" if phase == "bootstrap"
+                         else ("needs_direction" if issues
+                                else "healthy"))
+                return {"state": state, "at": v.get("at") or ""}
             return {"state": "healthy"}
         finally:
             db.close()
-    except Exception:
+    except Exception:                                       # noqa: BLE001
         return {"state": "healthy"}
 
 
 def _needs_direction_since() -> dt.datetime | None:
-    """When did the system most recently transition INTO needs_direction?
-
-    We use the persisted stuck_detector state row's ``at`` timestamp.
-    The detector overwrites that on every tick (transition or not), so
-    in practice if the state hasn't changed for X minutes ``at`` is the
-    last tick — but the persistent state is only ``needs_direction``
-    while the loop has been in that state, which is the signal we want.
-    """
+    """When did the system most recently enter a non-healthy
+    HealthSnapshot? Used by ``_maybe_propose_next_move`` to wait
+    NEEDS_DIRECTION_IDLE_SEC before nudging the council. Now sourced
+    from ``health.snapshot.at`` rather than the legacy
+    ``stuck_detector_state`` row."""
     try:
         db = SessionLocal()
         try:
             row = (db.query(Setting)
-                   .filter(Setting.key == "stuck_detector_state").first())
+                   .filter(Setting.key == "health.snapshot").first())
             if not row or not isinstance(row.value, dict):
                 return None
-            if row.value.get("state") != "needs_direction":
+            issues = row.value.get("issues") or []
+            if not issues:
                 return None
             at = row.value.get("at")
             if not at:
@@ -686,7 +688,7 @@ def _needs_direction_since() -> dt.datetime | None:
                 str(at).replace("Z", "+00:00"))
         finally:
             db.close()
-    except Exception:
+    except Exception:                                       # noqa: BLE001
         return None
 
 
@@ -838,10 +840,10 @@ def cycle(force: bool = False) -> dict | None:
     # email) when the loop's health worsens. Cheap pure-DB read; never
     # blocks the PI from doing its job below.
     try:
-        from . import stuck_detector
-        stuck_detector.tick()
+        from .health import service as _hs
+        _hs.tick()
     except Exception as e:                                  # noqa: BLE001
-        print(f"[pi] stuck_detector tick failed: {e}", flush=True)
+        print(f"[pi] health tick failed: {e}", flush=True)
     # Idle-too-long auto-propose (Piece #5): when the system has been in
     # ``needs_direction`` for >= 15 minutes AND research is not paused
     # AND no conclusion is in flight, proactively ask the council to

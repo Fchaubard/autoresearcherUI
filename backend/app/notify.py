@@ -1046,8 +1046,39 @@ def _council_health_payload() -> dict:
     """Pull a compute_state() snapshot for the council-health section.
     Never raises into the digest path."""
     try:
-        from . import stuck_detector
-        snap = stuck_detector.compute_state()
+        from .health import service as _hs
+        s = _hs.compute()
+        # Translate HealthSnapshot back into the legacy shape this
+        # digest renderer expects (state / details / reason). PR 6
+        # finished the migration in the API layer; PR 7 will rewrite
+        # this digest section directly against issues + phase.
+        phase = s.phase.phase
+        top = s.issues[0] if s.issues else None
+        if phase == "bootstrap":
+            state = "setting_up"
+        elif top is not None and top.severity >= 2:
+            state = "stalled"
+        elif top is not None and top.severity >= 1:
+            state = "needs_direction"
+        else:
+            state = "healthy"
+        # Surface directive-related evidence so the digest renderer can
+        # still show 'top_directive' and 'consecutive_unimplemented_
+        # reviews' even though those used to come from stuck_detector
+        # details.
+        details = {"n_issues": len(s.issues), "phase": phase}
+        for i in (s.issues or []):
+            if i.code == "directives_ignored":
+                details["consecutive_unimplemented_reviews"] = (
+                    i.evidence.get("streak") or 0)
+                details["top_directive"] = (
+                    i.evidence.get("top_signature")
+                    or i.evidence.get("top_directive_id")
+                    or "(none)")
+                break
+        snap = {"state": state,
+                "reason": (top.summary if top else s.summary),
+                "details": details}
     except Exception as e:                                  # noqa: BLE001
         print(f"[notify] council_health probe failed: {e}", flush=True)
         snap = {"state": "healthy", "details": {}, "reason": ""}
@@ -1727,9 +1758,12 @@ def _stalled_override_active() -> bool:
     regardless of user setting"). Best-effort; degrades to False on any
     error so the scheduler never blocks on a probe."""
     try:
-        from . import stuck_detector
-        snap = stuck_detector.compute_state()
-        return (snap.get("state") == "stalled")
+        # PR 6: replaced stuck_detector with the new health service.
+        # 'stalled' was a stuck_detector state; in the new contract
+        # we treat any critical-severity issue as a stall signal.
+        from .health import service as _hs
+        s = _hs.compute()
+        return any(i.severity >= 2 for i in (s.issues or []))
     except Exception:                                       # noqa: BLE001
         return False
 

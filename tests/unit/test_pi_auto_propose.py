@@ -24,8 +24,23 @@ def _iso(seconds_ago: float = 0) -> str:
 
 
 def _set_stuck(setting_setter, state: str, at: str):
-    setting_setter("stuck_detector_state",
-                   {"state": state, "details": {}, "reason": "", "at": at})
+    """Plant a fake HealthSnapshot in the Setting that pi reads.
+    (Updated 2026-06-05 — PR 6 of state-control rewrite moved the
+    source of truth from `stuck_detector_state` to `health.snapshot`.)
+    A non-empty issues[] is treated as a not-healthy state by
+    pi._last_stuck_state."""
+    issues = []
+    if state == "needs_direction":
+        issues = [{"code": "idle_gpus", "severity": 1,
+                   "summary": "stub idle", "evidence": {},
+                   "since": at, "actions": []}]
+    setting_setter("health.snapshot",
+                   {"phase": {"phase": "watching_runs", "at": at,
+                                "detail": {}, "fallback_used": False},
+                    "summary": "stub",
+                    "issues": issues,
+                    "facts": {},
+                    "at": at})
 
 
 def test_no_propose_when_below_threshold(arui_env, db_session,
