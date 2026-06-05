@@ -960,6 +960,54 @@ body.resizing{user-select:none}
 .set-wd-param input{background:#0a0c0f;border:1px solid var(--border);
   border-radius:6px;padding:4px 7px;color:#cdd3da;font-family:var(--mono);
   font-size:11px}
+/* Paper status bar (2026-06-05 paper-mode rebuild). Sticks at the top
+   of the Write-the-paper view; shows phase pill + progress strip +
+   issues list with inline action buttons (Approve plan, etc). */
+.paper-status-bar{display:flex;flex-wrap:wrap;align-items:center;
+  gap:14px;padding:10px 16px;margin-bottom:8px;
+  background:#0a0c0f;border:1px solid #23272E;border-radius:10px}
+.paper-status-bar.psb-warn{border-color:#F59E0B66}
+.paper-status-bar.psb-crit{border-color:#F87171AA;
+  background:#F4737108}
+.psb-pill{display:inline-flex;align-items:center;gap:6px;
+  padding:4px 10px;background:#6366F122;color:#A5B4FC;
+  border-radius:14px;font-weight:600;font-size:13px}
+.psb-pill .dot{width:7px;height:7px;background:#A5B4FC;
+  border-radius:50%;display:inline-block}
+.psb-progress{font-size:12.5px;color:#C7CAD0;font-family:var(--mono);
+  flex:1 1 auto}
+.psb-progress b{color:#E6E8EB}
+.psb-issues{flex-basis:100%;display:flex;flex-direction:column;gap:6px}
+.psb-issue{font-size:12.5px;color:#C7CAD0}
+.psb-issue-sev{display:inline-block;padding:1px 6px;border-radius:6px;
+  font-size:9.5px;font-weight:700;margin-right:6px;letter-spacing:0.5px;
+  background:#1b1f25;color:#9BA1A8}
+.psb-sev-1 .psb-issue-sev{background:#F59E0B22;color:#FBBF24}
+.psb-sev-2 .psb-issue-sev{background:#F4737122;color:#F87171}
+
+/* Novelty narrative modal */
+.modal-novelty{max-width:760px}
+.nv-rating{font-size:12px;font-weight:700;letter-spacing:0.5px;
+  margin:0 0 8px;display:flex;align-items:center;gap:6px}
+.nv-rating .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.nv-one{font-size:14px;color:#E6E8EB;line-height:1.45;margin:0 0 14px}
+.nv-summary{font-size:12.5px;color:#C7CAD0;line-height:1.55;
+  margin:0 0 14px;border-left:2px solid #2a2f37;padding-left:10px}
+.nv-claims-hd{font-size:11.5px;color:#9BA1A8;text-transform:uppercase;
+  letter-spacing:0.7px;margin:14px 0 6px}
+.nv-claim{background:#0c0e12;border:1px solid var(--border);
+  border-radius:8px;padding:10px 12px;margin-bottom:8px}
+.nv-claim-t{font-size:13px;font-weight:600;color:#E6E8EB;margin:0 0 4px}
+.nv-claim-st{font-size:10px;color:#A5B4FC;background:#6366F122;
+  padding:1px 6px;border-radius:6px;margin-left:6px;
+  text-transform:uppercase;letter-spacing:0.5px;font-weight:700}
+.nv-rationale{font-size:12px;color:#C7CAD0;line-height:1.5;margin:6px 0}
+.nv-block{font-size:11.5px;color:#9BA1A8;margin:4px 0}
+.nv-block ul{margin:4px 0 0 14px;padding:0}
+.nv-block li{margin:3px 0;color:#C7CAD0}
+.nv-relevance{font-size:11px;color:#9BA1A8;margin-top:2px;
+  padding-left:8px;border-left:2px solid #2a2f37}
+
 .modal-actions{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 12px}
 .modal-actions a.btn{text-decoration:none;display:inline-flex;
   align-items:center}

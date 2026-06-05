@@ -2790,6 +2790,182 @@ def get_mode(db: Session = Depends(get_session)):
     }
 
 
+# ─────────────────────── Paper-mode rebuild (2026-06-05) ─────────────────
+# Phase-machine endpoints (paper_phase.py). The Author Agent posts to
+# /paper/phase at every transition; the Write-the-paper view polls
+# /paper/status for the assembled snapshot.
+
+
+@router.get("/paper/status")
+def paper_status():
+    try:
+        from . import paper_phase
+        return paper_phase.get_status_overview()
+    except Exception as e:                                  # noqa: BLE001
+        # Never 500 the write-paper view — return a safe fallback.
+        return {
+            "phase": {"phase": "paper.error", "at": "",
+                       "actor": "system", "detail": {"reason": str(e)[:240]},
+                       "fallback_used": True},
+            "phase_label": "Error",
+            "summary": f"status unavailable: {e!s}"[:240],
+            "progress": {},
+            "gate": {"plan": {"status": "pending"}},
+            "issues": [],
+            "novelty_available": False,
+        }
+
+
+@router.post("/paper/phase")
+async def post_paper_phase(request: Request):
+    body = await request.json()
+    phase = (body.get("phase") or "").strip()
+    if not phase:
+        return {"ok": False, "error": "phase required"}
+    actor = body.get("actor") or "author"
+    progress = body.get("progress")
+    detail = body.get("detail") or {}
+    try:
+        from . import paper_phase as pp
+        return pp.set_phase(phase, actor=actor, progress=progress,
+                              detail=detail)
+    except Exception as e:                                  # noqa: BLE001
+        return {"ok": False, "error": str(e)[:240]}
+
+
+@router.post("/paper/plan/request_approval")
+async def paper_plan_request_approval(request: Request):
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:                                       # noqa: BLE001
+        pass
+    note = body.get("note") or ""
+    from . import paper_phase as pp
+    pp.request_plan_approval(note)
+    pp.set_phase("paper.operator_review", actor="author",
+                  detail={"note": note})
+    return {"ok": True}
+
+
+@router.post("/paper/plan/approve")
+async def paper_plan_approve(request: Request):
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:                                       # noqa: BLE001
+        pass
+    note = body.get("note") or ""
+    by = body.get("by") or "operator"
+    from . import paper_phase as pp
+    out = pp.approve_plan(by=by, note=note)
+    pp.set_phase("paper.run_ablations", actor="operator",
+                  detail={"approved_by": by, "queued": out["queued_count"]})
+    return out
+
+
+@router.post("/paper/plan/request_changes")
+async def paper_plan_request_changes(request: Request):
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:                                       # noqa: BLE001
+        pass
+    note = body.get("note") or ""
+    by = body.get("by") or "operator"
+    from . import paper_phase as pp
+    out = pp.request_changes(by=by, note=note)
+    pp.set_phase("paper.plan_ablations", actor="operator",
+                  detail={"requested_by": by, "note": note})
+    return out
+
+
+@router.get("/paper/novelty")
+def paper_novelty():
+    """Return the structured novelty narrative that the 'View evidence'
+    modal renders. Schema in paper_phase docstring + the
+    consult_paper_openai.md plan."""
+    db = SessionLocal()
+    try:
+        from .models import Setting as _Setting
+        row = (db.query(_Setting)
+               .filter(_Setting.key == "paper.novelty_v1").first())
+        if row and isinstance(row.value, dict):
+            return row.value
+        # Bootstrap a minimal-but-non-empty payload from the council's
+        # last accepted proposal so the modal isn't blank even before
+        # the author runs the lit/novelty summarizer.
+        from .models import PaperProposal as _PP
+        prop = (db.query(_PP)
+                .filter(_PP.status == "accepted")
+                .order_by(_PP.created_at.desc()).first())
+        if prop:
+            return _bootstrap_novelty_from_proposal(prop)
+        return {
+            "generated_at": "",
+            "overall": {
+                "novelty_rating": "unclear",
+                "one_sentence": ("Novelty narrative not yet generated. "
+                                  "The Author Agent will produce one "
+                                  "during lit_review."),
+                "summary_md": "",
+                "risks_md": "",
+            },
+            "claims": [],
+        }
+    finally:
+        db.close()
+
+
+def _bootstrap_novelty_from_proposal(prop) -> dict:
+    """Tiny fallback so 'View evidence' renders SOMETHING (council's
+    own summary + cited run_ids) before the proper lit_agent run."""
+    import json as _json
+    summary = (prop.summary or "")[:1200]
+    try:
+        ev = _json.loads(prop.evidence_run_ids_json or "[]")
+    except Exception:                                       # noqa: BLE001
+        ev = []
+    return {
+        "generated_at": prop.created_at or "",
+        "overall": {
+            "novelty_rating": "suggestive",
+            "one_sentence": summary[:280],
+            "summary_md": summary,
+            "risks_md": "",
+        },
+        "claims": [{
+            "claim_id": "bootstrap",
+            "title": "Council-approved conclusion",
+            "status": "active",
+            "evidence_strength": "strong",
+            "novelty_rationale_md": summary,
+            "supporting_runs": [{"run_id": r,
+                                  "metric_key": "",
+                                  "best_value": None,
+                                  "higher_is_better": False,
+                                  "dataset": "",
+                                  "model_size": ""}
+                                 for r in ev],
+            "counterevidence_runs": [],
+            "related_citations": [],
+        }],
+    }
+
+
+@router.post("/paper/novelty/rebuild")
+async def paper_novelty_rebuild():
+    """Force-regenerate the novelty narrative via lit_agent.
+    Idempotent; safe to call repeatedly."""
+    try:
+        from . import lit_agent
+        if hasattr(lit_agent, "summarize_novelty"):
+            return {"ok": True, "novelty": lit_agent.summarize_novelty()}
+    except Exception as e:                                  # noqa: BLE001
+        return {"ok": False, "error": str(e)[:240]}
+    return {"ok": False, "error": "summarize_novelty not implemented"}
+
+
 @router.post("/paper/proposal/start")
 async def paper_proposal_start():
     """Create a paper_proposal row, kick off council assessments
@@ -3114,6 +3290,20 @@ async def paper_enter(request: Request):
     import threading as _th
     _th.Thread(target=_paper.kickoff_lit_discover, daemon=True,
                name="lit-discover-initial").start()
+    # Seed the phase machine so the Write-the-paper view has a non-
+    # empty status from the very first poll. The Author Agent will
+    # override this within its first prompt cycle.
+    try:
+        from . import paper_phase as _pp
+        _pp.set_phase("paper.whittle_claims", actor="system",
+                       progress={
+                           "claims": {"active": claims_added},
+                           "lit": {"citations": 0, "approved": 0,
+                                    "pending": 0},
+                       },
+                       detail={"trigger": "paper.enter"})
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[paper] phase seed failed: {e}", flush=True)
     return {"status": "entered_paper_mode", "author_agent": ar,
             "claims_added": claims_added, "runs_added": runs_added}
 

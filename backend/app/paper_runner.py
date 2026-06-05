@@ -67,7 +67,14 @@ def _loop() -> None:
 
 
 def _tick() -> None:
-    """One scheduling pass."""
+    """One scheduling pass.
+
+    NOTE on the operator gate (2026-06-05 paper rebuild): the gate is
+    enforced via ``Run.status`` itself — the Author Agent creates ablation
+    runs with status='proposed' and ``paper_phase.approve_plan`` flips
+    them to 'queued' atomically with the gate. This loop only acts on
+    'queued' rows, so no explicit gate check is needed here.
+    """
     db = SessionLocal()
     try:
         # 1. Find ready-to-run paper_runs (queued + all dependencies done).

@@ -667,13 +667,7 @@ function renderCompleteBanner(health) {
   const btnWrite = document.getElementById('cb-write');
   if (btnWrite) btnWrite.onclick = onWriteThePaperClick;
   const btnEv = document.getElementById('cb-evidence');
-  if (btnEv) btnEv.onclick = () => {
-    const lines = evidence.length
-      ? evidence.map(r => '  - ' + r).join('\n')
-      : '(no run_ids cited)';
-    aruiAlert('Cited evidence runs:\n' + lines,
-      { title: 'Evidence', okText: 'Close' });
-  };
+  if (btnEv) btnEv.onclick = openNoveltyModal;
   const btnRej = document.getElementById('cb-reject');
   if (btnRej) btnRej.onclick = onRejectConclusionClick;
 }
@@ -684,16 +678,107 @@ function escapeHtml(s) {
 }
 
 async function onWriteThePaperClick() {
-  // Enter paper mode + jump to the write-paper view. Paper mode entry
-  // is idempotent (the backend tolerates re-enter) so a double click
-  // doesn't break anything.
+  // Enter paper mode + jump to the write-paper view. Hardened
+  // 2026-06-05 after Francois reported the click "doesnt take you
+  // anywhere": (a) navigate FIRST so the user always lands on the
+  // paper view even if /paper/enter stalls, (b) use a real URL change
+  // (history pushState) instead of just location.hash so the route
+  // dispatcher reliably fires, (c) keep the POST in flight so the
+  // backend spawns the Author Agent.
+  try {
+    history.pushState(null, '', '/write-paper');
+  } catch (e) {
+    try { location.hash = '#/write-paper'; } catch (_) {}
+  }
+  // Dispatch a popstate so the SPA router repaints with the new path.
+  try { window.dispatchEvent(new PopStateEvent('popstate')); }
+  catch (e) {}
+  // Fire-and-forget paper-mode entry — the page will repaint as soon
+  // as /api/paper/status changes (the renderLatex polling picks it up).
   try {
     await post('/paper/enter', {});
-  } catch (e) { /* paper module may not be present; just navigate */ }
-  // Hash-based routing matches the rest of the app.
-  if (typeof location !== 'undefined') {
-    try { location.hash = '#/write-paper'; } catch (e) {}
+  } catch (e) { /* idempotent; the view will reflect state on poll */ }
+}
+
+async function openNoveltyModal() {
+  // PR-paper-rebuild: structured novelty narrative instead of a flat
+  // list of run IDs. Reads /api/paper/novelty which the lit_agent
+  // populates (and which falls back to a bootstrap payload built from
+  // the council's most recent accepted proposal).
+  const sc = el('div', 'mscrim');
+  const m = el('div', 'modal modal-novelty');
+  m.innerHTML = '<div class="skel" style="height:300px"></div>';
+  sc.append(m); document.body.append(sc);
+  sc.onclick = e => { if (e.target === sc) sc.remove(); };
+  let data;
+  try { data = await api('/paper/novelty'); }
+  catch (e) {
+    m.innerHTML = '<p>Could not load novelty narrative: '
+      + esc(String(e)) + '</p>';
+    return;
   }
+  const overall = data.overall || {};
+  const claims = data.claims || [];
+  const rating = (overall.novelty_rating || 'unclear');
+  const ratingColor = ({high: '#34D399', medium: '#FBBF24',
+    suggestive: '#60A5FA', low: '#F87171',
+    unclear: '#9BA1A8'}[rating] || '#9BA1A8');
+  let html =
+    '<div class="modal-hd">' +
+      '<h2>Why this is worth a paper</h2>' +
+      '<button class="iconbtn" id="nv-x">✕</button>' +
+    '</div>' +
+    '<div class="nv-rating" style="color:' + ratingColor + '">' +
+      '<span class="dot" style="background:' + ratingColor + '"></span> ' +
+      'Novelty: ' + esc(rating.toUpperCase()) +
+    '</div>' +
+    '<p class="nv-one">' + esc(overall.one_sentence || '') + '</p>' +
+    (overall.summary_md
+      ? '<div class="nv-summary">'
+        + esc(overall.summary_md).replace(/\n/g, '<br/>') + '</div>'
+      : '') +
+    '<div class="nv-claims-hd">Claims (' + claims.length + ')</div>';
+  for (const c of claims) {
+    const supp = c.supporting_runs || [];
+    const cites = c.related_citations || [];
+    html += '<div class="nv-claim">' +
+      '<div class="nv-claim-t">' + esc(c.title || '(untitled)') +
+      ' <span class="nv-claim-st">' + esc(c.evidence_strength || '?') +
+      '</span></div>' +
+      (c.novelty_rationale_md
+        ? '<div class="nv-rationale">'
+          + esc(c.novelty_rationale_md).replace(/\n/g, '<br/>')
+          + '</div>' : '') +
+      (supp.length
+        ? '<div class="nv-block">Supporting runs:<ul>' + supp.map(r =>
+            '<li><code>' + esc(r.run_id || '') + '</code>'
+            + (r.metric_key
+              ? (' &middot; ' + esc(r.metric_key) + '='
+                  + (r.best_value != null
+                      ? Number(r.best_value).toFixed(4) : '?'))
+              : '')
+            + (r.dataset ? ' &middot; ' + esc(r.dataset) : '')
+            + '</li>').join('') + '</ul></div>'
+        : '') +
+      (cites.length
+        ? '<div class="nv-block">Related work:<ul>' + cites.map(k =>
+            '<li><b>' + esc(k.title || k.key || '?') + '</b>'
+            + (k.year ? ' (' + esc(k.year) + ')' : '')
+            + (k.differs_from_us_md
+              ? '<div class="nv-relevance">'
+                + esc(k.differs_from_us_md) + '</div>' : '')
+            + '</li>').join('') + '</ul></div>'
+        : '') +
+      '</div>';
+  }
+  if (!claims.length) {
+    html +=
+      '<p class="muted">No claims compiled yet. Once the Author Agent ' +
+      'finishes lit_review, this modal will show a per-claim novelty ' +
+      'narrative with cited supporting runs and related work.</p>';
+  }
+  m.innerHTML = html;
+  m.querySelector('#nv-x').onclick = () => sc.remove();
 }
 
 async function onRejectConclusionClick() {
@@ -4479,6 +4564,14 @@ async function renderLatex(c) {
   }
   c.innerHTML =
     '<div class="paper-wrap">' +
+      // Status bar: phase pill + progress strip + issues + Approve CTA.
+      // Painted by paintPaperStatusBar() on mount + polled every 5s.
+      '<div class="paper-status-bar" id="paper-status-bar">' +
+        '<div class="psb-pill"><span class="dot"></span>' +
+        '<span class="psb-phase-label">Loading status…</span></div>' +
+        '<div class="psb-progress" id="psb-progress"></div>' +
+        '<div class="psb-issues" id="psb-issues"></div>' +
+      '</div>' +
       '<div class="paper-hero">' +
         '<div class="paper-hero-bar">' +
           '<div class="mode-toggle small">' +
@@ -4547,6 +4640,8 @@ async function renderLatex(c) {
   });
   // Load + paint
   await loadPaperState();
+  paintPaperStatusBar(c);
+  startPaperStatusPolling(c);
   paintBuildStatus(c);
   paintPaperViewer(c, 'pdf');   // resolves to iframe OR empty state
   paintPaperTab(c);
@@ -4554,10 +4649,105 @@ async function renderLatex(c) {
 
 async function loadPaperState() {
   try {
-    [PaperState.state, PaperState.today] = await Promise.all(
-      [api('/paper/state'), api('/paper/today')]);
+    [PaperState.state, PaperState.today, PaperState.status]
+      = await Promise.all(
+        [api('/paper/state'), api('/paper/today'),
+         api('/paper/status').catch(() => null)]);
     PaperState.loaded = true;
   } catch (e) { /* keep stale */ }
+}
+
+
+function paintPaperStatusBar(c) {
+  const bar = c.querySelector('#paper-status-bar');
+  if (!bar) return;
+  const s = PaperState.status || {};
+  const phase = (s.phase && s.phase.phase) || 'paper.whittle_claims';
+  const label = s.phase_label || phase;
+  const issues = s.issues || [];
+  const sev = Math.max(0, ...issues.map(i => i.severity || 0));
+  const cls = ['psb-ok', 'psb-warn', 'psb-crit'][sev] || 'psb-ok';
+  bar.className = 'paper-status-bar ' + cls;
+  let html =
+    '<div class="psb-pill"><span class="dot"></span>' +
+      '<span class="psb-phase-label">' + esc(label) + '</span></div>';
+  const pg = s.progress || {};
+  const claims = pg.claims || {};
+  const lit = pg.lit || {};
+  const abl = pg.ablations || {};
+  html += '<div class="psb-progress">'
+    + 'claims: <b>' + (claims.active || 0) + ' active</b>'
+    + ' · cites: <b>' + (lit.citations || 0) + '</b>'
+    + ' · ablations: <b>'
+    + (abl.proposed || 0) + ' planned · '
+    + (abl.running || 0) + ' running · '
+    + (abl.done || 0) + ' done</b>'
+    + '</div>';
+  if (issues.length) {
+    html += '<div class="psb-issues">';
+    for (const i of issues) {
+      const sevTxt = ['INFO', 'WARN', 'CRIT'][i.severity || 0] || 'INFO';
+      html += '<div class="psb-issue psb-sev-' + (i.severity || 0) + '">'
+        + '<span class="psb-issue-sev">' + sevTxt + '</span> '
+        + esc(i.summary || '')
+        + '</div>';
+      // Render action buttons (Approve, Restart, etc).
+      for (const a of (i.actions || [])) {
+        if (!a.method) continue;
+        html += ' <button class="btn xs" data-paper-action="'
+          + esc(a.method) + '|' + esc(a.href) + '">'
+          + esc(a.label || '?') + '</button>';
+      }
+    }
+    html += '</div>';
+  }
+  bar.innerHTML = html;
+  // Wire action buttons (Approve plan, Request changes, etc).
+  bar.querySelectorAll('button[data-paper-action]').forEach(b => {
+    b.onclick = async () => {
+      const [method, href] = (b.dataset.paperAction || '').split('|');
+      if (!method || !href) return;
+      // For request_changes, prompt for a note.
+      let body = {};
+      if (href.endsWith('request_changes')) {
+        const reason = (typeof prompt === 'function')
+          ? (prompt('What needs to change?', '') || '').trim() : '';
+        if (!reason) return;
+        body = { note: reason };
+      }
+      b.disabled = true;
+      const orig = b.textContent;
+      b.textContent = '…';
+      try {
+        await post(href.replace('/api', ''), body);
+        await loadPaperState();
+        paintPaperStatusBar(c);
+        paintPaperTab(c);
+      } catch (e) {
+        aruiAlert('Action failed: ' + esc(String(e)),
+          { title: 'Error', okText: 'Close' });
+      } finally {
+        b.disabled = false;
+        b.textContent = orig;
+      }
+    };
+  });
+}
+
+// Poll status every 5s while the paper view is mounted.
+let _paperStatusTimer = null;
+function startPaperStatusPolling(c) {
+  if (_paperStatusTimer) clearInterval(_paperStatusTimer);
+  _paperStatusTimer = setInterval(async () => {
+    if (!document.body.contains(c)) {
+      clearInterval(_paperStatusTimer); _paperStatusTimer = null;
+      return;
+    }
+    try {
+      PaperState.status = await api('/paper/status');
+      paintPaperStatusBar(c);
+    } catch (e) { /* keep last */ }
+  }, 5000);
 }
 
 async function paintBuildStatus(c) {
