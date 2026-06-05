@@ -117,6 +117,15 @@ def _loop() -> None:
                 step()
             except Exception as e:                   # noqa: BLE001
                 print(f"[monitor] {step.__name__} error: {e}", flush=True)
+        # Watchdog tick (PR 4 of state-control rewrite, 2026-06-05).
+        # Runs every script against every RUNNING run; fires Events and
+        # pages the agent via tmux send-keys when something breaks.
+        # Per-run de-dup is handled inside runner.
+        try:
+            from . import watchdog as wd
+            wd.tick()
+        except Exception as e:                       # noqa: BLE001
+            print(f"[monitor] watchdog tick error: {e}", flush=True)
         if changed:
             bus.publish("events", "runs_changed", {})
         time.sleep(_POLL_SEC)

@@ -536,6 +536,66 @@ def get_phase(db: Session = Depends(get_session)):
     return {"phase": ph, "at": "", "detail": {}, "fallback_used": True}
 
 
+# ─────────────────────── Watchdog config (PR 4) ───────────────────────────
+# The watchdog is a non-LLM monitoring harness that scans every RUNNING
+# run against a registry of "scripts" (no_metric_flow, nan_loss, etc).
+# Each script has DEFAULT_PARAMS the agent reviews at onboarding — the
+# operator can also edit them later via the Settings → Watchdog panel.
+
+
+@router.get("/watchdog/scripts")
+def list_watchdog_scripts():
+    """Default scripts shipped with the package. Used by the onboarding
+    UI and Settings panel to show 'these monitors are watching your
+    runs; here's what each one does'."""
+    try:
+        from . import watchdog as wd
+        return {"scripts": wd.list_scripts()}
+    except Exception as e:                                  # noqa: BLE001
+        return {"scripts": [], "error": str(e)[:240]}
+
+
+@router.get("/watchdog/config")
+def get_watchdog_config():
+    """Active per-project config (defaults merged with operator/agent
+    overrides). The frontend renders this as a list of toggles +
+    editable params."""
+    try:
+        from . import watchdog as wd
+        return {"config": wd.get_config()}
+    except Exception as e:                                  # noqa: BLE001
+        return {"config": {}, "error": str(e)[:240]}
+
+
+@router.post("/watchdog/config")
+async def post_watchdog_config(request: Request):
+    """Operator (or onboarding flow) overrides one or more script
+    configs. Accepts a partial dict — unspecified scripts keep their
+    current values."""
+    body = await request.json()
+    config = body.get("config") or {}
+    source = body.get("source") or "operator"
+    try:
+        from . import watchdog as wd
+        merged = wd.set_config(config, source=source)
+        return {"ok": True, "config": merged}
+    except Exception as e:                                  # noqa: BLE001
+        return {"ok": False, "error": str(e)[:240]}
+
+
+@router.post("/watchdog/run")
+def run_watchdog_now():
+    """Force one watchdog tick immediately and return what fired.
+    Useful for verifying onboarding config before the next monitor.py
+    sweep."""
+    try:
+        from .watchdog import runner
+        fired = runner.run_once()
+        return {"ok": True, "fired": fired}
+    except Exception as e:                                  # noqa: BLE001
+        return {"ok": False, "error": str(e)[:240]}
+
+
 @router.get("/health")
 def get_health(db: Session = Depends(get_session)):
     """The dashboard pill, modal, and PI all consume this. Source of
