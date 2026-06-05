@@ -489,6 +489,101 @@ def list_journal(db: Session = Depends(get_session)):
     return [j.dict() for j in rows]
 
 
+# ───────────────────────── Agent phase reporting ──────────────────────────
+# The agent is the source of truth for what phase the research loop is in.
+# Every lifecycle transition (bootstrap → planning → launching_runs → ...)
+# is reported by the agent via ``arui.phase(...)``. The dashboard pill
+# reads ``orchestrator.phase`` directly instead of inferring phase from
+# tmux scrollback (which was the root cause of all the stale-status bugs
+# Francois reported on 2026-06-05).
+#
+# Allowed phases — mirror of ``arui.PHASES``. We DO NOT reject unknown
+# phases server-side (the SDK already warns); we just store whatever the
+# agent sent, so adding a new phase doesn't require a coordinated
+# backend deploy.
+
+_PHASE_KEY = "orchestrator.phase"
+_PHASE_DEFAULT = {"phase": "bootstrap", "at": "", "detail": {}}
+
+
+@router.get("/phase")
+def get_phase(db: Session = Depends(get_session)):
+    """Read the current agent-reported phase + a derived fallback.
+
+    Returns ``{phase, at, detail, fallback_used}``. If the agent has
+    never called ``arui.phase()`` yet (e.g. an old onboarding from
+    before the SDK existed), ``fallback_used=True`` and ``phase`` is
+    derived from DB ground truth (runs in flight, council in flight,
+    etc) so the pill is still useful.
+    """
+    row = db.query(Setting).filter(Setting.key == _PHASE_KEY).first()
+    if row and isinstance(row.value, dict) and row.value.get("phase"):
+        v = dict(row.value)
+        v.setdefault("at", "")
+        v.setdefault("detail", {})
+        v["fallback_used"] = False
+        return v
+    # Fallback: derive phase from DB so the pill is informative even on
+    # legacy projects that don't call arui.phase().
+    running = db.query(Run).filter(Run.status == "running").count()
+    total = db.query(Run).count()
+    if total == 0:
+        ph = "bootstrap"
+    elif running > 0:
+        ph = "watching_runs"
+    else:
+        ph = "planning"
+    return {"phase": ph, "at": "", "detail": {}, "fallback_used": True}
+
+
+@router.post("/phase")
+async def post_phase(request: Request):
+    """Agent reports its current lifecycle phase. Persists the value
+    to a Setting row, emits a ``phase_changed`` Event when the phase
+    actually changed, and returns the persisted state.
+
+    Body: ``{"phase": "<one of arui.PHASES>", "detail": {...}}``.
+    Unknown phases are accepted (forward-compatible) — the SDK already
+    warns on the client side.
+    """
+    body = await request.json()
+    phase = (body.get("phase") or "").strip()
+    detail = body.get("detail") or {}
+    if not phase:
+        return {"ok": False, "error": "phase required"}
+    if not isinstance(detail, dict):
+        detail = {"value": detail}
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(Setting.key == _PHASE_KEY).first()
+        prev_phase = ""
+        if row and isinstance(row.value, dict):
+            prev_phase = row.value.get("phase") or ""
+        now = _iso()
+        new_value = {"phase": phase, "at": now, "detail": detail}
+        if row is None:
+            db.add(Setting(key=_PHASE_KEY, value=new_value))
+        else:
+            row.value = new_value
+        # Emit a phase_changed Event only on actual transitions — every
+        # tick re-asserting the same phase would flood the activity feed.
+        if phase != prev_phase:
+            ev_msg = (f"agent: {prev_phase or '(none)'} → {phase}")[:280]
+            db.add(Event(id="ev-" + os.urandom(4).hex(),
+                         type="phase_changed", severity="info",
+                         actor="agent", message=ev_msg, created_at=now))
+        db.commit()
+        try:
+            bus.publish("events", "phase_changed",
+                        {"phase": phase, "prev": prev_phase, "detail": detail})
+        except Exception:                                   # noqa: BLE001
+            pass
+        return {"ok": True, "phase": phase, "at": now,
+                "detail": detail, "transitioned": phase != prev_phase}
+    finally:
+        db.close()
+
+
 @router.get("/chat")
 def list_chat(db: Session = Depends(get_session)):
     rows = db.query(ChatMessage).order_by(ChatMessage.created_at).all()

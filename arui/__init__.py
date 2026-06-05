@@ -221,6 +221,63 @@ def log(metrics: dict, step: int | None = None) -> None:
     _active.log(metrics, step)
 
 
+# Agent phase reporting (PR 1 of state-control rewrite, 2026-06-05).
+#
+# The autoresearcher agent calls ``arui.phase("planning")`` at every
+# lifecycle transition. The backend stores the value in the
+# ``orchestrator.phase`` Setting and emits a phase_changed Event. The
+# dashboard pill reads this directly instead of inferring state from
+# tmux scrollback (which was the source of every stale-status bug).
+#
+# Allowed phases — keep this list short and meaningful. If you find
+# yourself wanting "kindof in planning but also reviewing", DON'T add
+# a new phase; emit the dominant one and use the ``detail`` dict for
+# the nuance.
+PHASES = (
+    "bootstrap",            # very first boot — scaffolding code, no runs yet
+    "planning",             # popping next idea, drafting run configs
+    "launching_runs",       # tmux send-keys'ing python train.py invocations
+    "watching_runs",        # at least one run is live; agent is waiting
+    "council_review",       # batch finished; LLM reviewers running
+    "idle_waiting_direction",  # research_paused or operator-input needed
+    "concluding",           # agent declared purpose answered, preparing summary
+    "complete",             # council approved conclusion; paper-mode ready
+    "error",                # agent itself crashed / unrecoverable
+)
+
+
+def phase(phase: str, detail: dict | None = None) -> None:
+    """Report the agent's current lifecycle phase.
+
+    Call this at every transition. The backend stores the value in the
+    ``orchestrator.phase`` Setting, emits a ``phase_changed`` Event, and
+    the dashboard pill reads it directly. This is the source of truth
+    for what the agent is doing — far more reliable than scraping the
+    tmux pane for keywords.
+
+    No-op (silently logs) if the call fails — the agent's main loop
+    must never crash because the dashboard is unreachable.
+
+    Args:
+        phase: One of ``PHASES``. Unknown phases are still POSTed (in
+               case the backend understands new ones); a warning is
+               printed to stderr.
+        detail: Optional small dict of context (e.g. ``{"idea_id": ...,
+                "n_runs": 3, "blocked_on": "council"}``). Keep it under
+                ~1 KB — this is for human consumption in the modal.
+    """
+    if phase not in PHASES:
+        print(f"[arui] warning: unknown phase {phase!r}; allowed: "
+              + ",".join(PHASES), file=sys.stderr)
+    body = {"phase": phase, "detail": detail or {}}
+    try:
+        _post("/api/phase", body)
+    except Exception as e:                                  # noqa: BLE001
+        # Phase reporting is best-effort. The agent's main loop must
+        # not crash because the dashboard is unreachable.
+        print(f"[arui] phase report failed: {e}", file=sys.stderr)
+
+
 # Per-run stopwatch used by ``log_defaults`` to compute ``time_per_step``
 # and ``samples_per_sec`` without the user having to thread a stopwatch
 # through their training loop. Keyed by ``id(_active)`` so a fresh run

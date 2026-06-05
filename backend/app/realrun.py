@@ -59,6 +59,32 @@ train.py, prepare.py and ideas.md. Run the baseline first, then explore one
 idea per experiment, keeping every idle GPU busy. Do not stop — keep
 researching.
 
+## PHASE REPORTING (mandatory at every transition)
+You MUST call `arui.phase(...)` at every lifecycle transition so the
+dashboard reflects what you're actually doing. The dashboard pill reads
+this directly — if you don't call it, the pill goes stale and the
+operator can't tell what you're up to.
+
+  import arui   # already on PYTHONPATH
+  arui.phase("bootstrap")               # very first boot, scaffolding
+  arui.phase("planning",                # popping next idea from queue
+             detail={"idea_id": "sweep_lr_v2"})
+  arui.phase("launching_runs",          # tmux send-keys'ing train.py
+             detail={"n_runs": 3, "idea_id": "sweep_lr_v2"})
+  arui.phase("watching_runs")           # at least one run is live
+  arui.phase("council_review")          # batch finished, reviewers running
+  arui.phase("idle_waiting_direction")  # only if research_paused
+  arui.phase("concluding")              # drafting conclusion
+  arui.phase("complete")                # council approved
+  arui.phase("error",                   # something broke
+             detail={"reason": "..."})
+
+The call is best-effort; it won't crash your loop if the backend is
+unreachable. It is also CHEAP (single localhost HTTP POST) — call it
+often, especially when you transition between "thinking" and "doing".
+This is the single best thing you can do to make the dashboard feel
+alive to the operator.
+
 # CODE FREEZE — required before any training run launches
 The autoresearcherUI council MUST review your code before any training
 run is allowed. BUT — before you can even request a council review, you
