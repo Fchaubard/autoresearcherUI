@@ -287,7 +287,47 @@ def get_project(db: Session = Depends(get_session)):
                             if p.metric_direction == "maximize"
                             else r.headline_metric < best):
             best = r.headline_metric
-    base_run = next((r for r in runs if r.is_baseline), None)
+    # ── baseline picking (FIXED 2026-06-05) ───────────────────────────
+    # The dashboard's "improvement vs baseline" is meant to show *how far
+    # the agent has moved the metric from the no-mitigation starting
+    # point*. Agents tend to set `is_baseline=True` on the CONTROL run
+    # (e.g. `clean_baseline` — the un-poisoned model that by definition
+    # already sits at the metric's optimum), which makes the dashboard
+    # read "0 → 0, no improvement" even when the agent has just gone
+    # from 0.99 to 0.00.
+    #
+    # Heuristic: prefer the agent-marked baseline, BUT only if it's
+    # actually a useful comparison anchor (i.e., it is NOT already
+    # at-or-near the optimum direction). If the marked baseline equals
+    # `best`, fall back to "the worst kept run" — that is the genuine
+    # upper-bound the agent is trying to beat. Names like clean_* /
+    # *_clean / *_floor are also skipped because they're conventionally
+    # used for "ideal floor", not "starting point".
+    def _is_better(a, b):
+        if a is None: return False
+        if b is None: return True
+        return (a > b) if p.metric_direction == "maximize" else (a < b)
+
+    def _looks_like_floor(name: str) -> bool:
+        n = (name or "").lower()
+        return ("clean_" in n or n.endswith("_clean")
+                or n.startswith("clean_") or "_floor" in n)
+
+    kept_with_metric = [r for r in kept
+                        if r.headline_metric is not None
+                        and math.isfinite(r.headline_metric)]
+    marked = next((r for r in runs if r.is_baseline), None)
+    base_run = None
+    if marked and not _looks_like_floor(marked.run_name or "") \
+            and not (_is_better(marked.headline_metric, best)
+                     or marked.headline_metric == best):
+        base_run = marked
+    elif kept_with_metric:
+        # Worst kept run — i.e., the WORST metric value among kept runs,
+        # which is what "no progress yet" looks like.
+        base_run = (max if p.metric_direction != "maximize" else min)(
+            kept_with_metric, key=lambda r: r.headline_metric)
+
     return {
         **p.dict(),
         "experiments_done": len(done),
@@ -296,6 +336,7 @@ def get_project(db: Session = Depends(get_session)):
         "success_rate": round(len(kept) / len(done), 2) if done else 0,
         "best_metric": best,
         "baseline_metric": base_run.headline_metric if base_run else None,
+        "baseline_run_name": base_run.run_name if base_run else None,
     }
 
 

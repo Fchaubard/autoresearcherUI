@@ -128,6 +128,119 @@ def _plateau_signal(run_id: str) -> dict | None:
     return out
 
 
+_IDLE_GPU_STATE_KEY = "pi_idle_gpu_since"
+_IDLE_GPU_EMAIL_AT_KEY = "pi_idle_gpu_emailed_at"
+_IDLE_GPU_ALERT_AFTER_SEC = 30 * 60     # 30 minutes
+_IDLE_GPU_REPEAT_SEC = 60 * 60          # max one email/hour
+
+
+def _idle_gpu_escalation(ctx: dict) -> None:
+    """Email + Summary-bubble alert when ALL GPUs sit idle for >= 30 min.
+
+    Records a ``pi_idle_gpu_since`` setting the first tick we see total
+    idleness; clears it the moment ANY GPU is working again. After the
+    threshold trips, sends an email (rate-limited to once per hour) and
+    drops a visible chat bubble in the Summary feed. Failure-safe: any
+    exception is swallowed by the caller — we never block the PI cycle.
+    """
+    total = int(ctx.get("gpus_total") or 0)
+    idle  = int(ctx.get("gpus_idle")  or 0)
+    if total == 0:
+        return
+    all_idle = (idle >= total)
+    now_iso = _iso()
+    now_ts = dt.datetime.now(dt.timezone.utc).timestamp()
+    db = SessionLocal()
+    try:
+        since_row = (db.query(Setting)
+                     .filter(Setting.key == _IDLE_GPU_STATE_KEY).first())
+        last_email_row = (db.query(Setting)
+                          .filter(Setting.key == _IDLE_GPU_EMAIL_AT_KEY).first())
+        if not all_idle:
+            # GPUs are doing work again — reset the timer.
+            if since_row is not None:
+                db.delete(since_row)
+                db.commit()
+                print("[pi] idle-gpu state cleared — GPUs back to work.",
+                      flush=True)
+            return
+        if since_row is None:
+            db.add(Setting(key=_IDLE_GPU_STATE_KEY,
+                            value={"since": now_iso}))
+            db.commit()
+            return
+        try:
+            since_iso = (since_row.value or {}).get("since") or now_iso
+            since_ts = dt.datetime.fromisoformat(since_iso).timestamp()
+        except Exception:
+            since_ts = now_ts
+        age_sec = now_ts - since_ts
+        if age_sec < _IDLE_GPU_ALERT_AFTER_SEC:
+            return
+        # Rate-limit emails to once per hour.
+        last_ts = 0.0
+        if last_email_row and isinstance(last_email_row.value, dict):
+            try:
+                last_ts = dt.datetime.fromisoformat(
+                    last_email_row.value.get("at") or "").timestamp()
+            except Exception:
+                last_ts = 0.0
+        if now_ts - last_ts < _IDLE_GPU_REPEAT_SEC:
+            return
+        mins = int(age_sec // 60)
+        subject = (f"[autoresearcherUI] {total} GPU(s) IDLE for {mins} min "
+                   "— research loop appears stuck")
+        body = (
+            f"All {total} GPU(s) have been idle for {mins} minutes.\n\n"
+            "Likely causes:\n"
+            "  • Agent crashed or is waiting in the REPL.\n"
+            "  • Council deliberation is in progress.\n"
+            "  • Preflight has not yet been blessed.\n"
+            "  • A directive was malformed and the agent gave up.\n\n"
+            "Action: open the dashboard, check the agent's tmux pane "
+            "(right rail), and send a directive or restart if needed.\n\n"
+            "— autoresearcherUI PI agent")
+        try:
+            from . import notify
+            notify.send(subject, body)
+            print(f"[pi] idle-gpu alert email sent (idle={mins}m).",
+                  flush=True)
+        except Exception as e:                              # noqa: BLE001
+            print(f"[pi] idle-gpu email send failed: {e}", flush=True)
+        # Persist last-email timestamp.
+        if last_email_row is None:
+            db.add(Setting(key=_IDLE_GPU_EMAIL_AT_KEY,
+                            value={"at": now_iso, "mins": mins}))
+        else:
+            last_email_row.value = {"at": now_iso, "mins": mins}
+        # Visible Summary feed bubble (always — even if email-rate-limited
+        # the chat bubble fires once per cycle until things move).
+        db.add(ChatMessage(
+            id="cm-" + os.urandom(4).hex(),
+            role="agent",
+            content=(f"[PI · ALERT]  All {total} GPU(s) idle for {mins} "
+                     "minutes. I've sent you an email. Open the agent "
+                     "terminal and send a directive, or restart the "
+                     "research loop.")[:1200],
+            created_at=now_iso))
+        db.add(Event(
+            id="ev-" + os.urandom(4).hex(),
+            type="idle_gpu_alert", severity="warning",
+            actor="pi:idle_gpu",
+            message=(f"All {total} GPU(s) idle for {mins} min — "
+                     "operator notified")[:280],
+            created_at=now_iso))
+        db.commit()
+        try:
+            from .bus import bus
+            bus.publish("events", "idle_gpu_alert",
+                        {"total": total, "mins": mins})
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
 def _build_context() -> dict:
     db = SessionLocal()
     try:
@@ -703,26 +816,18 @@ def cycle(force: bool = False) -> dict | None:
             return cycle_paper(force=force)
     except Exception:
         pass
-    # PI HARD-HALT AUTHORITY (RESEARCH_IMPROVEMENT_PLAN #6): if the
-    # strategic council escalated in the last hour, the PI is REQUIRED
-    # to set research_halted. The agent has demonstrated it ignores
-    # prose advice — at this point nagging is just noise; the system
-    # needs to stop. We short-circuit BEFORE calling the LLM so an
-    # escalating loop never burns more council tokens.
-    if _escalation_halt_seen_recently(60):
-        try:
-            from . import notify as _notify
-            halted, _ = _notify.research_halted()
-            if not halted:
-                _notify.set_research_halted(
-                    True, reason=("Strategic council ESCALATION_HALT — "
-                                  "PI auto-halted research"))
-                print("[pi] ESCALATION_HALT seen — auto-halted research",
-                      flush=True)
-        except Exception as e:                              # noqa: BLE001
-            print(f"[pi] auto-halt failed: {e}", flush=True)
-        return {"concerns": "research halted by PI",
-                "messages_sent": 0, "model": ""}
+    # PI HARD-HALT AUTHORITY — REMOVED 2026-06-05. The escalation_halt
+    # path used to fire when the council struck out on a directive 3
+    # times in a row, set research_halted, and waited 7 hours for the
+    # human. Empirically the agent had usually answered the directive
+    # via a sibling experiment; the halt was a false positive. The
+    # council prompt now decomposes-or-closes instead of escalating,
+    # and the verdict / directive HALT type are stripped out at the
+    # council layer. We don't auto-halt here at all anymore.
+    #
+    # If a legacy escalation_halt Event is sitting in the DB from an
+    # older session, we IGNORE it — research continues. (We do not
+    # remove the row; it's useful history.)
     # Stuck detector tick (PLAN item #8): runs every PI cycle, fires
     # state-transition side-effects (chat bubble / event / escalation
     # email) when the loop's health worsens. Cheap pure-DB read; never
@@ -762,6 +867,15 @@ def cycle(force: bool = False) -> dict | None:
         print(f"[pi] no API key for {model}; skipping cycle", flush=True)
         return None
     ctx = _build_context()
+    # Idle-GPU email escalation (NEW 2026-06-05): when ALL GPUs sit idle
+    # for >= 30 minutes the operator MUST be told via email + a visible
+    # Summary feed bubble. Previously the PI just noted "agent is
+    # correctly observing halt" hourly while 3 A40s sat at 0% — that's
+    # silent failure dressed up as a status update.
+    try:
+        _idle_gpu_escalation(ctx)
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[pi] idle-gpu escalation failed: {e}", flush=True)
     user = ("Here is the current state of the research project. Decide if "
             "the agent needs a nudge and return JSON per the schema.\n\n"
             + json.dumps(ctx, indent=2, default=str))

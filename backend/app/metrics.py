@@ -146,9 +146,24 @@ def keys(run_id: str) -> list[str]:
 
 
 def query(run_id: str, wanted: list[str] | None = None,
-          max_points: int = 2000) -> dict[str, list[list[float]]]:
-    """Return {key: [[step, value], ...]} for a run, decimated to max_points."""
-    out: dict[str, list[list[float]]] = {}
+          max_points: int = 2000) -> dict[str, list[list[float | None]]]:
+    """Return {key: [[step, value], ...]} for a run, decimated to max_points.
+
+    NaN / +Inf / -Inf values are emitted as ``None`` because FastAPI's
+    default JSON encoder rejects non-finite floats with
+    ``ValueError: Out of range float values are not JSON compliant`` and
+    that 500's the whole /api/runs/<id>/metrics endpoint, blanking the
+    drawer for every run as soon as ONE diverged step is logged.
+    """
+    import math
+    def _clean(v):
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return None if (math.isnan(f) or math.isinf(f)) else f
+
+    out: dict[str, list[list[float | None]]] = {}
     for key in (wanted or keys(run_id)):
         with _lock:
             n = _con.execute(
@@ -163,7 +178,7 @@ def query(run_id: str, wanted: list[str] | None = None,
                        FROM metrics WHERE run_id=? AND key=?
                    ) WHERE rn % ? = 0 ORDER BY step""",
                 [run_id, key, stride]).fetchall()
-        out[key] = [[float(s), float(v)] for s, v in rows]
+        out[key] = [[_clean(s), _clean(v)] for s, v in rows]
     return out
 
 
@@ -176,11 +191,18 @@ def last_step(run_id: str) -> int:
 
 
 def latest(run_id: str, key: str) -> float | None:
+    import math
     with _lock:
         row = _con.execute(
             """SELECT value FROM metrics WHERE run_id=? AND key=?
                ORDER BY step DESC LIMIT 1""", [run_id, key]).fetchone()
-    return float(row[0]) if row else None
+    if not row:
+        return None
+    try:
+        f = float(row[0])
+    except (TypeError, ValueError):
+        return None
+    return None if (math.isnan(f) or math.isinf(f)) else f
 
 
 def all_keys() -> list[str]:
@@ -317,13 +339,17 @@ def batch_bucketed(
                 y_arr = [None] * bc
                 ymin_arr = [None] * bc
                 ymax_arr = [None] * bc
+                def _finite(v):
+                    # Reject both NaN AND +/-Inf — FastAPI's JSON encoder
+                    # 500's on either, blanking every drawer.
+                    return v if (v is not None and not math.isnan(v)
+                                 and not math.isinf(v)) else None
                 for b, xf, yl, ymin, ymax in entries:
                     if 0 <= b < bc:
-                        # Fall back to bucket-edge x when MIN(x) NaN'd out
-                        x_arr[b] = xf if not math.isnan(xf) else None
-                        y_arr[b] = yl if not math.isnan(yl) else None
-                        ymin_arr[b] = ymin if not math.isnan(ymin) else None
-                        ymax_arr[b] = ymax if not math.isnan(ymax) else None
+                        x_arr[b]    = _finite(xf)
+                        y_arr[b]    = _finite(yl)
+                        ymin_arr[b] = _finite(ymin)
+                        ymax_arr[b] = _finite(ymax)
                 cell = {
                     "run_id": rid, "key": k,
                     "x": x_arr, "y": y_arr,

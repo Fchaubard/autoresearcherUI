@@ -118,9 +118,12 @@ def test_halt_is_idempotent_updates_reason(client):
     assert "second" in s["reason"]
 
 
-def test_pi_auto_halt_on_escalation_event(arui_env, monkeypatch):
-    """pi.cycle() must auto-halt when an escalation_halt Event was
-    emitted in the last hour."""
+def test_pi_no_auto_halt_on_escalation_event(arui_env, monkeypatch):
+    """REGRESSION (2026-06-05): pi.cycle() MUST NOT auto-halt when an
+    escalation_halt Event sits in the DB. Legacy behaviour froze the
+    GPUs for 7 hours overnight while the agent had actually already
+    answered the directive via a sibling experiment. The new contract
+    is: never halt; let deliberation continue."""
     import datetime as dt
     from backend.app import notify, pi
     from backend.app.db import SessionLocal
@@ -137,9 +140,10 @@ def test_pi_auto_halt_on_escalation_event(arui_env, monkeypatch):
         db.commit()
     finally:
         db.close()
-    # Ensure pi.cycle takes the non-paper branch
-    out = pi.cycle(force=True)
-    assert out is not None
-    assert out.get("concerns") == "research halted by PI"
-    halted, reason = notify.research_halted()
-    assert halted is True
+    # Run a cycle; without API keys it returns None at the model check —
+    # that's fine, the assertion we care about is that research_halted
+    # was NOT set as a side-effect of the escalation_halt event.
+    pi.cycle(force=True)
+    halted, _reason = notify.research_halted()
+    assert halted is False, ("PI must no longer auto-halt on "
+                              "escalation_halt — see council.py 2026-06-05")

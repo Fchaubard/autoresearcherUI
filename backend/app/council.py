@@ -304,14 +304,40 @@ into the user message under the heading "PRIOR STRATEGIC STATE":
     top directive id has been carried over with implemented==NO. This
     is the load-bearing escalation counter.
 
-MANDATORY ESCALATION RULE (do not soften):
+STUCK-LOOP DELIBERATION RULE (replaces old halt rule, 2026-06-05):
   If previous_directive_implemented=="NO" for 3 consecutive reviews on
-  the same previous_top_directive_id, you MUST set
-  verdict="ESCALATION_HALT", append a HALT directive of priority 9999 in
-  directives_upsert, AND the tiebreaker (claude) MUST be invoked even
-  on agreement. The agent has demonstrated it ignores prose advice — the
-  only remaining channel is a hard HALT that bypasses the agent and
-  surfaces to the human PI.
+  the same previous_top_directive_id, this is a STRONG SIGNAL that
+  EITHER the directive is mis-specified, OR it has been *implicitly
+  answered* by other directives the agent ran instead. Do NOT escalate
+  to a human PI — humans are not in the loop overnight. Instead:
+
+  1) ANSWERED-BY-EQUIVALENT CHECK (do this FIRST). Scan the run pool
+     for any run that materially satisfies the stuck directive's
+     scientific question, even if it landed under a *different*
+     directive id. Example: if the stuck directive asks for
+     "firewall-only baseline" and a different directive's run achieved
+     glitch_prob 0.000 via "sanitize + firewall", the firewall
+     contribution has been demonstrated — the directive IS answered.
+     If you find such evidence, set verdict="progress", cite the
+     answering run_ids in `learning`, AND close the stuck directive
+     by emitting it in directives_upsert with status="done" plus an
+     evidence_run_ids list. Move on.
+
+  2) DECOMPOSE IF GENUINELY OPEN. If no equivalent answer exists, the
+     directive is too broad / too vague. DECOMPOSE it into 2-3 narrower
+     sub-directives in directives_upsert, each with concrete HPs and a
+     falsifiable acceptance criterion. Set verdict="stagnant".
+
+  3) The tiebreaker (claude) will ALWAYS be invoked when the
+     consecutive_unimplemented_count >= 3, to cross-check (1) and (2).
+     You don't need to gate yourself on that — just write the most
+     accurate verdict.
+
+  Never emit verdict=="ESCALATION_HALT". Never emit type=="HALT" in
+  directives_upsert. The deliberation loop continues until a concrete
+  next move is on the queue — that's the only exit condition. Ambiguity
+  about the broader research direction is an *onboarding* concern, not
+  a runtime concern; do not block on it.
 
 ORTHOGONAL QUOTA (RESEARCH_IMPROVEMENT_PLAN #5):
   Every entry in directives_upsert MUST include an idea_class in
@@ -376,7 +402,7 @@ JSON ONLY, no markdown, schema:
   "previous_directive_implemented": "YES" | "NO" | "IN_PROGRESS",
   "consecutive_unimplemented_count": <int — echo back the deterministic
     value you were shown; do not recompute>,
-  "verdict": "progress" | "stagnant" | "regressing" | "ESCALATION_HALT",
+  "verdict": "progress" | "stagnant" | "regressing",
   "learning": "<follow the HYPOTHESIS / RESULT / WHY / GENERALIZABLE
     INSIGHT / NEXT EXPERIMENT contract verbatim. Cite run_ids in RESULT.
     If you cannot fill HYPOTHESIS+RESULT+WHY truthfully from the batch
@@ -1416,27 +1442,30 @@ def strategic_review(batch_run_ids: list[str]) -> dict | None:
     out = _call_reviewer(reviewer, STRATEGIC_SYSTEM, user, cfg)
     if not out:
         return None
-    # HARD ESCALATION OVERRIDE — deterministic, not LLM-trusted. If
-    # the orchestrator computed >= 3 consecutive unimplemented on the
-    # same top directive, FORCE verdict=ESCALATION_HALT regardless of
-    # what the model said, AND append a HALT directive if the council
-    # didn't already include one.
-    if strategic_state["consecutive_unimplemented_count"] >= 3:
-        out["verdict"] = "ESCALATION_HALT"
-        ups = list(out.get("directives_upsert") or [])
-        if not any(str(d.get("type")) == "HALT" for d in ups):
-            ups.append({
-                "type": "HALT",
-                "priority": 9999,
-                "what": (f"ESCALATION_HALT: {strategic_state['consecutive_unimplemented_count']} "
-                         "consecutive reviews on top directive "
-                         f"{strategic_state['previous_top_directive_id']} with "
-                         "no implementation — human PI required"),
-                "acceptance": "Human PI marks this HALT resolved",
-                "idea_class": "INFRA",
-                "author": "council:escalation",
-            })
-        out["directives_upsert"] = ups
+    # STUCK-LOOP HARDENING (2026-06-05): we used to HARD-FORCE
+    # verdict=ESCALATION_HALT and inject a HALT directive of priority
+    # 9999 when consecutive_unimplemented_count >= 3. That escalated
+    # to a human-in-the-loop wait, killed GPUs for 7h, and was wrong
+    # because the directive had often been *implicitly answered* by an
+    # adjacent directive. The new contract:
+    #   (a) Never set verdict=ESCALATION_HALT — strip it if the LLM
+    #       emits it anyway.
+    #   (b) Never insert type=HALT directives — strip them out.
+    #   (c) Filter HALT-author directives so old halts don't recur.
+    # The stuck-loop deliberation rule in the prompt asks the model to
+    # either close-by-equivalent-evidence or decompose; the tiebreaker
+    # (claude) is always invoked at ccu>=3 as a cross-check.
+    if str(out.get("verdict")) == "ESCALATION_HALT":
+        print("[council/strategic] stripped legacy ESCALATION_HALT verdict; "
+              "forcing 'stagnant' instead.", flush=True)
+        out["verdict"] = "stagnant"
+    ups = list(out.get("directives_upsert") or [])
+    pre_filter = len(ups)
+    ups = [d for d in ups if str(d.get("type")) != "HALT"]
+    if len(ups) != pre_filter:
+        print(f"[council/strategic] stripped {pre_filter - len(ups)} "
+              "HALT directive(s) from reviewer output.", flush=True)
+    out["directives_upsert"] = ups
     out["scope"] = "strategic"
     out["batch_run_ids"] = batch_run_ids
     out["reviewer"] = reviewer + " (strategic)"
@@ -1454,7 +1483,18 @@ def _persist_strategic(batch_run_ids: list[str], review: dict) -> None:
     learning = (review.get("learning") or "").strip()
     pivot = review.get("pivot") or {}
     verdict = str(review.get("verdict") or "").lower()
-    is_halt = verdict == "escalation_halt"
+    # Belt-and-suspenders (2026-06-05): if a legacy ESCALATION_HALT
+    # verdict snuck past the _strategic_call_one strip (e.g. from a
+    # debate-merge code path), force it to stagnant here too. Same for
+    # any HALT directives that survived.
+    if verdict in ("escalation_halt",):
+        review["verdict"] = "stagnant"
+        verdict = "stagnant"
+    if review.get("directives_upsert"):
+        review["directives_upsert"] = [
+            d for d in review["directives_upsert"]
+            if str(d.get("type")) != "HALT"]
+    is_halt = False    # always — HALT is dead, RIP
     rev_id = "rv-" + os.urandom(4).hex()
     try:
         # tag each run with the strategic_review's id
@@ -1541,18 +1581,15 @@ def _persist_strategic(batch_run_ids: list[str], review: dict) -> None:
     except Exception as e:                                  # noqa: BLE001
         print(f"[council/strategic] history append failed: {e}",
               flush=True)
-    # If we escalated, set research_halted so /api/track/run blocks ALL
-    # runs (including _probe/_smoke). The PI agent will also see the
-    # ESCALATION_HALT event and call /api/halt explicitly.
+    # NB (2026-06-05): we used to call notify.set_research_halted() when
+    # is_halt was true. That path no longer fires because is_halt is
+    # forced False by the legacy-verdict stripper above — but we leave
+    # this safety net in place so a future reintroduction of HALT
+    # somewhere wouldn't silently start blocking runs again.
     if is_halt:
-        try:
-            from . import notify
-            notify.set_research_halted(
-                True, reason=(learning[:240] or
-                              "Strategic council escalation"))
-        except Exception as e:                              # noqa: BLE001
-            print(f"[council/strategic] set_research_halted failed: {e}",
-                  flush=True)
+        print("[council/strategic] is_halt=True after strip — should never "
+              "happen; refusing to call set_research_halted. Investigate.",
+              flush=True)
     try:
         _append_lesson(
             reviewer=(review.get("reviewer") or "strategic"),
@@ -1966,6 +2003,9 @@ def _consecutive_stagnant_count() -> int:
     streak = 0
     for entry in h:
         v = str(entry.get("verdict") or "").lower()
+        # NB: legacy "escalation_halt" verdicts still appear in history
+        # files written before the 2026-06-05 halt removal — treat them
+        # as the stagnant verdicts they should have been.
         if v in ("stagnant", "regressing", "escalation_halt"):
             streak += 1
         else:

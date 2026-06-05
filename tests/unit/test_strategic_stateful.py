@@ -102,31 +102,41 @@ def test_compute_strategic_state_increments_when_unimplemented(env):
     assert state["consecutive_unimplemented_count"] == 2
 
 
-def test_strategic_review_forces_escalation_after_3_unimplemented(
+def test_strategic_review_NEVER_escalates_after_3_unimplemented(
         env, monkeypatch):
+    """REGRESSION 2026-06-05: even with ccu >= 3, the council MUST NOT
+    emit verdict=ESCALATION_HALT or any HALT directive. The old behavior
+    (force-escalate, set research_halted) wasted 7 hours overnight while
+    the agent had answered the directive via a sibling experiment.
+
+    What we want now: verdict stays whatever the reviewer says (here:
+    'stagnant'), and any HALT directives in directives_upsert are
+    stripped at the council layer."""
     c, d = env
     stored, _ = d.upsert({"type": "BLOCKER_INFRA", "what": "blk",
                             "idea_class": "INFRA"})
-    # Seed 3 consecutive NO history entries with the same top directive
     for i in range(3):
         c._append_strategic_history({
             "id": f"rv-{i}", "verdict": "stagnant",
             "top_directive_id": stored["id"],
             "implemented": "NO",
         })
-    # Confirm the deterministic ccu is now >=3
     state = c._compute_strategic_state()
     assert state["consecutive_unimplemented_count"] >= 3
-    # Stub out reviewer + ensure the deterministic override fires
     monkeypatch.setattr(
         c, "_available_reviewers", lambda cfg: ["gemini"])
+    # Reviewer returns "stagnant" (the new correct verdict for ccu>=3)
+    # AND includes a HALT directive (legacy LLM behaviour) so we can
+    # check the strip works.
     monkeypatch.setattr(
         c, "_call_reviewer",
         lambda *a, **k: {"verdict": "stagnant", "learning": "",
                           "rerank_pending": [], "new_ideas": [],
-                          "veto": [], "directives_upsert": [],
+                          "veto": [],
+                          "directives_upsert": [
+                              {"type": "HALT", "priority": 9999,
+                               "what": "legacy halt", "idea_class": "INFRA"}],
                           "directives_close": []})
-    # Need a Project row + a batch run so _build_strategic_context works.
     from backend.app.db import SessionLocal
     from backend.app.models import Project, Run
     import datetime as dt
@@ -145,10 +155,11 @@ def test_strategic_review_forces_escalation_after_3_unimplemented(
         db.close()
     out = c.strategic_review(["r1"])
     assert out is not None
-    assert out["verdict"] == "ESCALATION_HALT"
-    # Council was forced to add a HALT directive
+    assert out["verdict"] != "ESCALATION_HALT", \
+        "halt verdict must be stripped"
     types = [str(x.get("type")) for x in (out.get("directives_upsert") or [])]
-    assert "HALT" in types
+    assert "HALT" not in types, \
+        "HALT directives must be stripped by the council layer"
 
 
 def test_strategic_history_capped(env):
