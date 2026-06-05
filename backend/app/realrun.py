@@ -477,14 +477,64 @@ def start_real(cfg: dict, resume: bool = False) -> RealAgent:
 
     db = SessionLocal()
     proj = db.query(Project).first()
+    new_purpose = cfg.get("purpose", "") or ""
     if not proj:
         db.add(Project(id="proj-" + name, name=name,
-                       purpose=cfg.get("purpose", ""),
+                       purpose=new_purpose,
                        validation_metric=metric,
                        metric_direction=_direction(metric),
                        status="running", gpu_count=0, created_at=_iso()))
     else:
+        # Re-onboarding with a NEW purpose/repo_name must update the
+        # project row, not just flip status. The old code only set
+        # status='running' and left name/purpose/metric stale — so the
+        # dashboard header would still show the prior project's name
+        # forever (Francois hit this on 2026-06-05 with the leftover
+        # 'diffusion-ensemble-researcher' label after starting a new
+        # researcher). Project.id stays the same so existing Run
+        # rows (foreign-key referenced) aren't orphaned — we treat
+        # the project row as live config, not an immutable identity.
+        # If the purpose changed substantively, force a re-bless +
+        # re-preflight cycle so the agent doesn't accidentally
+        # continue on the old code under the new mandate.
+        purpose_changed = (
+            (proj.purpose or "").strip() != new_purpose.strip()
+            and bool(new_purpose.strip()))
+        name_changed = (proj.name or "") != name
         proj.status = "running"
+        if name_changed:
+            proj.name = name
+        if purpose_changed:
+            proj.purpose = new_purpose
+        if metric and metric != proj.validation_metric:
+            proj.validation_metric = metric
+            proj.metric_direction = _direction(metric)
+        if purpose_changed or name_changed:
+            # Wipe stale preflight + bless state so the new mandate
+            # can't reuse the old code-bless from the prior project.
+            try:
+                from . import council as _c
+                # preflight_record_code_changed() ALSO clears the bless
+                # state (see council.py:2374 — "Also reset the bless
+                # state since the previous approval is now stale by
+                # definition"), so a single call covers both.
+                _c.preflight_record_code_changed(
+                    reason=("project re-onboarded — purpose / repo_name "
+                            "changed, code-bless + preflight invalidated"))
+            except Exception as e:                                  # noqa: BLE001
+                print(f"[realrun] re-onboarding bless reset failed: {e}",
+                      flush=True)
+            # Audit: tell the operator that the row changed.
+            db.add(Event(id="ev-" + os.urandom(4).hex(),
+                         type="project_renamed",
+                         severity="info", actor="system",
+                         message=(
+                             "Project re-onboarded — renamed to "
+                             f"'{name}'."
+                             + (" Purpose updated." if purpose_changed else "")
+                             + " Bless + preflight cleared; agent must "
+                               "redo SOP before any real run."),
+                         created_at=_iso()))
     db.add(Event(id="ev-" + os.urandom(4).hex(), type="run_started",
                  severity="info", actor="system",
                  message=(f"Resumed the research agent for '{name}' after a "
