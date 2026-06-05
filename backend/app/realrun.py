@@ -30,6 +30,29 @@ def _direction(metric: str) -> str:
     return "maximize" if any(t in m for t in up) else "minimize"
 
 
+def _derive_name_from_purpose(purpose: str) -> str:
+    """Auto-derive a slug-style project name from the research purpose
+    text. Used when the user re-onboards with a new purpose but
+    forgets to also update repo_name (the form often retains the prior
+    value). Better to show a relevant title than to keep a stale one.
+
+    Heuristic: drop filler verbs ("design and execute…", "study…"),
+    take the first clause up to a period/newline, slug-ify, truncate
+    to ~50 chars at a word boundary. Returns 'project' on empty input.
+    """
+    import re as _re
+    p = (purpose or "").strip().lower()
+    p = _re.sub(
+        r"^(design and execute a rigorous research plan for |"
+        r"design |execute |conduct |study |investigate |evaluate |"
+        r"prove that |demonstrate that |\d+\.\s*)+", "", p)
+    p = _re.split(r"[.\n;:]", p)[0]
+    p = _re.sub(r"[^a-z0-9]+", "-", p).strip("-")
+    if len(p) > 50:
+        p = p[:50].rsplit("-", 1)[0]
+    return p or "project"
+
+
 DEFAULT_AGENT_INSTRUCTIONS = """# Your task
 Conduct this research autonomously in this directory. Create program.md,
 train.py, prepare.py and ideas.md. Run the baseline first, then explore one
@@ -500,10 +523,26 @@ def start_real(cfg: dict, resume: bool = False) -> RealAgent:
         purpose_changed = (
             (proj.purpose or "").strip() != new_purpose.strip()
             and bool(new_purpose.strip()))
-        name_changed = (proj.name or "") != name
+        # If the user typed a literal repo_name in the form that's
+        # DIFFERENT from the existing project's name, honour it.
+        # But if they kept the auto-prefilled repo_name (which often
+        # carries over from a prior project) AND the purpose changed,
+        # the prefill is stale — auto-derive a fresh name from the
+        # new purpose. This fixes the 2026-06-05 case where Francois
+        # changed purpose to glitch-token research but the header
+        # kept showing 'diffusion-ensemble-researcher' because the
+        # form retained the old repo_name.
+        operator_provided_new_name = (name and name != (proj.name or ""))
+        if operator_provided_new_name:
+            effective_name = name
+        elif purpose_changed:
+            effective_name = _derive_name_from_purpose(new_purpose)
+        else:
+            effective_name = proj.name or name
+        name_changed = (proj.name or "") != effective_name
         proj.status = "running"
         if name_changed:
-            proj.name = name
+            proj.name = effective_name
         if purpose_changed:
             proj.purpose = new_purpose
         if metric and metric != proj.validation_metric:
