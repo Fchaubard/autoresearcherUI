@@ -275,14 +275,36 @@ def batch_bucketed(
 
     if todo:
         # Compute the x range if not provided. We do this once per query.
+        # NB: arui.finish() / arui.log_defaults() writes a "sentinel"
+        # row at step=1_000_000 for every required default metric key,
+        # so a run that finished correctly always has at least one
+        # point at step 1_000_000. If we naively `MAX(step)` that, the
+        # auto x range becomes [25, 1_000_000] and the bucketer
+        # squashes every real training step (e.g. 25..960) into
+        # bucket 0 of 500 — the polyline can't be stroked because
+        # it's a single isolated point. Exclude the sentinel from the
+        # range query; only fall back to including it when there's no
+        # real data at all. (Diagnosed by GPT-5 + Gemini consultation
+        # 2026-06-05.)
+        _SENTINEL_STEP = 1_000_000
         if x_min is None or x_max is None:
             ph = ",".join(["?"] * len(run_ids))
             ph2 = ",".join(["?"] * len(keys_wanted))
             with _lock:
                 row = _con.execute(
                     f"SELECT min({x_col}), max({x_col}) FROM metrics "
-                    f"WHERE run_id IN ({ph}) AND key IN ({ph2})",
-                    list(run_ids) + list(keys_wanted)).fetchone()
+                    f"WHERE run_id IN ({ph}) AND key IN ({ph2}) "
+                    f"AND {x_col} < ?",
+                    list(run_ids) + list(keys_wanted)
+                    + [_SENTINEL_STEP]).fetchone()
+                if not row or row[0] is None:
+                    # No real points at all — fall back to including
+                    # whatever's there so callers don't get a divide-
+                    # by-zero on qmax-qmin.
+                    row = _con.execute(
+                        f"SELECT min({x_col}), max({x_col}) FROM metrics "
+                        f"WHERE run_id IN ({ph}) AND key IN ({ph2})",
+                        list(run_ids) + list(keys_wanted)).fetchone()
             qmin = row[0] if row and row[0] is not None else 0.0
             qmax = row[1] if row and row[1] is not None else 1.0
         else:

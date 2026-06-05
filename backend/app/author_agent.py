@@ -286,7 +286,34 @@ def start(proposal_id: str = "") -> dict:
             _token_export = f"ARUI_INGEST_TOKEN={shlex.quote(_pc)} "
     except Exception:                                       # noqa: BLE001
         pass
-    env_prefix = f"{_token_export}IS_SANDBOX=1 "  # bypass the root+skip-perms refusal
+    # AUTH (2026-06-05 Francois bug report): Claude Code launched with
+    # an empty ANTHROPIC_API_KEY drops into the OAuth path and the
+    # author pane just sits at "Not logged in · Run /login" forever.
+    # Pull the key from BOTH (a) the process env and (b) the onboarding
+    # Setting row, and pass it as an explicit env-var prefix into the
+    # tmux command line so Claude Code 2.1.x can't miss it.
+    _claude_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not _claude_key:
+        try:
+            from .db import SessionLocal as _SL
+            from .models import Setting as _S
+            db = _SL()
+            try:
+                row = db.query(_S).filter(_S.key == "onboarding").first()
+                if row and isinstance(row.value, dict):
+                    _claude_key = (row.value.get("claude_token")
+                                    or "").strip()
+            finally:
+                db.close()
+        except Exception as e:                              # noqa: BLE001
+            print(f"[author] could not read onboarding key: {e}",
+                  flush=True)
+    # Sync back into process env so subprocess inherits it.
+    if _claude_key:
+        os.environ["ANTHROPIC_API_KEY"] = _claude_key
+    _key_export = (f"ANTHROPIC_API_KEY={shlex.quote(_claude_key)} "
+                    if _claude_key else "")
+    env_prefix = f"{_token_export}{_key_export}IS_SANDBOX=1 "
     if cmd_override:
         inner = cmd_override
     else:
@@ -296,8 +323,7 @@ def start(proposal_id: str = "") -> dict:
         # for the full explanation.
         try:
             from .agent import RealAgent
-            RealAgent._ensure_claude_settings(
-                os.environ.get("ANTHROPIC_API_KEY", ""))
+            RealAgent._ensure_claude_settings(_claude_key)
         except Exception as e:                              # noqa: BLE001
             print(f"[author] apiKeyHelper setup failed: {e}", flush=True)
     full = (f"cd {shlex.quote(str(folder))} && "
