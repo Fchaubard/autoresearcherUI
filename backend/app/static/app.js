@@ -810,9 +810,15 @@ function header() {
   hp.onclick = openResearchHealth;
   h.append(hp);
   h.append(el('div', 'metric', `${esc(p.validation_metric || '')} ${dir}`));
-  const running = (p.status === 'running' || p.status === 'bootstrapping');
-  h.append(el('div', 'pill' + (running ? '' : ' done'),
-    `<span class="dot ${running ? 'live' : ''}"></span>${esc(p.status || '—')}`));
+  // The project-status pill ('running' / 'awaiting agent' / 'done') used to
+  // sit here next to the metric. It echoed Project.status (a coarse static
+  // field set at onboarding) and didn't track anything dynamic — meanwhile
+  // the new Research-health pill above (healthy/needs_direction/awaiting_
+  // completion_review/complete/looping/stalled/dry) communicates the actual
+  // moment-to-moment state. The static pill became misleading: Project.status
+  // could read 'running' even while the agent was holding for hours.
+  // Removed per Francois 2026-06-05; the research-health pill is the single
+  // source of truth for whether the loop is making progress.
   // (Mode toggle moved to the Write-the-paper page itself — not in the global
   // header anymore. The paper meta pill stays in the header for at-a-glance
   // status while you're on any view.)

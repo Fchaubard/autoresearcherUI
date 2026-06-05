@@ -196,6 +196,16 @@ canonical `train_loss` / `train_acc` / `lr` / `val_loss` / `val_acc` /
 coverage at `GET /api/runs/{run_id}/metric_coverage` — it returns
 `{logged, missing, required}` for the seven defaults.
 
+# Logging convention for self-imposed helper daemons
+If you write your own watchdog / guard scripts (a good pattern — e.g.
+a `guard_daemon.py` that kills off-mandate runs, or a `gpu_sweeper.py`
+that re-balances jobs), log ONLY on positive events (a hit, a kill, a
+fix). Do NOT log a sweep-clean line every interval — that drowns the
+right-rail terminal in noise (a 30s sweep over 5 days = 14,000 lines
+of nothing) and crowds out signals the operator actually needs to
+see. One-line summaries on shutdown / startup are fine; every-tick
+"all clear" messages are not.
+
 # The directives queue — your ONLY source of work
 Your sole function is to process `directives.jsonl` in priority order.
 Each line is a directive object: {id, type, priority, what, acceptance,
