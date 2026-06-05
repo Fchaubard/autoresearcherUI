@@ -140,6 +140,48 @@ _COOLDOWN_LOCK = threading.Lock()
 
 
 # ── the prompt ────────────────────────────────────────────────────────────
+# The `learning` field is the canonical text that gets appended to lessons.md
+# and becomes the project's running scientific memory. It MUST be a piece of
+# research content (hypothesis + result + insight), NOT advice about the
+# tooling. See `classify_lesson_quality` below for the machine-enforced
+# contract.
+_LEARNING_CONTRACT = """\
+The `learning` field is the only thing that ends up in lessons.md — the
+project's permanent scientific notebook. It must be research content, not
+process advice. Every `learning` MUST follow this exact bullet structure
+(use these literal markers so the parser can find them):
+
+  HYPOTHESIS: <one sentence — the falsifiable claim this run/batch tested,
+    e.g. "diff-init from finetuned-AR ckpt outperforms random-init by ≥1pt
+    EM on GSM8K">.
+  RESULT: <one sentence with the NUMBER and at least one run_id, e.g.
+    "diff_n3_seed7 reached 0.0432 EM vs baseline 0.0508 (-0.0076) on
+    gsm8k_val; ar_baseline_v2 hit 0.0561 same eval">.
+  WHY: <one sentence — the mechanistic / data-driven explanation for the
+    result, NOT a restatement of the result>.
+  GENERALIZABLE INSIGHT: <one sentence — the method-choice takeaway that
+    transfers BEYOND this run (e.g. "in-distribution diff-init is dominated
+    by AR-finetuned-init at scales <1B params"). NOT "we should log more
+    metrics" or "we should sweep lr next time". Insight, not chore.
+  NEXT EXPERIMENT: <one sentence — the single highest-EV next run, with
+    concrete HP values where they matter>.
+
+REJECT THESE PATTERNS — do not emit a `learning` that contains any of:
+  * Tool / mechanics tips ("always log __METRIC__", "use trusted_eval",
+    "remember to seed", "make sure to set bs=…"). Tooling lives in
+    program.md, NOT in lessons.md.
+  * Vague platitudes ("we should explore more diverse ideas", "more
+    runs needed", "the data is inconclusive without saying why").
+  * Restatements of the agent's behaviour ("agent launched 5 runs",
+    "the council recommended X"). Lessons.md is about what the DATA
+    shows, not what the agent did.
+  * Process nags ("for the Nth consecutive batch the agent ignored…").
+    Those belong in Events, not in the scientific memory.
+  * A `learning` with no run_id and no HYPOTHESIS marker — these are
+    machine-rejected by the lessons.md sanity check and the entry will
+    be DROPPED, wasting the review."""
+
+
 SYSTEM = """You are the senior scientific advisor on an autonomous ML research
 project. An autonomous agent just finished one experiment. Your job is to
 decide what the agent should do next so the next experiments are HIGH-VALUE.
@@ -174,11 +216,14 @@ PRINCIPLES:
   fundamentally different approach in `new_ideas` — or recommend
   revisiting the project's hypothesis itself.
 
+""" + _LEARNING_CONTRACT + """
+
 You return JSON ONLY, no prose around it, no markdown fence, matching:
 {
   "verdict": "kept" | "discarded" | "crashed" | "inconclusive",
-  "learning": "<2-4 sentences: what this run taught us and what the data
-    suggests next. If recommending a pivot, say so clearly.>",
+  "learning": "<follow the HYPOTHESIS / RESULT / WHY / GENERALIZABLE INSIGHT
+    / NEXT EXPERIMENT contract above, verbatim markers, with at least one
+    run_id cited in RESULT>",
   "rerank_pending": ["<idea_id_best_next>", "<idea_id_2nd>", ...],
   "new_ideas": [
     {"idea_id": "<snake_case_id>", "what": "<one line, concrete — include
@@ -194,8 +239,10 @@ You return JSON ONLY, no prose around it, no markdown fence, matching:
 - new_ideas: 0-3 entries. Quality > quantity. snake_case ids only. Concrete
   HP values where they matter; vague rewrappings of existing ideas are NOT
   acceptable.
-- learning: explain what the data shows, not what the agent did. Be
-  specific about the metric and direction."""
+- learning: research content per the contract above. Cite run_ids from the
+  context. If you cannot fill HYPOTHESIS+RESULT+WHY truthfully from the
+  data you were shown, leave `learning` empty — better to drop the entry
+  than to fill it with platitudes."""
 
 
 DEBATE_SYSTEM = SYSTEM + """
@@ -213,8 +260,16 @@ TIEBREAKER_SYSTEM = """You are the tiebreaker on a senior advisory panel for
 an autonomous ML research project. Two expert reviewers disagree after 3
 rounds of debate. Read both of their final positions and the run context,
 then make the final call. Return the same JSON schema as the reviewers
-(verdict, learning, rerank_pending, new_ideas, veto). In "learning", briefly
-explain which reviewer you sided with and why. Be decisive — no hedging."""
+(verdict, learning, rerank_pending, new_ideas, veto).
+
+""" + _LEARNING_CONTRACT + """
+
+In "learning", follow the same HYPOTHESIS / RESULT / WHY / GENERALIZABLE
+INSIGHT / NEXT EXPERIMENT contract. Cite at least one run_id in RESULT.
+You may add a parenthetical at the end of GENERALIZABLE INSIGHT noting
+which reviewer you sided with and why — but only as a parenthetical.
+The lessons.md entry must still be research content, not a procedural
+note about the debate. Be decisive — no hedging."""
 
 
 STRATEGIC_SYSTEM = """You are the senior scientific advisor on an autonomous
@@ -248,12 +303,31 @@ YOU CAN AND SHOULD RECOMMEND:
   project's hypothesis if the data strongly suggests the hypothesis is
   not supported.
 
+""" + _LEARNING_CONTRACT + """
+
+Strategic-review-specific note on `learning`:
+- The HYPOTHESIS line for a strategic review is the BATCH-level hypothesis
+  this wave of runs was testing collectively (e.g. "5-way diffusion-LM
+  ensembles outperform the AR baseline on GSM8K"). It is NOT a project
+  status report.
+- The RESULT line MUST cite at least 2 specific run_ids from the batch
+  AND the project frontier number with its run_id (e.g.
+  "diff_n5_a, diff_n5_b, diff_n5_c all landed 0.041-0.044 EM; project
+  frontier still ar_baseline_v2 at 0.0561 EM").
+- The GENERALIZABLE INSIGHT line is the load-bearing one: what does the
+  whole batch teach us about METHOD CHOICE for this class of problem?
+  Anything that reads like "the agent should X" or "we need better
+  infrastructure for Y" is process advice and DOES NOT belong here —
+  put process advice in the pivot field or as a Summary feed event.
+
 JSON ONLY, no markdown, schema:
 {
   "verdict": "progress" | "stagnant" | "regressing",
-  "learning": "<3-6 sentences: state of the project, what this batch
-    showed, and what you recommend next (concrete HPs / direction).
-    If recommending a pivot or abandoning a direction, say so.>",
+  "learning": "<follow the HYPOTHESIS / RESULT / WHY / GENERALIZABLE
+    INSIGHT / NEXT EXPERIMENT contract verbatim. Cite run_ids in RESULT.
+    If you cannot fill HYPOTHESIS+RESULT+WHY truthfully from the batch
+    data, leave this empty; the lessons.md sanity check will drop a
+    learning with no run_id or no HYPOTHESIS marker.>",
   "rerank_pending": ["<idea_id_best_next>", ...],
   "new_ideas": [
     {"idea_id": "<snake_case>", "what": "<concrete with HP values>",
@@ -358,15 +432,158 @@ def _read_lessons(max_chars: int = 6000) -> str:
     return text
 
 
+# ── lessons.md quality gate ───────────────────────────────────────────────
+# Banned phrases that signal tool-mechanics / process-nag / vague-platitude
+# content. A `learning` containing any of these is downgraded to "bad" by
+# the classifier and dropped from lessons.md (it can still appear in the
+# Events feed). Keep this list short and surgical — over-blocking will make
+# the council give up and emit nothing.
+_LESSON_BAD_PHRASES = (
+    "always log",
+    "remember to log",
+    "make sure to log",
+    "we should log",
+    "log more metrics",
+    "log all metrics",
+    "use __metric__",
+    "set arui.summary",
+    "remember to seed",
+    "remember to set",
+    "for the nth consecutive",                  # process nag pattern
+    "for the n-th consecutive",
+    "the agent ignored",
+    "the agent has not implemented",
+    "the agent should remember",
+    "more runs needed",
+    "more experiments needed",
+    "needs more investigation",
+    "inconclusive without further",
+    "tbd",
+    "tba",
+    "n/a",
+)
+
+# Patterns that look like a run_id reference. Real run_ids in this codebase
+# are slugged like `diff_n3_seed7`, `ar_baseline_v2`, `run-2a4f81e0`,
+# `gsm8k_lr1e-4_b`, etc. We accept any token containing an underscore or
+# hyphen with at least one digit, length ≥ 4, OR an explicit `run-XXXX`
+# style id. We deliberately err on the permissive side — the goal is to
+# block lessons that cite NO run_ids at all, not to police naming.
+_RUN_ID_RE = re.compile(
+    r"\b("
+    r"run[-_][a-z0-9]{4,}"                       # run-2a4f81e0 / run_abc123
+    r"|[a-z][a-z0-9]*(?:[_-][a-z0-9]+){1,}[a-z0-9]" # diff_n3_seed7 etc
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Hypothesis marker (case-insensitive). The contract requires this literal
+# token to appear so the parser can reliably extract the structured fields.
+_HYPOTHESIS_RE = re.compile(r"\bHYPOTHESIS\s*[:\-]", re.IGNORECASE)
+_RESULT_RE = re.compile(r"\bRESULT\s*[:\-]", re.IGNORECASE)
+_INSIGHT_RE = re.compile(
+    r"\bGENERAL[IZ]+[A-Z]*\s+INSIGHT\s*[:\-]", re.IGNORECASE)
+
+
+def classify_lesson_quality(learning: str) -> dict:
+    """Sanity-check a `learning` string before appending it to lessons.md.
+
+    Returns a dict with:
+      - ok (bool): True if the lesson is research content per the contract.
+      - reason (str): empty if ok, else a short machine-readable code such
+        as "no_hypothesis_marker", "no_run_id", "tool_mechanics:always log",
+        "too_short", "empty". Used by the caller to log a warning and skip
+        the append.
+      - has_hypothesis, has_result, has_insight, has_run_id (bool): the
+        individual checks, exposed so tests + the UI can show partial
+        diagnostics if needed.
+      - bad_phrase (str | None): the first banned phrase that matched.
+
+    A lesson is `ok` iff:
+      1. It is ≥ 40 chars after stripping (we expect a 5-bullet structure).
+      2. It contains the literal `HYPOTHESIS:` marker.
+      3. It cites at least one run_id-shaped token in the RESULT area
+         (or anywhere — we accept either; the agent's run-naming varies).
+      4. It does NOT contain any banned tool-mechanics / process-nag phrase.
+
+    The classifier is intentionally cheap and regex-only so it runs on
+    every reviewer turn without LLM cost."""
+    if not learning or not learning.strip():
+        return {
+            "ok": False, "reason": "empty",
+            "has_hypothesis": False, "has_result": False,
+            "has_insight": False, "has_run_id": False,
+            "bad_phrase": None,
+        }
+    text = learning.strip()
+    if len(text) < 40:
+        return {
+            "ok": False, "reason": "too_short",
+            "has_hypothesis": False, "has_result": False,
+            "has_insight": False, "has_run_id": False,
+            "bad_phrase": None,
+        }
+    low = text.lower()
+    bad = next((p for p in _LESSON_BAD_PHRASES if p in low), None)
+    has_hyp = bool(_HYPOTHESIS_RE.search(text))
+    has_res = bool(_RESULT_RE.search(text))
+    has_ins = bool(_INSIGHT_RE.search(text))
+    has_rid = bool(_RUN_ID_RE.search(text))
+    if bad is not None:
+        return {
+            "ok": False, "reason": f"tool_mechanics:{bad}",
+            "has_hypothesis": has_hyp, "has_result": has_res,
+            "has_insight": has_ins, "has_run_id": has_rid,
+            "bad_phrase": bad,
+        }
+    if not has_hyp:
+        return {
+            "ok": False, "reason": "no_hypothesis_marker",
+            "has_hypothesis": False, "has_result": has_res,
+            "has_insight": has_ins, "has_run_id": has_rid,
+            "bad_phrase": None,
+        }
+    if not has_rid:
+        return {
+            "ok": False, "reason": "no_run_id",
+            "has_hypothesis": has_hyp, "has_result": has_res,
+            "has_insight": has_ins, "has_run_id": False,
+            "bad_phrase": None,
+        }
+    return {
+        "ok": True, "reason": "",
+        "has_hypothesis": has_hyp, "has_result": has_res,
+        "has_insight": has_ins, "has_run_id": has_rid,
+        "bad_phrase": None,
+    }
+
+
 def _append_lesson(reviewer: str, run_name: str, learning: str) -> None:
     """Append the council's takeaway from this run to lessons.md, dedup'd
     against the previous N entries so identical / near-identical lessons
-    don't clutter the file."""
+    don't clutter the file.
+
+    Now also gated by `classify_lesson_quality`: lessons that fail the
+    sanity check (no HYPOTHESIS marker, no run_id, banned tool-mechanics
+    phrase, etc.) are DROPPED with a warning to stderr instead of being
+    written. This is what stops the file from filling up with
+    "always log metrics" platitudes."""
     p = _lessons_path()
     if not p or not learning or not learning.strip():
         return
     ll = learning.strip()
     if len(ll) < 12:
+        return
+    # Quality gate — reject vague / tool-mechanics / no-run-id lessons.
+    q = classify_lesson_quality(ll)
+    if not q["ok"]:
+        print(
+            f"[council] dropping low-quality lesson from {reviewer} "
+            f"on {run_name}: reason={q['reason']} "
+            f"(has_hyp={q['has_hypothesis']} has_rid={q['has_run_id']}). "
+            f"First 160 chars: {ll[:160]!r}",
+            flush=True,
+        )
         return
     cur = _read_lessons(max_chars=20000)
     # naive fuzzy dedup: skip if a recent line shares ≥80% of words
@@ -385,6 +602,59 @@ def _append_lesson(reviewer: str, run_name: str, learning: str) -> None:
             f.write(line)
     except OSError as e:
         print(f"[council] could not append lesson: {e}", flush=True)
+
+
+def scan_lessons_file(path: Path | None = None) -> dict:
+    """Audit an existing lessons.md file. For each entry, run the quality
+    classifier and report counts + a list of suspect entries. Intended for
+    use from the maintenance / Lessons UI / cron, not as part of the hot
+    write path. Returns:
+      {
+        "path": "<str>",
+        "total": int,
+        "ok": int,
+        "bad": int,
+        "bad_reasons": {"no_run_id": 3, ...},
+        "samples_bad": [{"line": "...", "reason": "..."}, ...],   # up to 5
+      }
+    If the file doesn't exist or the workspace isn't set, returns an empty
+    report — the caller can decide whether to surface it."""
+    p = path or _lessons_path()
+    if not p or not p.exists():
+        return {"path": str(p) if p else "", "total": 0, "ok": 0, "bad": 0,
+                "bad_reasons": {}, "samples_bad": []}
+    try:
+        text = p.read_text(errors="ignore")
+    except OSError:
+        return {"path": str(p), "total": 0, "ok": 0, "bad": 0,
+                "bad_reasons": {}, "samples_bad": []}
+    # Each lesson is a single line beginning with "- [<ts> · <reviewer> on
+    # <run>] <body>". Strip the prefix before scoring.
+    line_re = re.compile(r"^-\s*\[[^\]]+\]\s*(.+)$")
+    ok = bad = 0
+    bad_reasons: dict[str, int] = {}
+    samples: list[dict] = []
+    for raw in text.splitlines():
+        m = line_re.match(raw.strip())
+        if not m:
+            continue
+        body = m.group(1).strip()
+        q = classify_lesson_quality(body)
+        if q["ok"]:
+            ok += 1
+        else:
+            bad += 1
+            bad_reasons[q["reason"]] = bad_reasons.get(q["reason"], 0) + 1
+            if len(samples) < 5:
+                samples.append({"line": raw, "reason": q["reason"]})
+    return {
+        "path": str(p),
+        "total": ok + bad,
+        "ok": ok,
+        "bad": bad,
+        "bad_reasons": bad_reasons,
+        "samples_bad": samples,
+    }
 
 
 def _build_context(run_id: str) -> dict | None:
@@ -1464,8 +1734,230 @@ def _bless_state_set(state: dict) -> None:
 
 def bless_status() -> dict:
     """Live state of the pre-flight code review. Read by the dashboard and
-    by the /api/track/run gate."""
-    return _bless_state_get()
+    by the /api/track/run gate. Augments the raw _bless_state_get() value
+    with a `preflight` block so the dashboard's 3-pill banner can render
+    without a second round-trip."""
+    st = dict(_bless_state_get())
+    st["preflight"] = preflight_summary()
+    return st
+
+
+# ════════════════════════════════════════════════════════════════════════
+#                       Pre-flight SOP (steps 1 + 2)
+# ════════════════════════════════════════════════════════════════════════
+#
+# Every major code change must pass three checks before any real run is
+# allowed. Step 3 is the council bless above; steps 1 + 2 are recorded
+# here as timestamped flags. The bless gate refuses approval unless both
+# step-1 and step-2 timestamps exist AND are NEWER than the most recent
+# `changed_at_iso` marker (which the agent sets via
+# /api/preflight/code_changed whenever it edits the code in a
+# load-bearing way).
+#
+# State is persisted to Setting key "preflight":
+#   {
+#     "static_overfit_at_iso": "...",   when step 1 last passed
+#     "static_overfit_evidence": "...",
+#     "static_overfit_final_loss": 0.0008,
+#     "uniform_init_at_iso": "...",     when step 2 last passed
+#     "uniform_init_evidence": "...",
+#     "uniform_init_entropy": 6.905,
+#     "changed_at_iso": "..."           bumped when code changes
+#   }
+
+_PREFLIGHT_STALE_HOURS = 24  # a preflight check older than this is stale
+
+
+def _preflight_state_get() -> dict:
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(Setting.key == "preflight").first()
+        if row and isinstance(row.value, dict):
+            return dict(row.value)
+        return {}
+    finally:
+        db.close()
+
+
+def _preflight_state_set(state: dict) -> None:
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(Setting.key == "preflight").first()
+        if row:
+            row.value = state
+        else:
+            db.add(Setting(key="preflight", value=state))
+        db.commit()
+    finally:
+        db.close()
+    try:
+        from .bus import bus
+        bus.publish("events", "runs_changed", {})
+    except Exception:
+        pass
+
+
+def _preflight_now_iso() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat()
+
+
+def _parse_iso(s):
+    if not s:
+        return None
+    try:
+        out = dt.datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+        if out.tzinfo is None:
+            out = out.replace(tzinfo=dt.timezone.utc)
+        return out
+    except Exception:
+        return None
+
+
+def _is_fresh(ts_iso, vs_iso) -> bool:
+    """A preflight timestamp is fresh iff it exists, is no older than
+    _PREFLIGHT_STALE_HOURS, AND is newer than the last `changed_at_iso`
+    marker (if any)."""
+    ts = _parse_iso(ts_iso)
+    if ts is None:
+        return False
+    now = dt.datetime.now(dt.timezone.utc)
+    age_hours = (now - ts).total_seconds() / 3600.0
+    if age_hours > _PREFLIGHT_STALE_HOURS:
+        return False
+    changed = _parse_iso(vs_iso)
+    if changed is not None and ts < changed:
+        return False
+    return True
+
+
+def preflight_record_static_overfit(evidence: str, final_loss) -> dict:
+    """Mark step 1 (static-batch overfit to ~0 train loss) as passed."""
+    st = _preflight_state_get()
+    st["static_overfit_at_iso"] = _preflight_now_iso()
+    st["static_overfit_evidence"] = (evidence or "")[:1000]
+    if final_loss is not None:
+        try:
+            st["static_overfit_final_loss"] = float(final_loss)
+        except (TypeError, ValueError):
+            pass
+    _preflight_state_set(st)
+    _emit_preflight_event(
+        "preflight_static_overfit_passed",
+        f"Pre-flight step 1 (static-batch overfit) recorded. "
+        f"final_loss={st.get('static_overfit_final_loss', '?')}")
+    return preflight_summary()
+
+
+def preflight_record_uniform_init(evidence: str, entropy) -> dict:
+    """Mark step 2 (uniform classification-head distribution at init)
+    as passed."""
+    st = _preflight_state_get()
+    st["uniform_init_at_iso"] = _preflight_now_iso()
+    st["uniform_init_evidence"] = (evidence or "")[:1000]
+    if entropy is not None:
+        try:
+            st["uniform_init_entropy"] = float(entropy)
+        except (TypeError, ValueError):
+            pass
+    _preflight_state_set(st)
+    _emit_preflight_event(
+        "preflight_uniform_init_passed",
+        f"Pre-flight step 2 (uniform-init head) recorded. "
+        f"entropy={st.get('uniform_init_entropy', '?')}")
+    return preflight_summary()
+
+
+def preflight_record_code_changed(reason: str) -> dict:
+    """Bump the `changed_at_iso` marker. This invalidates any preflight
+    timestamp recorded BEFORE now — the agent must re-run steps 1 + 2 +
+    re-request bless before any real run can launch again."""
+    st = _preflight_state_get()
+    st["changed_at_iso"] = _preflight_now_iso()
+    st["changed_reason"] = (reason or "")[:500]
+    _preflight_state_set(st)
+    # Also reset the bless state — the previous approval is now stale by
+    # definition.
+    cur = _bless_state_get()
+    if cur.get("status") == "approved":
+        _bless_state_set({"status": "not_requested",
+                          "summary": ("Code changed — previous approval "
+                                      "is stale. Re-run preflight + "
+                                      "bless."),
+                          "blockers": [], "suggestions": [],
+                          "verdicts": {}})
+    _emit_preflight_event(
+        "preflight_code_changed",
+        f"Significant code change recorded: "
+        f"{reason or 'no reason given'}. Preflight + bless must be "
+        "re-run.")
+    return preflight_summary()
+
+
+def preflight_summary() -> dict:
+    """Snapshot of the 3-pill state for the dashboard banner + the bless
+    gate."""
+    st = _preflight_state_get()
+    bless_st = _bless_state_get().get("status")
+    changed = st.get("changed_at_iso")
+    return {
+        "static_overfit_passed":
+            _is_fresh(st.get("static_overfit_at_iso"), changed),
+        "uniform_init_passed":
+            _is_fresh(st.get("uniform_init_at_iso"), changed),
+        "blessed": bless_st == "approved",
+        "static_overfit_at_iso": st.get("static_overfit_at_iso"),
+        "uniform_init_at_iso": st.get("uniform_init_at_iso"),
+        "changed_at_iso": changed,
+        "static_overfit_final_loss": st.get("static_overfit_final_loss"),
+        "uniform_init_entropy": st.get("uniform_init_entropy"),
+        "static_overfit_evidence": st.get("static_overfit_evidence"),
+        "uniform_init_evidence": st.get("uniform_init_evidence"),
+        "stale_hours": _PREFLIGHT_STALE_HOURS,
+    }
+
+
+def preflight_blocking_reasons():
+    """Human-readable list of which preflight steps are missing/stale.
+    Empty list means steps 1 + 2 are both good — bless is allowed to
+    proceed. Used by the bless gate."""
+    s = preflight_summary()
+    out = []
+    if not s["static_overfit_passed"]:
+        out.append(
+            "Pre-flight step 1 (static-batch overfit) has not been "
+            "recorded — train.py is unverified. POST "
+            "/api/preflight/static_overfit with {evidence, final_loss} "
+            "after you see ~0 train loss on a tiny static batch.")
+    if not s["uniform_init_passed"]:
+        out.append(
+            "Pre-flight step 2 (uniform classification-head at init) "
+            "has not been recorded — the architecture is unverified. "
+            "POST /api/preflight/uniform_init with {evidence, entropy} "
+            "after you confirm the head outputs ~1/num_classes per "
+            "class at init.")
+    return out
+
+
+def _emit_preflight_event(ev_type: str, message: str) -> None:
+    try:
+        from .models import Event
+        db = SessionLocal()
+        try:
+            ev = Event(id="ev-" + os.urandom(4).hex(),
+                       type=ev_type, severity="info",
+                       actor="preflight", message=message,
+                       created_at=_preflight_now_iso())
+            db.add(ev)
+            db.commit()
+            try:
+                from .bus import bus
+                bus.publish("events", "event", ev.dict())
+            except Exception:
+                pass
+        finally:
+            db.close()
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[council/preflight] event-emit failed: {e}", flush=True)
 
 
 def is_code_blessed() -> bool:
@@ -1585,7 +2077,32 @@ def _bless_worker(workspace: str) -> None:
 
 def bless_async(workspace: str) -> dict:
     """Kick off a fresh review of ``workspace``. Returns the state
-    immediately (pending); the verdict is written later by the worker."""
+    immediately (pending); the verdict is written later by the worker.
+
+    PRE-FLIGHT GATE: refuses to even start a review if steps 1 + 2 of
+    the SOP have not been recorded (or are stale). The bless verdict
+    becomes meaningless if the agent hasn't proven train.py actually
+    optimises and the architecture isn't broken at init, so we short-
+    circuit before burning council tokens. The agent gets a clear
+    `blocked_on_preflight` status + the missing-step blocker list and
+    knows what to do."""
+    blockers = preflight_blocking_reasons()
+    if blockers:
+        _bless_state_set({
+            "status": "blocked_on_preflight",
+            "summary": ("Pre-flight SOP not complete — refusing to run "
+                        "council bless until steps 1 + 2 pass."),
+            "blockers": blockers,
+            "suggestions": [
+                "Run a tiny static-batch overfit to ~0 train loss, then "
+                "POST /api/preflight/static_overfit.",
+                "Verify the classification head is uniform at init, then "
+                "POST /api/preflight/uniform_init.",
+                "Then re-POST /api/council/bless.",
+            ],
+            "verdicts": {},
+        })
+        return bless_status()
     _bless_state_set({"status": "pending",
                       "summary": "Council is reviewing the codebase…",
                       "blockers": [], "suggestions": [], "verdicts": {}})

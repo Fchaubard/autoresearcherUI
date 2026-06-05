@@ -21,11 +21,14 @@ import subprocess
 import threading
 import time
 
-from . import metrics
+from . import kill_criteria, metrics
 from .bus import bus
 from .config import DATA_DIR
 from .db import SessionLocal
 from .models import Event, Gpu, Idea, Project, Run, Setting
+
+# Default policy if the user didn't enter anything.
+_DEFAULT_KILL_CRITERIA = "1 hour"
 
 _STARTED = False
 _LOCK = threading.Lock()
@@ -93,6 +96,11 @@ def _loop() -> None:
             changed = _reconcile_runs(sessions)
         except Exception as e:                       # noqa: BLE001
             print(f"[monitor] reconcile error: {e}", flush=True)
+        try:
+            if _apply_kill_criteria(sessions):
+                changed = True
+        except Exception as e:                       # noqa: BLE001
+            print(f"[monitor] kill_criteria error: {e}", flush=True)
         for step in (_sync_idea_queue, _enrich_runs, _nudge_idle_gpus):
             try:
                 step()
@@ -304,6 +312,92 @@ def _reconcile_runs(sessions: set[str]) -> bool:
                 council.review_async(run.id)
             except Exception as e:                      # noqa: BLE001
                 print(f"[monitor] council review_async failed: {e}", flush=True)
+        if changed:
+            db.commit()
+    finally:
+        db.close()
+    return changed
+
+
+# ─────────────────────────── kill criteria ───────────────────────────────
+
+
+def _kill_run_session(run_id: str, tmux_session: str) -> None:
+    """Kill the run's tmux session(s) — best-effort, both the run id and the
+    tmux_session column (which may differ for legacy rows)."""
+    for s in {run_id, tmux_session}:
+        if not s or not _safe_name(s) or s in _INFRA:
+            continue
+        try:
+            subprocess.run(["tmux", "kill-session", "-t", s],
+                           capture_output=True, timeout=10)
+        except Exception:                              # noqa: BLE001
+            pass
+
+
+def _onboarding_kill_text() -> str:
+    """Return the user's kill-criteria string from the onboarding row, or
+    the default if nothing was set."""
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(Setting.key == "onboarding").first()
+        cfg = dict(row.value) if row and isinstance(row.value, dict) else {}
+    finally:
+        db.close()
+    text = (cfg.get("kill_criteria") or "").strip()
+    return text or _DEFAULT_KILL_CRITERIA
+
+
+def _apply_kill_criteria(sessions: set[str]) -> bool:
+    """Parse the user's kill criteria and apply it to every running run.
+
+    Returns True if any run was killed (so the caller can publish a
+    runs_changed event).
+    """
+    text = _onboarding_kill_text()
+    rules = kill_criteria.parse(text)
+    if not rules:
+        return False
+    db = SessionLocal()
+    changed = False
+    try:
+        running = db.query(Run).filter(Run.status == "running").all()
+        if not running:
+            return False
+        now = time.time()
+        for run in running:
+            # Only consider runs that actually have a live tmux session —
+            # if it's already dead, _reconcile_runs handles it.
+            alive = (run.id in sessions
+                     or (run.tmux_session and run.tmux_session in sessions))
+            if not alive:
+                continue
+            try:
+                m = metrics.query(run.id)
+            except Exception:                          # noqa: BLE001
+                m = {}
+            try:
+                fire, reason = kill_criteria.check_run(run, rules, m, now=now)
+            except Exception as e:                     # noqa: BLE001
+                print(f"[monitor] kill_criteria check error: {e}", flush=True)
+                continue
+            if not fire:
+                continue
+            _kill_run_session(run.id, run.tmux_session or "")
+            run.status = "crashed"
+            run.ended_at = _iso()
+            db.add(Event(
+                id="ev-" + os.urandom(4).hex(), type="run_killed",
+                severity="warning", actor="system",
+                message=f"{run.id} killed by user kill-criteria — {reason}",
+                run_id=run.id, created_at=_iso()))
+            changed = True
+            try:
+                from . import council
+                council.review_async(run.id)
+            except Exception as e:                     # noqa: BLE001
+                print(f"[monitor] council review_async failed: {e}",
+                      flush=True)
         if changed:
             db.commit()
     finally:

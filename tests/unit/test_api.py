@@ -304,6 +304,257 @@ def test_paper_runs_results_status_filter(client, make_project, make_run):
     assert "prc" not in ids
 
 
+# ── Paper-proposal history (task #8) ───────────────────────────────────────
+# Every council review the user runs must be preserved so it's still
+# clickable after the modal is dismissed. These tests cover the full
+# lifecycle: list, summary fields, dismiss, accept, and the
+# already-in-paper-mode revisit flow.
+
+
+def _add_proposal(db, pid, status="ready", responses=None, **kw):
+    from backend.app.models import PaperProposal
+    p = PaperProposal(id=pid, status=status,
+                       council_responses=responses or {}, **kw)
+    db.add(p)
+    db.commit()
+    return p
+
+
+def test_paper_proposals_list_empty(client):
+    """No proposals yet → endpoint returns an empty list, not 404."""
+    r = client.get("/api/paper/proposals")
+    assert r.status_code == 200
+    assert r.json() == {"proposals": []}
+
+
+def test_paper_proposals_list_returns_summary(client):
+    """Every council review is preserved with a compact summary so the
+    history table can render rec counts + top claim without re-fetching
+    each row's full body."""
+    from backend.app.db import SessionLocal
+    db = SessionLocal()
+    try:
+        _add_proposal(db, "pp-old", status="dismissed",
+                       responses={
+                           "gemini": {"recommendation": "keep_researching",
+                                       "novelty": "low",
+                                       "claims": [{"title": "Claim A"}]},
+                           "openai": {"recommendation": "keep_researching",
+                                       "novelty": "unclear"},
+                       })
+        _add_proposal(db, "pp-new", status="ready",
+                       responses={
+                           "gemini": {"recommendation": "proceed_to_paper",
+                                       "novelty": "high",
+                                       "claims": [{"title": "Top claim X"}]},
+                           "openai": {"recommendation": "proceed_to_paper",
+                                       "novelty": "high"},
+                           "claude": {"recommendation": "pivot",
+                                       "novelty": "medium"},
+                       })
+    finally:
+        db.close()
+    r = client.get("/api/paper/proposals")
+    assert r.status_code == 200
+    rows = r.json()["proposals"]
+    assert len(rows) == 2
+    by_id = {row["id"]: row for row in rows}
+    assert by_id["pp-new"]["proceed_count"] == 2
+    assert by_id["pp-new"]["pivot_count"] == 1
+    assert by_id["pp-new"]["n_reviewers"] == 3
+    assert by_id["pp-new"]["status"] == "ready"
+    assert by_id["pp-new"]["novelty"] == "high"
+    assert by_id["pp-new"]["top_claim"] == "Top claim X"
+    assert by_id["pp-old"]["proceed_count"] == 0
+    assert by_id["pp-old"]["keep_researching_count"] == 2
+    assert by_id["pp-old"]["status"] == "dismissed"
+    assert by_id["pp-old"]["top_claim"] == "Claim A"
+
+
+def test_paper_proposals_list_skips_internal_keys(client):
+    """The async runner stashes a `_no_reviewers` sentinel when nobody is
+    configured. That shouldn't get counted as a real reviewer in the
+    history summary."""
+    from backend.app.db import SessionLocal
+    db = SessionLocal()
+    try:
+        _add_proposal(db, "pp-empty", status="ready",
+                       responses={"_no_reviewers": "none configured"})
+    finally:
+        db.close()
+    rows = client.get("/api/paper/proposals").json()["proposals"]
+    assert rows[0]["n_reviewers"] == 0
+    assert rows[0]["proceed_count"] == 0
+
+
+def test_paper_proposal_dismiss_marks_status_and_persists(client):
+    """Dismissing a proposal keeps the row around (so it shows in the
+    history table) but flips its status to 'dismissed'."""
+    from backend.app.db import SessionLocal
+    from backend.app.models import PaperProposal
+    db = SessionLocal()
+    try:
+        _add_proposal(db, "pp1", status="ready",
+                       responses={"gemini": {"recommendation":
+                                              "keep_researching"}})
+    finally:
+        db.close()
+    r = client.post("/api/paper/proposal/pp1/dismiss")
+    assert r.status_code == 200
+    j = r.json()
+    assert j["ok"] is True
+    assert j["status"] == "dismissed"
+    # Row is not deleted — it must still appear in the history.
+    db = SessionLocal()
+    try:
+        p = db.query(PaperProposal).filter(PaperProposal.id == "pp1").first()
+        assert p is not None
+        assert p.status == "dismissed"
+        assert p.rejected_at  # timestamp recorded
+    finally:
+        db.close()
+
+
+def test_paper_proposal_dismiss_unknown_returns_not_found(client):
+    r = client.post("/api/paper/proposal/missing/dismiss")
+    assert r.status_code == 200
+    assert r.json()["ok"] is False
+
+
+def test_paper_proposal_dismiss_refuses_to_downgrade_accepted(client):
+    """If the user revisits an accepted proposal and closes the modal,
+    we must NOT silently flip 'accepted' → 'dismissed'."""
+    from backend.app.db import SessionLocal
+    from backend.app.models import PaperProposal
+    db = SessionLocal()
+    try:
+        _add_proposal(db, "pp-acc", status="accepted",
+                       accepted_at="2026-01-01T00:00:00+00:00")
+    finally:
+        db.close()
+    r = client.post("/api/paper/proposal/pp-acc/dismiss").json()
+    assert r["ok"] is False
+    db = SessionLocal()
+    try:
+        p = db.query(PaperProposal).filter(
+            PaperProposal.id == "pp-acc").first()
+        assert p.status == "accepted"
+    finally:
+        db.close()
+
+
+def test_paper_enter_marks_proposal_accepted_and_supersedes_others(
+        client, make_project):
+    """Accepting a proposal flips its row to 'accepted' (so the history
+    knows which one was acted on) and marks any other open proposals
+    as 'superseded' so the history isn't ambiguous."""
+    make_project()
+    from backend.app.db import SessionLocal
+    from backend.app.models import PaperProposal
+    db = SessionLocal()
+    try:
+        _add_proposal(db, "pp-chosen", status="ready",
+                       responses={"gemini": {
+                           "recommendation": "proceed_to_paper",
+                           "claims": [{"title": "Real claim worth writing"}]}})
+        _add_proposal(db, "pp-other", status="ready",
+                       responses={"gemini": {"recommendation": "pivot"}})
+    finally:
+        db.close()
+    r = client.post("/api/paper/enter",
+                     json={"meta": {}, "proposal_id": "pp-chosen"})
+    assert r.status_code == 200
+    db = SessionLocal()
+    try:
+        chosen = db.query(PaperProposal).filter(
+            PaperProposal.id == "pp-chosen").first()
+        other = db.query(PaperProposal).filter(
+            PaperProposal.id == "pp-other").first()
+        assert chosen.status == "accepted"
+        assert chosen.accepted_at
+        assert other.status == "superseded"
+    finally:
+        db.close()
+
+
+def test_paper_proposal_history_row_is_clickable(client):
+    """Acceptance criterion: GET /paper/proposals returns rows with ids,
+    and GET /paper/proposal/{pid} returns the full body so the UI can
+    re-render the modal from a history click."""
+    from backend.app.db import SessionLocal
+    db = SessionLocal()
+    try:
+        _add_proposal(db, "pp-hist", status="dismissed",
+                       responses={"gemini": {
+                           "recommendation": "keep_researching",
+                           "claims": [{"title": "old claim"}],
+                           "rationale_md": "be careful here"}})
+    finally:
+        db.close()
+    # 1) The history list returns the row.
+    listing = client.get("/api/paper/proposals").json()["proposals"]
+    pids = [p["id"] for p in listing]
+    assert "pp-hist" in pids
+    # 2) Clicking it (GET /paper/proposal/{pid}) returns the full body so
+    #    the modal can re-render the per-reviewer columns.
+    body = client.get("/api/paper/proposal/pp-hist").json()
+    assert body["id"] == "pp-hist"
+    assert body["status"] == "dismissed"
+    assert "gemini" in (body.get("council_responses") or {})
+
+
+def test_paper_proposal_history_accept_old_proposal_fires_paper_enter(
+        client, make_project):
+    """Acceptance criterion: clicking Accept on a row that was earlier
+    dismissed must fire paper-mode entry as if the user just accepted
+    it now (populating claims from that proposal)."""
+    make_project()
+    from backend.app.db import SessionLocal
+    from backend.app.models import PaperProposal, PaperClaim
+    db = SessionLocal()
+    try:
+        _add_proposal(db, "pp-old-dismissed", status="dismissed",
+                       responses={"gemini": {
+                           "recommendation": "proceed_to_paper",
+                           "novelty": "medium",
+                           "claims": [{"title": "Resurrected claim title",
+                                       "summary": "still good",
+                                       "evidence_strength": "suggestive"}]}})
+    finally:
+        db.close()
+    # Re-accept it (the UI calls /paper/enter with this proposal_id).
+    r = client.post("/api/paper/enter",
+                     json={"meta": {},
+                            "proposal_id": "pp-old-dismissed"}).json()
+    assert "entered_paper_mode" in r.get("status", "") \
+        or r.get("status") == "entered_paper_mode"
+    # The proposal is now accepted and its claims are imported.
+    db = SessionLocal()
+    try:
+        p = db.query(PaperProposal).filter(
+            PaperProposal.id == "pp-old-dismissed").first()
+        assert p.status == "accepted"
+        titles = [c.title for c in db.query(PaperClaim).all()]
+        assert "Resurrected claim title" in titles
+    finally:
+        db.close()
+
+
+def test_paper_proposal_latest_route_distinct_from_list(client):
+    """Sanity: /paper/proposals (list) and /paper/proposal/latest are
+    distinct routes — neither shadows the other."""
+    from backend.app.db import SessionLocal
+    db = SessionLocal()
+    try:
+        _add_proposal(db, "pp-one", status="ready")
+    finally:
+        db.close()
+    listing = client.get("/api/paper/proposals").json()
+    latest = client.get("/api/paper/proposal/latest").json()
+    assert "proposals" in listing
+    assert latest.get("id") == "pp-one"
+
+
 def test_paper_run_kill_marks_crashed(client, make_project, make_run):
     make_project()
     make_run(id="pr1", context="paper", status="running",

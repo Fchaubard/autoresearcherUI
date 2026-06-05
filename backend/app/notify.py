@@ -246,6 +246,23 @@ def emails_paused() -> bool:
         return False
 
 
+def research_paused() -> bool:
+    """Return True iff the user clicked 'Pause research' in Settings.
+
+    Single source of truth read by the orchestrator (skips launching new
+    runs), the PI agent (skips nudging the research / author agent), and
+    /api/track/run (rejects new runs with 423). Stored on the onboarding
+    row (`research_paused: bool`). Default False — research runs as
+    configured. Gate is intentionally co-located with `emails_paused`
+    because both are pause flags on the onboarding settings row read by
+    multiple subsystems."""
+    try:
+        cfg = _cfg() or {}
+        return bool(cfg.get("research_paused"))
+    except Exception:                                       # noqa: BLE001
+        return False
+
+
 def send(subject, text, html=None, images=None) -> bool:
     """Send a notification to the configured recipients. True on success.
 

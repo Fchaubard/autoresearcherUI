@@ -490,7 +490,11 @@ async function pollBlessStatus() {
     try { s = await api('/council/bless/status'); } catch (e) { return; }
     if (!s) return;
     // dedupe: only repaint when state actually changes
-    const sig = (s.status || '') + '|' + ((s.blockers || []).length);
+    const pf = s.preflight || {};
+    const sig = (s.status || '') + '|' + ((s.blockers || []).length)
+      + '|' + (pf.static_overfit_passed ? '1' : '0')
+      + '|' + (pf.uniform_init_passed ? '1' : '0')
+      + '|' + (pf.blessed ? '1' : '0');
     if (sig === last) return;
     last = sig;
     renderBlessBanner(s);
@@ -499,9 +503,40 @@ async function pollBlessStatus() {
   addTimer(setInterval(tick, 6000));
 }
 
+function renderPreflightPills(pf) {
+  // 3-pill SOP banner: [static_overfit] [uniform_init] [blessed].
+  // Lives ABOVE the bless-banner so the agent's progress through the
+  // 3-step SOP is always at-a-glance. Hidden once all three pass.
+  const existing = document.getElementById('preflight-pills');
+  if (existing) existing.remove();
+  if (!pf) return;
+  const allOk = pf.static_overfit_passed && pf.uniform_init_passed
+    && pf.blessed;
+  if (allOk) return;
+  const pill = (label, ok) =>
+    `<span class="pf-pill ${ok ? 'pf-pill-ok' : 'pf-pill-bad'}">` +
+      `${ok ? '✓' : '·'} ${esc(label)}</span>`;
+  const banner = el('div', 'preflight-banner');
+  banner.id = 'preflight-pills';
+  banner.innerHTML =
+    `<div class="pf-row">` +
+      `<div class="pf-title">Pre-flight SOP</div>` +
+      pill('static_overfit', !!pf.static_overfit_passed) +
+      pill('uniform_init', !!pf.uniform_init_passed) +
+      pill('blessed', !!pf.blessed) +
+    '</div>';
+  const app = document.getElementById('app');
+  const hdr = app && app.querySelector('.hdr');
+  if (hdr) hdr.insertAdjacentElement('afterend', banner);
+  else if (app) app.insertBefore(banner, app.firstChild);
+}
+
 function renderBlessBanner(s) {
   const existing = document.getElementById('bless-banner');
   if (existing) existing.remove();
+  // Always paint the 3-pill SOP banner first so it sits above any
+  // bless banner. Hidden when all three pass.
+  renderPreflightPills(s && s.preflight);
   // Approved state — small badge in the header instead of a full banner.
   if (!s || s.status === 'approved') {
     const hdr = document.querySelector('.hdr');
@@ -513,16 +548,19 @@ function renderBlessBanner(s) {
     }
     return;
   }
-  // not_requested / pending / rejected — full banner under the header.
+  // not_requested / pending / rejected / blocked_on_preflight — full
+  // banner under the header.
   const colorClass = ({
     pending: 'bless-pending',
     rejected: 'bless-rejected',
     not_requested: 'bless-waiting',
+    blocked_on_preflight: 'bless-rejected',
   })[s.status] || 'bless-waiting';
   const icon = ({
     pending: '⏳',
     rejected: '✗',
     not_requested: '·',
+    blocked_on_preflight: '⚠',
   })[s.status] || '·';
   const title = ({
     pending: 'Council is reviewing the codebase…',
@@ -530,6 +568,8 @@ function renderBlessBanner(s) {
       + 'run can launch',
     not_requested: 'Awaiting code review — the agent will request it after '
       + 'scaffolding the baseline',
+    blocked_on_preflight: 'Bless blocked — pre-flight SOP (steps 1+2) '
+      + 'must pass before council review can start',
   })[s.status] || s.summary || 'Code review';
   const blockersHtml = (s.blockers || []).length
     ? '<ul class="bless-blockers">' +
@@ -711,6 +751,7 @@ function _watchPaperProposal(pid) {
       if (p && p.status === 'ready') {
         sc.remove();
         _showPaperProposalResults(p);
+        try { _renderPaperProposalsHistory(); } catch (e) {}
         return;
       }
     } catch (e) { /* keep polling */ }
@@ -723,7 +764,7 @@ function _showPaperProposalResults(p) {
   const sc = el('div', 'mscrim');
   const m = el('div', 'modal modal-proposal');
   const responses = p.council_responses || {};
-  const reviewers = Object.keys(responses);
+  const reviewers = Object.keys(responses).filter(r => !r.startsWith('_'));
   const recCounts = {proceed_to_paper: 0, keep_researching: 0, pivot: 0};
   reviewers.forEach(r => {
     const rec = responses[r] && responses[r].recommendation;
@@ -752,25 +793,144 @@ function _showPaperProposalResults(p) {
       `<div class="prop-rationale">${esc(x.rationale_md || '')}</div>` +
       `</div>`;
   }).join('');
+  // Status banner so the user knows whether they're looking at a fresh
+  // review or revisiting an older one from the history table.
+  const status = p.status || 'ready';
+  const acceptedAt = p.accepted_at || '';
+  const banner = (status === 'accepted')
+    ? `<div class="modal-sub" style="color:var(--accent,#7be07b)">` +
+      `✓ You accepted this proposal${acceptedAt ?
+        ' on ' + _fmtTimeShort(acceptedAt) : ''}. Re-accepting will ` +
+      `re-populate claims from it.</div>`
+    : (status === 'dismissed')
+    ? `<div class="modal-sub" style="color:var(--warn,#e0c97b)">` +
+      `You previously dismissed this proposal. Click ` +
+      `<b>Proceed to Paper Mode</b> below to accept it now instead.</div>`
+    : (status === 'superseded')
+    ? `<div class="modal-sub" style="color:var(--muted,#9aa)">` +
+      `Superseded by a newer council review you accepted. You can still ` +
+      `re-accept this one.</div>`
+    : '';
+  const proceedLabel = (status === 'accepted')
+    ? 'Re-accept (re-populate claims) →'
+    : 'Proceed to Paper Mode →';
   m.innerHTML =
     `<div class="modal-hd"><h2>Paper Proposal — council assessment</h2>` +
     `<button class="iconbtn" id="ppx2">✕</button></div>` +
+    banner +
     `<div class="modal-sub"><b>${proceed}/${reviewers.length}</b> ` +
     `say <code>proceed_to_paper</code>. Read each reviewer below — ` +
     `dissent is shown intentionally.</div>` +
     `<div class="prop-grid">${cols}</div>` +
     `<div class="modal-actions">` +
     `<button class="btn" id="pp-keep">Keep researching</button>` +
-    `<button class="btn pri" id="pp-proceed">Proceed to Paper Mode →</button>` +
+    `<button class="btn pri" id="pp-proceed">${esc(proceedLabel)}</button>` +
     `</div>`;
   sc.append(m); document.body.append(sc);
-  sc.onclick = e => { if (e.target === sc) sc.remove(); };
-  m.querySelector('#ppx2').onclick = () => sc.remove();
-  m.querySelector('#pp-keep').onclick = () => sc.remove();
-  m.querySelector('#pp-proceed').onclick = () => {
+  // Dismiss helper — marks the proposal 'dismissed' on the server so
+  // the history row reflects the user's choice. We don't dismiss
+  // already-accepted proposals (revisiting an old accept shouldn't
+  // downgrade it).
+  const dismissOnClose = async () => {
+    if (status !== 'accepted' && p && p.id) {
+      try { await post('/paper/proposal/' + p.id + '/dismiss', {}); }
+      catch (e) { /* best-effort */ }
+    }
+    try { _renderPaperProposalsHistory(); } catch (e) {}
+  };
+  sc.onclick = e => {
+    if (e.target === sc) { sc.remove(); dismissOnClose(); }
+  };
+  m.querySelector('#ppx2').onclick = () => { sc.remove(); dismissOnClose(); };
+  m.querySelector('#pp-keep').onclick = () => { sc.remove(); dismissOnClose(); };
+  m.querySelector('#pp-proceed').onclick = async () => {
     sc.remove();
+    // If we're already in paper mode and the user clicked Accept on a
+    // history-table row, /paper/enter would say "already in paper mode"
+    // — instead, scaffold the claims from this proposal without
+    // re-running the venue/deadline onboarding modal.
+    const inPaper = (S.mode && S.mode.mode === 'paper');
+    if (inPaper) {
+      try {
+        const r = await post('/paper/enter',
+                              { meta: {}, proposal_id: p.id });
+        if (r && r.status === 'already_in_paper_mode') {
+          try { await post('/paper/scaffold', {}); } catch (e) {}
+          await aruiAlert(
+            'Already in paper mode — claims from this proposal have ' +
+            'been re-populated.');
+        }
+      } catch (e) {
+        await aruiAlert('Could not re-accept: ' + e);
+      }
+      try { _renderPaperProposalsHistory(); } catch (e) {}
+      return;
+    }
     openPaperOnboard(p.id);
   };
+}
+
+// Compact time formatter — used by proposal history rows and the
+// status banner. Returns "3h ago", "2d ago", or a short ISO date.
+function _fmtTimeShort(iso) {
+  if (!iso) return '';
+  let t;
+  try { t = new Date(iso); } catch (e) { return iso; }
+  if (isNaN(t.getTime())) return iso;
+  const diff = (Date.now() - t.getTime()) / 1000;
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  if (diff < 86400 * 14) return Math.floor(diff / 86400) + 'd ago';
+  return t.toISOString().slice(0, 10);
+}
+
+// Renders / refreshes the "Past paper proposals" history table inside
+// the Write-the-paper view. The container has id="paper-proposals-history".
+// Safe to call when the container isn't mounted — it just no-ops.
+async function _renderPaperProposalsHistory() {
+  const host = document.getElementById('paper-proposals-history');
+  if (!host) return;
+  let data;
+  try { data = await api('/paper/proposals'); }
+  catch (e) { host.innerHTML = ''; return; }
+  const rows = (data && data.proposals) || [];
+  if (!rows.length) { host.innerHTML = ''; return; }
+  const statusChip = (s) => {
+    const cls = s === 'accepted' ? 'ok'
+      : s === 'ready'     ? 'pri'
+      : s === 'in_progress' ? 'muted'
+      : s === 'superseded'? 'muted'
+      : 'warn';
+    return `<span class="pp-hist-status ${cls}">${esc(s)}</span>`;
+  };
+  const items = rows.map(r => {
+    const proceed = `${r.proceed_count}/${r.n_reviewers}`;
+    const top = r.top_claim || '(no claims extracted)';
+    return `<div class="pp-hist-row" data-pid="${esc(r.id)}">` +
+      `<div class="pp-hist-when">${esc(_fmtTimeShort(r.created_at))}</div>` +
+      `<div class="pp-hist-status-cell">${statusChip(r.status)}</div>` +
+      `<div class="pp-hist-rec"><b>${esc(proceed)}</b> proceed` +
+      (r.novelty ? ` · novelty ${esc(r.novelty)}` : '') + `</div>` +
+      `<div class="pp-hist-top" title="${esc(top)}">${esc(top)}</div>` +
+      `</div>`;
+  }).join('');
+  host.innerHTML =
+    `<div class="pp-hist-h">Past paper proposals` +
+    `<span class="pp-hist-count">${rows.length}</span></div>` +
+    `<div class="pp-hist-sub">Every council review is saved. Click ` +
+    `any row to revisit the full assessment and accept it later.</div>` +
+    `<div class="pp-hist-list">${items}</div>`;
+  host.querySelectorAll('.pp-hist-row').forEach(row => {
+    row.onclick = async () => {
+      const pid = row.dataset.pid;
+      if (!pid) return;
+      try {
+        const p = await api('/paper/proposal/' + pid);
+        if (p && p.id) _showPaperProposalResults(p);
+      } catch (e) { await aruiAlert('Could not load proposal: ' + e); }
+    };
+  });
 }
 
 async function openPaperOnboard(proposalId) {
@@ -2665,6 +2825,17 @@ const OB_FIELDS = [
     + 'fid|bpb|arc_score|bleu|rouge|pass@1|reward'],
   ['baseline', 'Baseline method(s) to run first', 'area',
     'e.g. TRM (Tiny Recursive Model)'],
+  // Free-text run-kill policy. The monitor parses this into structured
+  // rules (kill_criteria.py) and auto-kills any running run that
+  // violates the policy. Supports: "1 hour" / "1h" / "kill after N
+  // hours" / "N steps" / "val_loss plateaus for N steps" /
+  // "val_loss > 5 for 100 steps", and multiple rules OR'd with "OR".
+  // The exact string is also passed to the research agent as
+  // $ARUI_KILL_CRITERIA so it knows the policy.
+  ['kill_criteria',
+    'Run kill criteria (when to auto-kill a long/diverging run)',
+    'text',
+    '1 hour  —  e.g. "2 hours OR val_loss plateaus for 500 steps"'],
   ['sec', 'Agent (advanced — leave the textarea alone for sensible defaults)'],
   ['agent_instructions',
     'How the agent should work (logging rules, GPU saturation, ideas.md '
@@ -3574,6 +3745,47 @@ async function openSettings() {
   refreshEmailBtn();
   m.append(emailBar);
 
+  /* ── Pause / Resume research loop ─────────────────────────────────
+     Same pattern as the emails bar above. State is stored on the
+     onboarding row (research_paused: bool) and read by:
+       - the orchestrator (skips launching new runs while paused)
+       - the PI agent (skips nudging while paused)
+       - /api/track/run (returns HTTP 423 while paused)
+     In-flight runs keep going; use /api/reset for a hard stop. */
+  const resBar = el('div', 'set-email-bar');
+  const resLbl = el('div', 'set-email-lbl', 'Autonomous research loop');
+  const resBtn = el('button', 'btn xs', 'Pause research');
+  const resHint = el('div', 'set-email-hint', '');
+  resBar.append(resLbl, resBtn, resHint);
+  const refreshResBtn = async () => {
+    try {
+      const d = await api('/research/status');
+      if (d.paused) {
+        resBtn.textContent = '▶ Resume research';
+        resBtn.classList.add('pri');
+        resHint.textContent =
+          'Paused — orchestrator + PI are idle; new runs return 423. ' +
+          'In-flight runs are unaffected.';
+      } else {
+        resBtn.textContent = '⏸ Pause research';
+        resBtn.classList.remove('pri');
+        resHint.textContent =
+          'Active — orchestrator launches runs and the PI agent nudges ' +
+          'on schedule.';
+      }
+    } catch (e) { /* keep last */ }
+  };
+  resBtn.onclick = async () => {
+    resBtn.disabled = true;
+    const wasPaused = resBtn.textContent.includes('Resume');
+    try {
+      await post(wasPaused ? '/research/resume' : '/research/pause', {});
+      await refreshResBtn();
+    } finally { resBtn.disabled = false; }
+  };
+  refreshResBtn();
+  m.append(resBar);
+
   const actions = el('div', 'modal-actions');
   const status = el('div', 'set-status');
   const save = el('button', 'btn pri', 'Save settings');
@@ -3774,6 +3986,10 @@ async function renderLatex(c) {
         '</div>' +
         '<button class="btn pri" id="paper-cta">Start the Paper Proposal →</button>' +
       '</div>' +
+      // Saved-reviews history: every council review the user has ever
+      // run is preserved here so a dismissed proposal isn't lost. The
+      // _renderPaperProposalsHistory() call below fills this in.
+      '<div class="pp-hist" id="paper-proposals-history"></div>' +
       '</div>';
     const cta = c.querySelector('#paper-cta');
     if (cta) cta.onclick = openPaperProposal;
@@ -3783,6 +3999,7 @@ async function renderLatex(c) {
         openPaperProposal();
       };
     });
+    _renderPaperProposalsHistory();
     return;
   }
   c.innerHTML =

@@ -278,7 +278,7 @@ def populate_claims_from_proposal(proposal_id: str = "") -> int:
         q = db.query(PaperProposal)
         p = (q.filter(PaperProposal.id == proposal_id).first()
              if proposal_id else
-             q.filter(PaperProposal.status == "ready")
+             q.filter(PaperProposal.status.in_(("ready", "accepted")))
               .order_by(PaperProposal.created_at.desc()).first())
         if not p:
             return 0

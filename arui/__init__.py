@@ -31,7 +31,19 @@ import threading
 import time
 import urllib.request
 
-__all__ = ["init", "log", "finish", "log_artifact", "summary", "Run"]
+__all__ = ["init", "log", "log_defaults", "finish", "log_artifact",
+           "summary", "Run", "REQUIRED_DEFAULT_KEYS"]
+
+# The keys that every training run MUST log so the dashboard's drawer
+# "All plots" section is populated. The agent's setup prompt is required
+# to call ``arui.log_defaults(...)`` (or log all of these by hand) at
+# every step or eval. The backend audits that all of these were seen at
+# run-finish — missing keys surface as an Event-severity-warning so the
+# user sees clearly that a default metric wasn't logged.
+REQUIRED_DEFAULT_KEYS = (
+    "val_loss", "val_acc", "lr", "train_loss", "train_acc",
+    "time_per_step", "samples_per_sec",
+)
 
 _BASE = os.environ.get("ARUI_INGEST_URL", "http://127.0.0.1:8000").rstrip("/")
 _TOKEN = os.environ.get("ARUI_INGEST_TOKEN", "")
@@ -207,6 +219,113 @@ def log(metrics: dict, step: int | None = None) -> None:
     if _active is None:
         raise RuntimeError("arui.init() must be called before arui.log()")
     _active.log(metrics, step)
+
+
+# Per-run stopwatch used by ``log_defaults`` to compute ``time_per_step``
+# and ``samples_per_sec`` without the user having to thread a stopwatch
+# through their training loop. Keyed by ``id(_active)`` so a fresh run
+# resets it.
+_step_clock: dict[int, float] = {}
+
+
+def _optimizer_lr(optimizer) -> float | None:
+    """Best-effort: extract a single learning-rate scalar from any
+    PyTorch-style optimizer, a plain float, or ``None``. Returns the
+    first param_group's lr (the common case — schedulers update it in
+    place). Never raises."""
+    if optimizer is None:
+        return None
+    if isinstance(optimizer, (int, float)):
+        return float(optimizer)
+    try:
+        groups = getattr(optimizer, "param_groups", None)
+        if groups:
+            lr = groups[0].get("lr")
+            if lr is not None:
+                return float(lr)
+    except Exception:
+        pass
+    # Last-ditch: an attribute called .lr on the optimizer itself.
+    try:
+        lr = getattr(optimizer, "lr", None)
+        if lr is not None:
+            return float(lr)
+    except Exception:
+        pass
+    return None
+
+
+def log_defaults(
+    model=None,
+    optimizer=None,
+    step: int | None = None,
+    batch_size: int | None = None,
+    train_loss: float | None = None,
+    val_loss: float | None = None,
+    val_acc: float | None = None,
+    train_acc: float | None = None,
+    extra: dict | None = None,
+) -> dict:
+    """Log the dashboard's required default metrics in one call.
+
+    Every training run MUST surface these keys (see
+    ``REQUIRED_DEFAULT_KEYS``) so the run drawer's "All plots" section is
+    populated and runs are comparable across experiments. Missing values
+    are logged as ``None`` (NaN sentinel for the metric store) — never
+    silently dropped — so the drawer shows the key with a clear gap
+    rather than "(not logged)".
+
+    Auto-computed:
+        - ``lr`` is pulled from ``optimizer.param_groups[0]['lr']`` if not
+          provided directly.
+        - ``time_per_step`` is the wall-clock seconds since the previous
+          ``log_defaults`` call for this run.
+        - ``samples_per_sec`` = ``batch_size / time_per_step`` when both
+          are known.
+
+    Returns the dict that was logged, for tests + debugging.
+    """
+    if _active is None:
+        raise RuntimeError(
+            "arui.init() must be called before arui.log_defaults()")
+    now = time.time()
+    last = _step_clock.get(id(_active))
+    time_per_step = (now - last) if last is not None else None
+    _step_clock[id(_active)] = now
+
+    lr = _optimizer_lr(optimizer)
+    samples_per_sec = None
+    if batch_size and time_per_step and time_per_step > 0:
+        try:
+            samples_per_sec = float(batch_size) / float(time_per_step)
+        except Exception:
+            samples_per_sec = None
+
+    # Build the payload with EVERY required key. Missing scalars become
+    # NaN so the metric store records a point — the drawer can then show
+    # the key as present-but-no-data rather than absent entirely.
+    def _or_nan(v):
+        return float(v) if v is not None else float("nan")
+
+    payload: dict = {
+        "val_loss":        _or_nan(val_loss),
+        "val_acc":         _or_nan(val_acc),
+        "lr":              _or_nan(lr),
+        "train_loss":      _or_nan(train_loss),
+        "train_acc":       _or_nan(train_acc),
+        "time_per_step":   _or_nan(time_per_step),
+        "samples_per_sec": _or_nan(samples_per_sec),
+    }
+    if extra:
+        # User overrides win — same-keyed entries replace the defaults.
+        for k, v in extra.items():
+            try:
+                payload[str(k)] = float(v) if v is not None else float("nan")
+            except (TypeError, ValueError):
+                # Skip non-numeric extras silently; the SDK only logs scalars.
+                continue
+    _active.log(payload, step=step)
+    return payload
 
 
 def log_artifact(name: str, path: str) -> None:

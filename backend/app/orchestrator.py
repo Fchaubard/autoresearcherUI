@@ -117,6 +117,15 @@ class Orchestrator:
 
     # ── execute one experiment ─────────────────────────────────────────────
     async def _execute(self, idea_row_id: str, gpu_index: int) -> None:
+        # RESEARCH-PAUSED GATE (Task #1): if the user clicked
+        # "Pause research" in Settings, don't launch new runs. We poll
+        # every 5s while paused so resume is instant; this keeps the
+        # idea in queue (status untouched) and the GPU slot reserved.
+        from . import notify as _notify
+        while _notify.research_paused():
+            if not self.running:
+                return
+            await asyncio.sleep(5)
         db = SessionLocal()
         idea = db.query(Idea).filter(Idea.id == idea_row_id).first()
         run_id = idea.idea_id

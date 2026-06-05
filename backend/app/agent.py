@@ -69,7 +69,7 @@ class RealAgent:
     def __init__(self, workspace: str, project_name: str, ingest_url: str,
                  repo_root: str, agent_cmd: list[str] | None = None,
                  anthropic_key: str = "", setup_prompt: str = "",
-                 session: str = "agent"):
+                 session: str = "agent", kill_criteria: str = ""):
         self.workspace = os.path.abspath(workspace)
         self.project_name = project_name
         self.ingest_url = ingest_url
@@ -78,6 +78,10 @@ class RealAgent:
         self.anthropic_key = anthropic_key
         self.setup_prompt = setup_prompt
         self.session = session
+        # Free-text kill policy (e.g. "1 hour" / "val_loss plateaus for 500
+        # steps"). Exposed to the agent as $ARUI_KILL_CRITERIA so the agent
+        # knows what the dashboard monitor will enforce.
+        self.kill_criteria = kill_criteria or ""
 
     @staticmethod
     def _api_key_truncation(key: str) -> str:
@@ -229,6 +233,13 @@ class RealAgent:
             # --dangerously-skip-permissions in that sandboxed environment.
             "IS_SANDBOX": "1",
         }
+        # Surface the user's free-text kill-criteria policy to the agent so
+        # it knows what the autoresearcherUI monitor will enforce on every
+        # training run it launches. monitor._apply_kill_criteria reads this
+        # same policy from the onboarding setting and auto-kills offending
+        # runs.
+        if self.kill_criteria:
+            env["ARUI_KILL_CRITERIA"] = self.kill_criteria
         # If the dashboard has a passcode set, expose it to the agent
         # as ARUI_INGEST_TOKEN so the `arui` SDK + every curl call the
         # agent makes to $ARUI_INGEST_URL/api/* auto-authenticates.

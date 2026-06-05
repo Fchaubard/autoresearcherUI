@@ -144,6 +144,50 @@ def _iso() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat()
 
 
+# ─────────── required default metrics (kept in sync with arui SDK) ────────
+# Every training run should log these so the drawer's "All plots" section is
+# populated and runs are comparable. Skipping the agent's `import arui` (and
+# so the SDK constant) is cheap and import-safe, so we duplicate the tuple
+# here rather than importing across the project boundary.
+REQUIRED_DEFAULT_METRICS = (
+    "val_loss", "val_acc", "lr", "train_loss", "train_acc",
+    "time_per_step", "samples_per_sec",
+)
+
+
+def _check_required_metrics(run_id: str) -> list[str]:
+    """Return the list of REQUIRED_DEFAULT_METRICS the run never logged.
+    Empty list means the run is well-behaved."""
+    try:
+        logged = set(metrics.keys(run_id))
+    except Exception:
+        logged = set()
+    return [k for k in REQUIRED_DEFAULT_METRICS if k not in logged]
+
+
+def _emit_missing_metric_warnings(run_id: str, missing: list[str]) -> None:
+    """Persist one warning Event per missing default-metric key. The run
+    drawer's Events section surfaces these so the researcher sees clearly
+    that the agent skipped a default plot."""
+    if not missing:
+        return
+    db = SessionLocal()
+    try:
+        for key in missing:
+            ev = Event(
+                id=f"ev-{_rng.randrange(16**8):08x}",
+                type="missing_default_metric",
+                severity="warning", actor="system",
+                message=(f"Run did not log required default metric "
+                         f"'{key}' — see arui.log_defaults(...) "
+                         f"in $ARUI_REPO/arui/__init__.py"),
+                run_id=run_id, created_at=_iso())
+            db.add(ev)
+        db.commit()
+    finally:
+        db.close()
+
+
 # ─────────────────────────── headline metric ───────────────────────────────
 # Keys that are configuration/bookkeeping, never a run's headline result.
 _NON_METRIC = {
@@ -207,6 +251,22 @@ def get_project(db: Session = Depends(get_session)):
     p = db.query(Project).first()
     if not p:
         return {}
+    # Self-heal: if metric NAME clearly maximizes ('_acc', 'f1', 'score',
+    # 'pass@', etc) but stored direction is minimize, FIX it. This was
+    # how the Francois-2026-05-31 bug manifested on the dashboard: the
+    # broken metric-dropdown UI saved val_loss + minimize at onboarding,
+    # then the user manually re-set the metric to gsm8k_val_acc but the
+    # direction stayed minimize → kept runs reading 1.0 were "worse"
+    # than baseline 0.973 and never marked as frontier improvements,
+    # so the hero chart was wrong. Source-of-truth for direction is
+    # the metric name; storage is just a cache.
+    correct_dir = _infer_metric_direction(p.validation_metric or "")
+    if correct_dir and correct_dir != p.metric_direction:
+        print(f"[api] /project auto-correcting metric_direction: "
+              f"{p.validation_metric!r} stored as {p.metric_direction!r}, "
+              f"name says {correct_dir!r}", flush=True)
+        p.metric_direction = correct_dir
+        db.commit()
     runs = db.query(Run).filter(Run.project_id == p.id).all()
     ideas = db.query(Idea).filter(Idea.project_id == p.id).all()
     done = [r for r in runs if r.status in ("kept", "discarded", "crashed")]
@@ -230,6 +290,30 @@ def get_project(db: Session = Depends(get_session)):
         "best_metric": best,
         "baseline_metric": base_run.headline_metric if base_run else None,
     }
+
+
+def _infer_metric_direction(metric: str) -> str:
+    """Direction from metric NAME (same heuristic /api/onboarding uses).
+    Returns '' if the name gives no strong signal."""
+    _ml = re.sub(r"[\s\-]+", "_", (metric or "").strip().lower())
+    _max = (
+        "accuracy", "_acc", "acc_", "acc@",
+        "f1", "exact_match", "em", "_em",
+        "bleu", "rouge", "meteor", "chrf",
+        "score", "reward",
+        "auc", "map", "ndcg", "hit", "mrr",
+        "pass@", "win", "elo",
+    )
+    _min = (
+        "loss", "perplexity", "ppl", "error",
+        "rmse", "mse", "mae", "bpb", "bpc",
+        "fid", "kid", "divergence", "regret",
+    )
+    if any(t in _ml for t in _min):
+        return "minimize"
+    if any(t in _ml for t in _max):
+        return "maximize"
+    return ""
 
 
 @router.get("/ideas")
@@ -454,6 +538,77 @@ def council_bless_reset():
     return _c.bless_status()
 
 
+# ───────── preflight SOP: 3-step validation before any real run ─────────
+#
+# The agent's prompt walks it through three checks that MUST pass before
+# /api/council/bless is allowed to even start a review (and therefore
+# before /api/track/run will accept any non-_probe/_smoke run):
+#
+#   step 1 — static-batch overfit to ~0 train loss (proves train.py)
+#   step 2 — uniform classification head at init (proves architecture)
+#   step 3 — council bless (proves the code matches the project purpose)
+#
+# The agent records steps 1 + 2 via the endpoints below. Step 3 is the
+# existing /api/council/bless route, which now refuses to run until
+# 1 + 2 are recorded AND fresh (newer than the last code_changed
+# marker).
+
+@router.post("/preflight/static_overfit")
+async def preflight_static_overfit(request: Request):
+    """Record that step 1 of the SOP (static-batch overfit to ~0 train
+    loss) has passed. Body: {"evidence": "<one-line proof>",
+    "final_loss": 0.0008}. Returns the updated preflight summary."""
+    from . import council as _c
+    body = await _safe_json(request)
+    summary = _c.preflight_record_static_overfit(
+        evidence=str(body.get("evidence") or ""),
+        final_loss=body.get("final_loss"))
+    return {"ok": True, "preflight": summary}
+
+
+@router.post("/preflight/uniform_init")
+async def preflight_uniform_init(request: Request):
+    """Record that step 2 of the SOP (uniform classification head at
+    init) has passed. Body: {"evidence": "<one-line proof>",
+    "entropy": 6.91}. Returns the updated preflight summary."""
+    from . import council as _c
+    body = await _safe_json(request)
+    summary = _c.preflight_record_uniform_init(
+        evidence=str(body.get("evidence") or ""),
+        entropy=body.get("entropy"))
+    return {"ok": True, "preflight": summary}
+
+
+@router.post("/preflight/code_changed")
+async def preflight_code_changed(request: Request):
+    """Mark a significant code change. Bumps `changed_at_iso`, which
+    invalidates any earlier preflight step (and any prior bless
+    approval) — agent must redo steps 1 + 2 + bless. Body:
+    {"reason": "<one-line summary of the change>"}."""
+    from . import council as _c
+    body = await _safe_json(request)
+    summary = _c.preflight_record_code_changed(
+        reason=str(body.get("reason") or ""))
+    return {"ok": True, "preflight": summary}
+
+
+@router.get("/preflight/status")
+def preflight_status():
+    """Snapshot of all three pills (static_overfit_passed,
+    uniform_init_passed, blessed) plus raw timestamps + evidence so the
+    dashboard can render the 3-pill banner."""
+    from . import council as _c
+    return _c.preflight_summary()
+
+
+@router.post("/preflight/bless")
+async def preflight_bless(request: Request):
+    """Convenience alias for /api/council/bless — keeps the SOP
+    endpoint surface uniform (preflight/{static_overfit,uniform_init,
+    bless}). Delegates to the same implementation."""
+    return await council_bless(request)
+
+
 # ───────────────────────── arui ingest (doc 06) ────────────────────────────
 
 @router.post("/track/run")
@@ -470,6 +625,20 @@ async def track_run(request: Request):
     # smoke tests, which prove the code RUNS at all before bless.
     if not (str(name).startswith("_probe")
             or str(name).startswith("_smoke")):
+        # RESEARCH-PAUSED GATE: the user can hit "Pause research" in
+        # Settings (Task #1) to stop the loop without killing in-flight
+        # runs. Same 423-Locked shape as the bless gate so the agent
+        # / SDK can detect it and back off cleanly. Checked BEFORE
+        # bless so a paused project doesn't surface bless errors.
+        if notify.research_paused():
+            return JSONResponse({
+                "ok": False,
+                "blocked": True,
+                "reason": "research_paused",
+                "hint": ("Research is paused — POST /api/research/resume "
+                         "(or click 'Resume research' in Settings) to "
+                         "unlock new runs."),
+            }, status_code=423)
         if not _c.is_code_blessed():
             st = _c.bless_status()
             return JSONResponse({
@@ -583,6 +752,19 @@ async def track_finish(request: Request):
         db.add(ev)
         db.commit()
         payload = ev.dict()
+        # Default-metric audit: surface a warning Event per required key the
+        # run never logged. The drawer's "All plots" section was showing
+        # "(not logged)" for the seven defaults — this makes the gap loud
+        # and traceable rather than silent. Probe/smoke runs are exempt
+        # since they're a one-step sanity check, not a real experiment.
+        if not (str(run_id).startswith("_probe")
+                or str(run_id).startswith("_smoke")):
+            try:
+                missing = _check_required_metrics(run_id)
+                _emit_missing_metric_warnings(run_id, missing)
+            except Exception as e:                              # noqa: BLE001
+                print(f"[track_finish] required-metric audit "
+                      f"failed: {e}", flush=True)
         # Snapshot the Run attributes we'll need AFTER closing the session
         # (touching them post-close triggers a refresh and a
         # DetachedInstanceError; that's a release-gate bug the e2e catches).
@@ -805,6 +987,70 @@ async def emails_resume():
             db.add(row)
         cur = dict(row.value) if isinstance(row.value, dict) else {}
         cur["emails_paused"] = False
+        row.value = cur
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(row, "value")
+        db.commit()
+    finally:
+        db.close()
+    return {"ok": True, "paused": False}
+
+
+@router.get("/research/status")
+def research_status():
+    """Whether the user has paused the autonomous research loop.
+
+    Read by the Settings modal to render the Pause / Resume button
+    correctly, and by anything else that wants to know whether the
+    loop is asleep (e.g. status badges)."""
+    return {"paused": notify.research_paused()}
+
+
+@router.post("/research/pause")
+async def research_pause():
+    """Pause the autonomous research loop. Sets ``research_paused: true``
+    on the onboarding settings row.
+
+    Effects (all read the same flag — single source of truth):
+      - Orchestrator: skips launching any new run while paused; in-flight
+        runs keep going (kill them with /api/reset if you want a full
+        stop).
+      - PI agent: skips its hourly nudge cycle, so the research / author
+        agent isn't pestered while the human is debugging.
+      - /api/track/run: rejects new run registrations with HTTP 423
+        Locked, same shape as the council bless gate.
+    """
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(Setting.key == "onboarding").first()
+        if not row:
+            row = Setting(key="onboarding", value={})
+            db.add(row)
+        cur = dict(row.value) if isinstance(row.value, dict) else {}
+        cur["research_paused"] = True
+        row.value = cur
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(row, "value")
+        db.commit()
+    finally:
+        db.close()
+    return {"ok": True, "paused": True}
+
+
+@router.post("/research/resume")
+async def research_resume():
+    """Re-enable the autonomous research loop. Counterpart of
+    /research/pause — orchestrator resumes launching runs on its next
+    tick, PI agent resumes nudging on its next cadence, /api/track/run
+    accepts runs again."""
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(Setting.key == "onboarding").first()
+        if not row:
+            row = Setting(key="onboarding", value={})
+            db.add(row)
+        cur = dict(row.value) if isinstance(row.value, dict) else {}
+        cur["research_paused"] = False
         row.value = cur
         from sqlalchemy.orm.attributes import flag_modified
         flag_modified(row, "value")
@@ -1131,6 +1377,10 @@ def onboarding_defaults():
     out.update(_p.DEFAULTS)
     # research agent (Claude) default model
     out.setdefault("research_agent_model", "claude-opus-4-6")
+    # Free-text "kill any run that's been training longer than this"
+    # policy. Parsed in backend/app/kill_criteria.py — see that module
+    # for the supported phrasings (the default below is the simplest).
+    out.setdefault("kill_criteria", "1 hour")
     return out
 
 
@@ -1950,10 +2200,60 @@ def _run_paper_proposal_council(proposal_id: str) -> None:
         pass
 
 
-@router.get("/paper/proposal/{pid}")
-def paper_proposal_get(pid: str, db: Session = Depends(get_session)):
-    p = db.query(PaperProposal).filter(PaperProposal.id == pid).first()
-    return p.dict() if p else {}
+def _proposal_summary(p: PaperProposal) -> dict:
+    """Compact form of a PaperProposal for list views.
+    Includes a recommendation tally + the top claim title so the user
+    can recognize the review at a glance without expanding it."""
+    responses = p.council_responses or {}
+    if not isinstance(responses, dict):
+        responses = {}
+    reviewers = [r for r in responses.keys() if not r.startswith("_")]
+    rec_counts = {"proceed_to_paper": 0, "keep_researching": 0, "pivot": 0}
+    top_claim = ""
+    novelty_votes: dict[str, int] = {}
+    for r in reviewers:
+        body = responses.get(r) or {}
+        if not isinstance(body, dict):
+            continue
+        rec = body.get("recommendation")
+        if rec in rec_counts:
+            rec_counts[rec] += 1
+        nov = body.get("novelty")
+        if nov:
+            novelty_votes[nov] = novelty_votes.get(nov, 0) + 1
+        if not top_claim:
+            for cl in (body.get("claims") or []):
+                t = (cl.get("title") or "").strip()
+                if t:
+                    top_claim = t
+                    break
+    novelty = ""
+    if novelty_votes:
+        novelty = max(novelty_votes.items(), key=lambda kv: kv[1])[0]
+    return {
+        "id": p.id,
+        "created_at": p.created_at,
+        "status": p.status,
+        "accepted_at": p.accepted_at or "",
+        "rejected_at": p.rejected_at or "",
+        "n_reviewers": len(reviewers),
+        "proceed_count": rec_counts["proceed_to_paper"],
+        "keep_researching_count": rec_counts["keep_researching"],
+        "pivot_count": rec_counts["pivot"],
+        "novelty": novelty,
+        "top_claim": top_claim,
+    }
+
+
+@router.get("/paper/proposals")
+def paper_proposals_list(db: Session = Depends(get_session)):
+    """All paper-mode council reviews ever run, newest first.
+    Powers the 'Past paper proposals' history table so a dismissed
+    proposal isn't lost — the user can click any row to re-open the
+    review and accept it later."""
+    rows = (db.query(PaperProposal)
+              .order_by(PaperProposal.created_at.desc()).all())
+    return {"proposals": [_proposal_summary(p) for p in rows]}
 
 
 @router.get("/paper/proposal/latest")
@@ -1961,6 +2261,35 @@ def paper_proposal_latest(db: Session = Depends(get_session)):
     p = (db.query(PaperProposal).order_by(
          PaperProposal.created_at.desc()).first())
     return p.dict() if p else {}
+
+
+@router.get("/paper/proposal/{pid}")
+def paper_proposal_get(pid: str, db: Session = Depends(get_session)):
+    p = db.query(PaperProposal).filter(PaperProposal.id == pid).first()
+    return p.dict() if p else {}
+
+
+@router.post("/paper/proposal/{pid}/dismiss")
+def paper_proposal_dismiss(pid: str, db: Session = Depends(get_session)):
+    """User closed the council-review modal without accepting. We keep
+    the row (so it shows up in the history table) and mark it
+    'dismissed' rather than deleting it. Reversible — clicking the row
+    later and pressing 'Proceed to Paper Mode' re-flips it to
+    'accepted' via /paper/enter."""
+    p = db.query(PaperProposal).filter(PaperProposal.id == pid).first()
+    if not p:
+        return {"ok": False, "detail": "not found"}
+    if p.status == "accepted":
+        # don't downgrade an accepted proposal
+        return {"ok": False, "detail": "already accepted"}
+    p.status = "dismissed"
+    p.rejected_at = dt.datetime.now(dt.timezone.utc).isoformat()
+    db.commit()
+    try:
+        bus.publish("paper", "proposal_dismissed", {"id": pid})
+    except Exception:
+        pass
+    return {"ok": True, "id": pid, "status": "dismissed"}
 
 
 @router.post("/paper/enter")
@@ -2007,6 +2336,23 @@ async def paper_enter(request: Request):
             from_mode="research", to_mode="paper",
             reason_md="user accepted paper proposal",
             snapshot_json={"proposal_id": proposal_id}))
+        # Mark the selected proposal as accepted so the history table
+        # remembers which review we acted on (the rest become
+        # 'superseded'). When the user later clicks an old dismissed
+        # proposal in the history and re-accepts, this fires again.
+        now_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+        if proposal_id:
+            chosen = db.query(PaperProposal).filter(
+                PaperProposal.id == proposal_id).first()
+            if chosen:
+                chosen.status = "accepted"
+                chosen.accepted_at = now_iso
+            for other in (db.query(PaperProposal)
+                          .filter(PaperProposal.id != proposal_id)
+                          .filter(PaperProposal.status.in_(
+                              ("ready", "in_progress"))).all()):
+                other.status = "superseded"
+                other.rejected_at = now_iso
         db.commit()
     finally:
         db.close()
@@ -2387,7 +2733,7 @@ def paper_author_restart():
     db = _SL()
     try:
         p = db.query(PaperProposal).filter(
-            PaperProposal.status == "ready").order_by(
+            PaperProposal.status.in_(("accepted", "ready"))).order_by(
             PaperProposal.created_at.desc()).first()
         pid = p.id if p else ""
     finally:

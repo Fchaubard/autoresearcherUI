@@ -38,36 +38,98 @@ researching.
 
 # CODE FREEZE — required before any training run launches
 The autoresearcherUI council MUST review your code before any training
-run is allowed. The flow is non-negotiable:
+run is allowed. BUT — before you can even request a council review, you
+MUST complete the 3-step PRE-FLIGHT SOP below. The flow is
+non-negotiable.
 
-  1. Scaffold program.md, train.py, prepare.py, ideas.md in this
-     directory. Get them to a state you'd actually be willing to run.
-  2. (Recommended) Do a `_probe` or `_smoke` sanity check — names
-     starting with `_probe` or `_smoke` bypass the code-bless gate so
-     you can confirm the script even imports + does one optimiser step
-     before the council reviews. Log it through arui as usual.
-  3. Request a code review:
-        curl -sS -X POST $ARUI_INGEST_URL/api/council/bless
-  4. Poll every ~10 seconds until status is decided:
+## PRE-FLIGHT SOP — 3 checks BEFORE any real run
+
+Every major code change (this includes the very first scaffold of
+program.md / train.py / prepare.py) MUST pass all three of the
+following checks. The bless gate REJECTS approval if any preflight
+flag is missing or stale (older than 24h). Real runs (any name NOT
+starting with `_probe` or `_smoke`) stay HTTP-423 locked until all
+three pass.
+
+  STEP 1 — Static-batch overfit (proves train.py is correct).
+    Take a tiny static batch (e.g. 8–16 examples), turn off
+    regularisation/dropout/augmentation, and train for enough steps
+    that the model MEMORISES the batch. Final train loss MUST hit
+    ~0 (e.g. < 1e-3 for CE, < 1e-4 for MSE). If it doesn't, there's
+    a bug in train.py (optimiser not stepping, loss not connected
+    to logits, labels mis-aligned, .backward() missing, etc).
+    Once you see ~0 loss, record it with:
+        curl -sS -X POST $ARUI_INGEST_URL/api/preflight/static_overfit \
+            -H "Authorization: Bearer $ARUI_INGEST_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"evidence":"overfit_smoke.py memorised 16 examples in 300 steps","final_loss":0.0008}'
+
+  STEP 2 — Uniform classification head at init (proves architecture
+  is correct). Right after model construction, BEFORE any training,
+  feed a batch through the model and check the output distribution
+  at the classification head:
+      - softmax probabilities should be ~ 1/num_classes for every
+        class on every example (within a few percent);
+      - equivalently, output entropy should be ~ log(num_classes).
+    If the head is biased toward one class at init, the architecture
+    has a bug (bias initialised non-zero, last-layer init scale
+    wrong, residual collapsed, missing layernorm before head, …).
+    Record it with:
+        curl -sS -X POST $ARUI_INGEST_URL/api/preflight/uniform_init \
+            -H "Authorization: Bearer $ARUI_INGEST_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"evidence":"init_probe.py: per-class prob within 0.5% of 1/1000; entropy 6.905 vs log(1000)=6.908","entropy":6.905}'
+
+  STEP 3 — Council bless (proves the code is doing the RIGHT
+  research, per the project Purpose). Only AFTER steps 1+2 are
+  recorded, request the council review:
+        curl -sS -X POST $ARUI_INGEST_URL/api/council/bless \
+            -H "Authorization: Bearer $ARUI_INGEST_TOKEN"
+    Poll every ~10 seconds until status is decided:
         curl -sS $ARUI_INGEST_URL/api/council/bless/status
        Possible values:
          - "pending"      → review in flight; keep polling
          - "approved"     → training runs are now unlocked
          - "rejected"     → STOP; read the `blockers` list, fix every
-                            blocker in the code, then go back to step 3
+                            blocker in the code. After any non-trivial
+                            edit you MUST re-run steps 1 + 2 + 3
+                            (they are stale once the code changes).
          - "not_requested" → no review running yet; go back to step 3
-  5. ONLY after status="approved" may you launch the baseline + ideas.
+         - "blocked_on_preflight" → step 1 or 2 missing/stale; redo
+                            them, then re-request bless.
 
-Until the council approves, POST /api/track/run returns HTTP 423 and
-your `arui.init` will fail. Don't try to bypass this — read the
-`blockers` field, fix the code, re-request bless.
+## When code changes happen — RESET the preflight
+
+Any time you make a significant edit (rewriting train.py, swapping
+the model class, changing the loss, switching dataset), mark the
+code as changed:
+    curl -sS -X POST $ARUI_INGEST_URL/api/preflight/code_changed \
+        -H "Authorization: Bearer $ARUI_INGEST_TOKEN" \
+        -d '{"reason":"rewrote train.py to use AdamW + cosine"}'
+This bumps `preflight_changed_at`. Any preflight step recorded
+BEFORE that timestamp is treated as stale by the bless gate. So
+after a significant code change you MUST redo steps 1 + 2 + 3.
+
+## What about _probe / _smoke runs?
+
+The static-overfit smoke script ITSELF is fine to run as a `_probe`
+or `_smoke` (names starting with those bypass the bless gate). That
+is HOW you produce the evidence for step 1. Use them freely. They
+do NOT count as "real runs".
+
+## Hard gate
+
+Until ALL THREE pass, POST /api/track/run returns HTTP 423 for any
+non-_probe/_smoke run and your `arui.init` will fail. Don't try to
+bypass this — fix the actual bug.
 
 When the council rejects, the JSON shape is:
   {"status":"rejected",
    "summary":"...",
    "blockers":["[gemini] train.py never sets arui.summary['__METRIC__']"],
    "suggestions":[...]}
-Treat each blocker as a `MUST FIX` ticket. Edit the files, then call
+Treat each blocker as a `MUST FIX` ticket. Edit the files, mark code
+changed via /api/preflight/code_changed, redo steps 1 + 2, then call
 POST /api/council/bless again. Do not start runs until "approved".
 
 
@@ -95,6 +157,35 @@ call arui.log per example or per ensemble member with the running cumulative
 metric, e.g. `arui.log({"__METRIC__": cumulative_acc}, step=i)` after each
 example. That way every run has a curve in the dashboard, not just a single
 final point — the user can see eval progress live.
+
+# REQUIRED PLOTS — MUST LOG
+Every training run MUST log these seven default keys so the dashboard's
+run drawer "All plots" section is populated and runs are comparable
+across experiments:
+
+    val_loss, val_acc, lr, train_loss, train_acc,
+    time_per_step, samples_per_sec
+
+The arui SDK ships a one-line helper that ALWAYS emits all seven —
+auto-computing `lr` from the optimizer, `time_per_step` from a stopwatch,
+and `samples_per_sec` from `batch_size / time_per_step`:
+
+    import arui
+    arui.log_defaults(model=model, optimizer=optimizer, step=step,
+                      batch_size=batch_size,
+                      train_loss=batch_loss,
+                      val_loss=v_loss, val_acc=v_acc,
+                      train_acc=t_acc,
+                      extra={"my_metric": ...})    # extras + overrides
+
+Call this at EVERY training step (or at least every eval). If a metric
+truly doesn't apply for this run (e.g. no validation set on an eval-only
+run), pass it as `None` — the SDK records a NaN gap so the key still
+shows up in the drawer. NEVER just skip the key — a missing default key
+is a defect: the backend audits this at run-finish and emits an
+Event-severity-warning "Run did not log required default metric X" for
+every default that was never seen. See $ARUI_REPO/arui/__init__.py for
+the full helper signature.
 
 # The ideas.md queue
 Keep ideas.md as markdown tables with the columns
@@ -180,6 +271,7 @@ def _setup_prompt(cfg: dict) -> str:
     metric = cfg.get('metric', 'val_loss')
     instructions = (cfg.get('agent_instructions')
                     or DEFAULT_AGENT_INSTRUCTIONS).replace("__METRIC__", metric)
+    kill_policy = (cfg.get('kill_criteria') or '1 hour').strip() or '1 hour'
     return f"""You are the Principal Researcher for an autonomous ML research project.
 
 # Purpose
@@ -194,6 +286,16 @@ Validation metric: {metric}.
 
 # Seed ideas
 {cfg.get('seed_ideas', '')}
+
+# Run kill criteria (user policy)
+The researcher has set this kill policy for every training run:
+    `{kill_policy}`
+The exact text is also in your env as `$ARUI_KILL_CRITERIA`. The
+autoresearcherUI monitor auto-kills any run that violates the policy
+and marks it `crashed`, so plan every experiment to fit within it —
+e.g. a `1 hour` policy means a 10-hour training schedule will be killed
+early, so prefer short, decisive experiments. Read `$ARUI_KILL_CRITERIA`
+when designing each new run so you respect the researcher's budget.
 
 {instructions}"""
 
@@ -308,7 +410,9 @@ def start_real(cfg: dict, resume: bool = False) -> RealAgent:
         workspace=workspace, project_name=name,
         ingest_url=f"http://127.0.0.1:{PORT}", repo_root=str(ROOT),
         agent_cmd=agent_cmd, anthropic_key=cfg.get("claude_token", ""),
-        setup_prompt=_resume_prompt(cfg) if resume else _setup_prompt(cfg))
+        setup_prompt=_resume_prompt(cfg) if resume else _setup_prompt(cfg),
+        kill_criteria=(cfg.get("kill_criteria") or "1 hour").strip()
+                       or "1 hour")
     _agent.start()
     return _agent
 

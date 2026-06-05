@@ -196,6 +196,27 @@ def test_populate_claims_no_ready_proposal(arui_env):
     assert paper.populate_claims_from_proposal() == 0
 
 
+def test_populate_claims_picks_accepted_proposal(arui_env, db_session):
+    """When the user re-accepts a previously-dismissed proposal from the
+    history table, /paper/enter flips it to 'accepted' and calls
+    populate_claims_from_proposal(). That helper must consider both
+    'ready' AND 'accepted' rows, otherwise re-accept silently no-ops."""
+    from backend.app import paper
+    from backend.app.models import PaperClaim, PaperProposal
+    db_session.add(PaperProposal(
+        id="pp-accepted", status="accepted",
+        accepted_at="2026-01-01T00:00:00+00:00",
+        council_responses={
+            "gemini": {"claims": [
+                {"title": "An accepted-status claim worth importing",
+                 "evidence_strength": "strong"}]}}))
+    db_session.commit()
+    n = paper.populate_claims_from_proposal()
+    assert n == 1
+    titles = [c.title for c in db_session.query(PaperClaim).all()]
+    assert "An accepted-status claim worth importing" in titles
+
+
 def test_render_claims_md(arui_env, db_session):
     from backend.app import paper
     from backend.app.models import PaperClaim

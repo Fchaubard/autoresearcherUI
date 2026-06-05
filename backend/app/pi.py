@@ -396,6 +396,16 @@ def cycle_paper(force: bool = False) -> dict | None:
     cfg = _settings()
     if not cfg.get("pi_agent_enabled", True) and not force:
         return None
+    # RESEARCH-PAUSED GATE (Task #1): don't pester the agent while the
+    # user has paused research. `force=True` still bypasses (manual
+    # /api/pi/run is an explicit human override).
+    try:
+        from . import notify as _notify
+        if _notify.research_paused() and not force:
+            print("[pi/paper] research paused — skipping nudge", flush=True)
+            return None
+    except Exception:
+        pass
     model = (cfg.get("pi_agent_model") or DEFAULTS["pi_agent_model"]).strip()
     if not _provider_for(model):
         print(f"[pi/paper] no API key for {model}; skipping", flush=True)
@@ -458,6 +468,15 @@ def cycle(force: bool = False) -> dict | None:
     cfg = _settings()
     if not cfg.get("pi_agent_enabled", True) and not force:
         return None
+    # RESEARCH-PAUSED GATE (Task #1): don't pester the agent while the
+    # user has paused research. `force=True` still bypasses.
+    try:
+        from . import notify as _notify
+        if _notify.research_paused() and not force:
+            print("[pi] research paused — skipping cycle", flush=True)
+            return None
+    except Exception:
+        pass
     model = (cfg.get("pi_agent_model") or DEFAULTS["pi_agent_model"]).strip()
     if not _provider_for(model):
         print(f"[pi] no API key for {model}; skipping cycle", flush=True)

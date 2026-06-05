@@ -453,6 +453,39 @@ body.resizing{user-select:none}
 .latex-soon h2{font-size:20px;color:var(--text);margin:0 0 10px}
 .latex-soon p{max-width:520px;line-height:1.55;margin:0 0 22px}
 
+/* Past paper proposals history (research-mode "write the paper" view) */
+.pp-hist{width:100%;max-width:780px;margin:40px auto 0;text-align:left;
+  border-top:1px solid var(--border);padding-top:24px}
+.pp-hist:empty{display:none}
+.pp-hist-h{font-size:14px;color:var(--text);font-weight:600;
+  display:flex;align-items:center;gap:8px;margin:0 0 4px}
+.pp-hist-count{font-size:11px;color:var(--muted);background:var(--panel-2);
+  border:1px solid var(--border);border-radius:10px;padding:1px 8px;
+  font-family:var(--mono);font-weight:500}
+.pp-hist-sub{font-size:12px;color:var(--muted);margin:0 0 12px}
+.pp-hist-list{display:flex;flex-direction:column;gap:6px}
+.pp-hist-row{display:grid;
+  grid-template-columns:90px 96px 180px 1fr;
+  gap:12px;align-items:center;padding:10px 12px;
+  background:var(--panel);border:1px solid var(--border);border-radius:8px;
+  cursor:pointer;transition:background .12s,border-color .12s;
+  font-size:12px}
+.pp-hist-row:hover{background:var(--panel-2);border-color:var(--accent)}
+.pp-hist-when{color:var(--muted);font-family:var(--mono);font-size:11px}
+.pp-hist-rec{color:var(--text-2)}
+.pp-hist-rec b{color:var(--text);font-family:var(--mono)}
+.pp-hist-top{color:var(--text);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.pp-hist-status{display:inline-block;font-size:10.5px;font-weight:600;
+  font-family:var(--mono);letter-spacing:.3px;padding:2px 8px;
+  border-radius:10px;text-transform:lowercase}
+.pp-hist-status.ok{background:#13301d;color:#86EFAC;border:1px solid #34D39940}
+.pp-hist-status.pri{background:var(--accent-soft);color:#c7c9ff;
+  border:1px solid #6366f155}
+.pp-hist-status.muted{background:var(--panel-2);color:var(--muted);
+  border:1px solid var(--border)}
+.pp-hist-status.warn{background:#3a2a10;color:#FBBF24;border:1px solid #FBBF2440}
+
 /* Mode toggle pill (header) — Research ↔ Paper */
 .mode-toggle{display:inline-flex;background:var(--panel);border:1px solid var(--border);
   border-radius:18px;overflow:hidden;margin-left:6px}
@@ -1032,6 +1065,18 @@ body.resizing{user-select:none}
 .bless-rejected .bless-icon{color:#F43F5E}
 .bless-waiting{background:var(--panel);color:var(--muted)}
 .bless-waiting .bless-icon{color:var(--muted)}
+
+/* 3-pill pre-flight SOP banner — shown above the bless banner when
+ * the agent hasn't completed all three steps of the SOP yet. */
+.preflight-banner{margin:0 0 10px;padding:8px 14px;border-radius:9px;
+  background:var(--panel);border:1px solid var(--border)}
+.pf-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pf-title{font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;
+  color:var(--muted);font-weight:600}
+.pf-pill{font-size:11px;font-family:var(--mono);padding:3px 8px;
+  border-radius:999px;border:1px solid transparent}
+.pf-pill-ok{background:#0d2a1b;color:#34D399;border-color:#34D39955}
+.pf-pill-bad{background:#1f1a14;color:#FBBF24;border-color:#FBBF2444}
 
 /* ── login screen ─────────────────────────────────────────────────────── */
 .login-wrap{min-height:100vh;display:flex;align-items:center;
