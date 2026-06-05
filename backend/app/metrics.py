@@ -49,10 +49,72 @@ def _iso() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat()
 
 
+# Automatic key aliasing: the agent (or someone porting from wandb) often
+# logs `loss` / `accuracy` instead of the canonical `train_loss` / `train_acc`
+# the dashboard expects for its "default plots" section. Rather than spamming
+# the user with "(not logged)" on every kept_novel run, normalize at ingest.
+#
+# IMPORTANT: aliasing is a RENAME, not a duplicate — the canonical key is
+# what gets stored. Users who deliberately log a non-canonical key (e.g.
+# `accuracy` to mean something domain-specific) can override by also logging
+# `train_acc` directly; the canonical key wins because both paths land at
+# the same storage location.
+KEY_ALIASES: dict[str, str] = {
+    # train loss aliases
+    "loss":             "train_loss",
+    "training_loss":    "train_loss",
+    "train/loss":       "train_loss",
+    # train acc aliases
+    "acc":              "train_acc",
+    "accuracy":         "train_acc",
+    "training_acc":     "train_acc",
+    "train/acc":        "train_acc",
+    "train/accuracy":   "train_acc",
+    # val loss aliases
+    "validation_loss":  "val_loss",
+    "valid_loss":       "val_loss",
+    "eval_loss":        "val_loss",
+    "val/loss":         "val_loss",
+    # val acc aliases
+    "validation_acc":   "val_acc",
+    "valid_acc":        "val_acc",
+    "eval_acc":         "val_acc",
+    "val_accuracy":     "val_acc",
+    "val/acc":          "val_acc",
+    "val/accuracy":     "val_acc",
+    # learning rate
+    "learning_rate":    "lr",
+    "lr_current":       "lr",
+    # throughput
+    "step_time":        "time_per_step",
+    "step_time_s":      "time_per_step",
+    "sec_per_step":     "time_per_step",
+    "samples/sec":      "samples_per_sec",
+    "throughput":       "samples_per_sec",
+    "tokens_per_sec":   "samples_per_sec",
+}
+
+
+def canonical_key(key: str) -> str:
+    """Map a user-supplied metric key to its canonical (default-plot) name
+    if one exists, else return the key unchanged. Lower-cased for match,
+    but the canonical form is always lowercase too so callers can compare
+    directly to ``REQUIRED_DEFAULT_KEYS``."""
+    if not key:
+        return key
+    return KEY_ALIASES.get(str(key).strip().lower(), str(key))
+
+
 def append(run_id: str, points: list[dict]) -> None:
-    """Append a batch of metric points for a run and update metric_keys."""
+    """Append a batch of metric points for a run and update metric_keys.
+
+    Keys are passed through :func:`canonical_key` so common synonyms
+    (``loss`` → ``train_loss``, ``accuracy`` → ``train_acc``, etc.) get
+    stored under the dashboard's expected default-plot names. See
+    ``KEY_ALIASES``.
+    """
     rows = [
-        (run_id, str(p["key"]), int(p.get("step") or 0),
+        (run_id, canonical_key(str(p["key"])), int(p.get("step") or 0),
          float(p["value"]), float(p.get("wall_time") or 0.0))
         for p in points
     ]

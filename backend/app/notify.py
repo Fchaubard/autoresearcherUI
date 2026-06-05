@@ -250,9 +250,11 @@ def research_paused() -> bool:
     """Return True iff the user clicked 'Pause research' in Settings.
 
     Single source of truth read by the orchestrator (skips launching new
-    runs), the PI agent (skips nudging the research / author agent), and
-    /api/track/run (rejects new runs with 423). Stored on the onboarding
-    row (`research_paused: bool`). Default False — research runs as
+    runs), the PI agent (skips nudging the research / author agent),
+    /api/track/run (rejects new runs with 423), AND the council (every
+    _call_reviewer / deliberate / strategic_review / bless_async early-
+    returns when this is True). Stored on the onboarding row
+    (`research_paused: bool`). Default False — research runs as
     configured. Gate is intentionally co-located with `emails_paused`
     because both are pause flags on the onboarding settings row read by
     multiple subsystems."""
@@ -261,6 +263,172 @@ def research_paused() -> bool:
         return bool(cfg.get("research_paused"))
     except Exception:                                       # noqa: BLE001
         return False
+
+
+# ───────────────────── tmux interrupt helpers (Pause robustness) ─────────────
+#
+# The pause flag alone is NOT enough to stop spend: the Claude Code / author
+# REPL inside `tmux agent` (and `tmux author` in paper mode) is still running
+# its own loop, still calling tools, still generating tokens. To ACTUALLY halt
+# external spend we must reach into those tmux sessions and interrupt the
+# running tool / prompt. Claude Code halts on a double Ctrl-C; we follow that
+# with a literal message so the next user-typed input shows the human's intent.
+
+_AGENT_TMUX_SESSIONS = ("agent", "author")
+
+
+def _tmux_session_alive(session: str) -> bool:
+    """True iff a tmux session by that name exists. Best-effort: returns
+    False if tmux is not installed (e.g. unit-test environment)."""
+    try:
+        import subprocess as _sp
+        return _sp.run(
+            ["tmux", "has-session", "-t", session],
+            capture_output=True).returncode == 0
+    except Exception:                                       # noqa: BLE001
+        return False
+
+
+def _tmux_interrupt_agent(session: str, message: str) -> bool:
+    """Halt whatever is running inside ``session`` and leave a message in
+    the prompt buffer. Returns True iff we actually sent keys.
+
+    Strategy (matches what the user does manually in their terminal):
+      1. Send Ctrl-C twice (Claude Code halts on the second Ctrl-C).
+      2. Type a human-readable status message so when the agent's REPL
+         comes back to life the next operator (or the agent's next loop
+         iteration) can see WHY we interrupted it.
+
+    Wrapped in broad exception handling — this is a best-effort safety
+    net and must NEVER raise into the pause endpoint."""
+    try:
+        import subprocess as _sp
+        if not _tmux_session_alive(session):
+            return False
+        # Double Ctrl-C halts Claude Code's current tool call + clears the
+        # input. A small sleep between them lets the REPL register the
+        # first signal before the second arrives.
+        _sp.run(["tmux", "send-keys", "-t", session, "C-c"],
+                capture_output=True)
+        time.sleep(0.15)
+        _sp.run(["tmux", "send-keys", "-t", session, "C-c"],
+                capture_output=True)
+        time.sleep(0.15)
+        # Type the message literally (no Enter) so it shows in the prompt
+        # buffer as a status line for the next operator.
+        if message:
+            _sp.run(["tmux", "send-keys", "-t", session, "-l", message],
+                    capture_output=True)
+        return True
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[notify] tmux interrupt failed for {session}: {e}",
+              flush=True)
+        return False
+
+
+def _tmux_resume_agent(session: str, message: str) -> bool:
+    """Counterpart to _tmux_interrupt_agent: types a resume message into
+    the agent's tmux pane + presses Enter so the agent's next REPL turn
+    picks it up. Best-effort, never raises."""
+    try:
+        import subprocess as _sp
+        if not _tmux_session_alive(session):
+            return False
+        if message:
+            _sp.run(["tmux", "send-keys", "-t", session, "-l", message],
+                    capture_output=True)
+            _sp.run(["tmux", "send-keys", "-t", session, "Enter"],
+                    capture_output=True)
+        return True
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[notify] tmux resume failed for {session}: {e}", flush=True)
+        return False
+
+
+def _apply_pause_to_agent_tmux(reason: str = "") -> list[str]:
+    """Send Ctrl-C + pause message to every live agent tmux session.
+
+    Called by set_research_paused(True) and set_research_halted(True) so
+    pause and halt share the agent-interrupt path (halt is strictly
+    stronger than pause). Returns the list of sessions that were actually
+    interrupted, for logging / event emission."""
+    msg = (("@arui: research is now paused — please STOP and wait for a "
+            "/resume directive. Do not call any more tools.")
+           if not reason else
+           ("@arui: research HALTED — " + reason
+            + ". Stop all tool calls and wait for a human."))
+    hit: list[str] = []
+    for sess in _AGENT_TMUX_SESSIONS:
+        if _tmux_interrupt_agent(sess, msg):
+            hit.append(sess)
+    return hit
+
+
+def _apply_resume_to_agent_tmux() -> list[str]:
+    """Type a resume message into every live agent tmux session. Called
+    by set_research_paused(False) and set_research_halted(False)."""
+    msg = ("@arui: research is UNPAUSED — resume the directive queue.")
+    hit: list[str] = []
+    for sess in _AGENT_TMUX_SESSIONS:
+        if _tmux_resume_agent(sess, msg):
+            hit.append(sess)
+    return hit
+
+
+def set_research_paused(paused: bool) -> dict:
+    """Flip the research_paused flag and side-effect the agent tmux
+    sessions so token spend ACTUALLY stops.
+
+    Returns a small dict {paused, sessions_interrupted} so callers
+    (mainly /api/research/{pause,resume}) can echo what happened in
+    their response body and the UI can show 'agent halted' immediately.
+
+    Side-effects when paused=True:
+      - Writes ``research_paused: True`` on the onboarding Setting row.
+      - Sends Ctrl-C twice to ``tmux agent`` and ``tmux author`` so
+        Claude Code halts its current tool call.
+      - Leaves a human-readable pause message in the prompt buffer.
+
+    Side-effects when paused=False:
+      - Clears the flag.
+      - Types a resume message + Enter into the same tmux sessions so
+        the agent's next REPL turn sees the unpause and gets back to
+        work."""
+    from sqlalchemy.orm.attributes import flag_modified
+    from .db import SessionLocal
+    from .models import Setting
+    sessions_hit: list[str] = []
+    try:
+        db = SessionLocal()
+        try:
+            row = (db.query(Setting)
+                   .filter(Setting.key == "onboarding").first())
+            if not row:
+                row = Setting(key="onboarding", value={})
+                db.add(row)
+            cur = dict(row.value) if isinstance(row.value, dict) else {}
+            cur["research_paused"] = bool(paused)
+            row.value = cur
+            flag_modified(row, "value")
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[notify] set_research_paused DB write failed: {e}",
+              flush=True)
+    # Then reach into tmux. We do this AFTER the DB write so any code
+    # that polls `research_paused()` while we're in the middle of the
+    # tmux work sees the new flag value.
+    try:
+        if paused:
+            sessions_hit = _apply_pause_to_agent_tmux()
+        else:
+            sessions_hit = _apply_resume_to_agent_tmux()
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[notify] set_research_paused tmux side-effect failed: {e}",
+              flush=True)
+    return {"paused": bool(paused),
+            "sessions_interrupted": sessions_hit}
 
 
 def research_halted() -> tuple[bool, str]:
@@ -301,7 +469,13 @@ def set_research_halted(halted: bool, reason: str = "") -> None:
     """Set / clear the hard-halt state. Called by the strategic council
     when verdict==ESCALATION_HALT, by the PI agent when it sees an
     escalation event in the last hour, and by the dashboard's Resume
-    button. Emits a single Event so the chat feed reflects the change."""
+    button. Emits a single Event so the chat feed reflects the change.
+
+    Halt is strictly stronger than pause — like pause, it ALSO sends a
+    Ctrl-C double-tap to ``tmux agent`` / ``tmux author`` so the running
+    Claude Code REPL drops its in-flight tool call and stops generating
+    tokens. The pause and halt paths share
+    :func:`_apply_pause_to_agent_tmux` for that reason."""
     try:
         import datetime as _dt
         import os as _os
@@ -346,6 +520,41 @@ def set_research_halted(halted: bool, reason: str = "") -> None:
             db.close()
     except Exception as e:                                  # noqa: BLE001
         print(f"[notify] set_research_halted failed: {e}", flush=True)
+    # Also stop the running agent/author REPLs so they STOP generating
+    # tokens. Halt is stricter than pause; we share the tmux side-effect
+    # so both buttons have the same effect on real spend.
+    try:
+        if halted:
+            _apply_pause_to_agent_tmux(reason=reason or "ESCALATION_HALT")
+        else:
+            _apply_resume_to_agent_tmux()
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[notify] set_research_halted tmux interrupt failed: {e}",
+              flush=True)
+
+
+def reassert_pause_on_boot() -> None:
+    """Boot-time re-send of the pause/halt Ctrl-C in case the backend
+    restarted while research was paused/halted but the agent tmux
+    sessions are still running (e.g. backend restart but tmux persisted).
+
+    This makes pause durable across restarts: the user clicked Pause,
+    backend restarted, but the agent REPL is still happily burning
+    tokens. We detect the persisted flag and re-fire the interrupt."""
+    try:
+        if research_paused():
+            sess = _apply_pause_to_agent_tmux()
+            if sess:
+                print("[notify] boot: re-asserted research_paused on "
+                      f"tmux {sess}", flush=True)
+        halted, reason = research_halted()
+        if halted:
+            sess = _apply_pause_to_agent_tmux(reason=reason)
+            if sess:
+                print("[notify] boot: re-asserted research_halted on "
+                      f"tmux {sess}", flush=True)
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[notify] reassert_pause_on_boot failed: {e}", flush=True)
 
 
 def send(subject, text, html=None, images=None) -> bool:

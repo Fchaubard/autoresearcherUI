@@ -86,6 +86,17 @@ def start() -> None:
 def _loop() -> None:
     while True:
         sessions = _tmux_sessions()
+        # Proactively wire pipe-pane (raw stream + persistent log) for any
+        # newly-discovered tmux session. Idempotent — _piped tracks the
+        # ones we've already piped, so this is O(new) per tick. Without
+        # this, the Sessions tab's xterm would only get bytes after the
+        # user POSTs /api/sessions/<name>/attach — too laggy for a tab
+        # they JUST clicked. Now the file is being filled the whole
+        # time and the xterm streams from byte 0.
+        try:
+            _ensure_log_pipes(sessions)
+        except Exception as e:                       # noqa: BLE001
+            print(f"[monitor] _ensure_log_pipes error: {e}", flush=True)
         for step in (_poll_gpus, _poll_system):
             try:
                 step()
@@ -220,16 +231,26 @@ def system_stats() -> dict:
 # ───────────────────────────── log capture ─────────────────────────────────
 
 def _ensure_log_pipes(sessions: set[str]) -> None:
-    """Stream each run's tmux pane to a persistent log file via pipe-pane."""
+    """Stream each run's tmux pane to BOTH the per-session raw byte file
+    (Sessions tab xterm streams from here via /api/agent/raw) AND a
+    persistent ``run_logs/<id>.log`` file (so finished runs are still
+    inspectable via /api/runs/<id>/logs).
+
+    We delegate to ``pane_stream.enable(session, mirror_to=...)`` which
+    issues a single ``tmux pipe-pane`` mapped through ``tee`` so the
+    byte stream lands in both files. That way, the moment the
+    orchestrator / research agent / paper runner / + new button spawns
+    a tmux session, the user can open the Sessions tab and see live
+    bytes with NO /attach round-trip delay.
+    """
+    from . import pane_stream
     _RUN_LOGS.mkdir(parents=True, exist_ok=True)
     for s in sessions:
         if s in _INFRA or s in _piped or not _safe_name(s):
             continue
         logf = _RUN_LOGS / f"{s}.log"
         try:
-            subprocess.run(["tmux", "pipe-pane", "-t", s,
-                            f"cat >> {shlex.quote(str(logf))}"],
-                           capture_output=True, timeout=10)
+            pane_stream.enable(s, mirror_to=str(logf))
             _piped.add(s)
         except Exception:                            # noqa: BLE001
             pass

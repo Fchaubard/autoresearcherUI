@@ -187,6 +187,15 @@ Event-severity-warning "Run did not log required default metric X" for
 every default that was never seen. See $ARUI_REPO/arui/__init__.py for
 the full helper signature.
 
+The backend also AUTOMATICALLY ALIASES common synonyms at ingest, so if
+your existing training loop logs `loss`, `accuracy`, `learning_rate`,
+`val_loss`/`val_acc`, `step_time`, `samples/sec`, `tokens_per_sec`,
+`validation_loss`, `eval_acc`, etc. they will be stored under the
+canonical `train_loss` / `train_acc` / `lr` / `val_loss` / `val_acc` /
+`time_per_step` / `samples_per_sec` names. You can verify a run's
+coverage at `GET /api/runs/{run_id}/metric_coverage` — it returns
+`{logged, missing, required}` for the seven defaults.
+
 # The directives queue — your ONLY source of work
 Your sole function is to process `directives.jsonl` in priority order.
 Each line is a directive object: {id, type, priority, what, acceptance,

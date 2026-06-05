@@ -958,6 +958,27 @@ def _emit_token_failure_event(reviewer: str, kind: str, detail: str) -> None:
 
 def _call_reviewer(reviewer: str, system: str, user: str, cfg: dict
                    ) -> dict | None:
+    # PAUSE / HALT GATE — single choke point for ALL external council
+    # API calls. Every other council entry point (deliberate,
+    # strategic_review, _bless_worker) eventually funnels through here
+    # so this one early-return covers the whole module. If the user has
+    # paused research (or the system has hard-halted), we must NOT fire
+    # a Gemini/GPT/Claude API call — that's the entire point of pause.
+    try:
+        from . import notify as _notify
+        if _notify.research_paused():
+            print(f"[council] {reviewer} call suppressed — "
+                  "research_paused", flush=True)
+            return None
+        halted, _reason = _notify.research_halted()
+        if halted:
+            print(f"[council] {reviewer} call suppressed — "
+                  "research_halted", flush=True)
+            return None
+    except Exception:
+        # Best-effort: don't break the council if the gate helper
+        # malfunctions.
+        pass
     try:
         text = _CALLERS[reviewer](system, user, cfg)
     except urllib.error.HTTPError as e:

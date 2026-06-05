@@ -188,6 +188,13 @@ body.resizing{user-select:none}
 .xterm-wrap .xterm{flex:1;min-height:0}
 .xterm-wrap .xterm-viewport{background:transparent !important}
 .sess-wrap{flex:1;min-height:0;display:flex;flex-direction:column}
+/* Host that the per-session xterm is mounted into. Mirrors the
+ * Research Agent rail's slot: a flex column that fills available space
+ * so the xterm inside picks up the right size for FitAddon.fit(). */
+.sess-termhost{flex:1;min-height:0;display:flex;flex-direction:column}
+.sess-termhost #sessterm-empty{flex:1;min-height:0;margin:0;padding:8px 10px;
+  font-family:var(--mono);font-size:11px;color:var(--muted);
+  background:#0a0c0f;white-space:pre-wrap}
 .sess-tabs{display:flex;flex-wrap:wrap;gap:5px;padding:8px;
   border-bottom:1px solid var(--border);background:#0e1115}
 .sess-tab{appearance:none;-webkit-appearance:none;cursor:pointer;

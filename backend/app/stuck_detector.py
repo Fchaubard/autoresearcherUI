@@ -8,12 +8,25 @@ can't see "we've been stuck for 40 batches" without scrolling through chat.
 
 `compute_state()` is the single source of truth. It returns one of:
 
-  - ``healthy``  — nothing to worry about
-  - ``nagged``   — same top open directive for >=3 strategic reviews
-  - ``stalled``  — same top open directive for >=5 strategic reviews
-                 (this also emits ESCALATION_HALT downstream)
-  - ``looping``  — >30 % of recent runs are duplicate configurations
-  - ``dry``      — no novel "kept" runs in the last 50 launched runs
+  - ``healthy``         — nothing to worry about
+  - ``needs_direction`` — agent is holding because its current mandate has
+                          no remaining novel work. The novelty-hash gate
+                          is firing zero rejections recently AND the
+                          agent tmux pane is signalling "holding/idle/
+                          awaiting". This is INFORMATIONAL — the agent
+                          is doing the right thing, the human needs to
+                          provide a new directive (or pause research).
+  - ``nagged``          — same top open directive for >=3 strategic reviews
+  - ``stalled``         — same top open directive for >=5 strategic reviews
+                          (this also emits ESCALATION_HALT downstream)
+  - ``looping``         — >30 % of recent runs are duplicate configurations
+                          AND the novelty gate is STILL rejecting fresh
+                          launches (the agent is actively loop-launching
+                          dups right now, not just past history).
+  - ``degraded``        — novelty gate firing AND new novel configs being
+                          produced — agent is partially looping but also
+                          making forward progress; warn but don't block.
+  - ``dry``             — no novel "kept" runs in the last 50 launched runs
 
 The ordering above is the severity ordering: a project that is both
 ``looping`` and ``stalled`` reports ``stalled`` (most actionable for the
@@ -50,16 +63,24 @@ from .db import SessionLocal
 from .models import ChatMessage, Event, Run, Setting
 
 # The user-visible state names in worst-first order. ``healthy`` is the
-# absence of every signal; the other four are emitted by compute_state.
+# absence of every signal; the other five are emitted by compute_state.
 HEALTHY = "healthy"
+NEEDS_DIRECTION = "needs_direction"   # info, NOT a problem to fix
 NAGGED = "nagged"
 STALLED = "stalled"
 LOOPING = "looping"
+DEGRADED = "degraded"
 DRY = "dry"
 
 # Severity ordering — higher is worse. Used when we have multiple
 # triggers firing at once so we surface the most actionable one.
-_SEVERITY = {HEALTHY: 0, NAGGED: 1, LOOPING: 2, DRY: 3, STALLED: 4}
+# NEEDS_DIRECTION sits BELOW healthy in severity because it's a normal
+# operating state ("agent has nothing in mandate, awaiting human") — we
+# still want to surface it to the user but never want it to drown out
+# a real fault like ``looping`` or ``stalled``. The dashboard pill
+# treats it as a BLUE info colour (see static/style.css .rh-needs_direction).
+_SEVERITY = {HEALTHY: 0, NEEDS_DIRECTION: 0,
+             NAGGED: 1, LOOPING: 2, DEGRADED: 2, DRY: 3, STALLED: 4}
 
 # Thresholds from RESEARCH_IMPROVEMENT_PLAN.md section 8.
 NAGGED_REVIEW_COUNT = 3
@@ -67,6 +88,38 @@ STALLED_REVIEW_COUNT = 5
 LOOPING_WINDOW = 20
 LOOPING_COLLISION_RATE = 0.30
 DRY_WINDOW = 50
+
+# "Recent" window for novelty rejections — used by the needs_direction
+# vs looping classifier. 1 hour matches the typical run duration on the
+# pod (a fresh, on-mandate launch should rotate well inside 60 minutes).
+RECENT_REJECTION_WINDOW_SEC = 3600
+
+# Keywords that, when seen in the trailing window of the agent's tmux
+# pane, indicate the agent is INTENTIONALLY holding (the novelty gate +
+# new prompt are working as designed). Treated as a strong signal for
+# the ``needs_direction`` classifier: agent is awaiting human input, not
+# stuck. Lowercased before matching.
+_HOLD_KEYWORDS = (
+    "holding",
+    "i won't launch",       # exact phrase from the current pod's pane
+    "i will not launch",
+    "awaiting",
+    "awaiting direction",
+    "no novel",
+    "no sound on-mandate",
+    "gpus stay idle",
+    "no remaining novel",
+    "queue is empty",
+    "nothing to launch",
+    "no directive",
+    "standing by",
+    "idle — ",
+    "idle--",
+)
+
+# How many trailing lines of the agent pane to look at when classifying
+# its current state. 200 captures roughly the last screenful + scroll.
+_AGENT_PANE_LINES = 200
 
 # How close two headline metrics must be to count as a "novelty collision"
 # in the proxy. 1 % matches the spec language ("same metric value within
@@ -287,6 +340,81 @@ def _within_tol(a: float, b: float, rel: float = NOVELTY_TOLERANCE) -> bool:
     return abs(a - b) / denom < rel
 
 
+def _agent_pane_text(lines: int = _AGENT_PANE_LINES) -> str:
+    """Capture the trailing ``lines`` lines of the research agent's tmux
+    pane. Returns "" on any failure (tmux not installed, session missing,
+    permission denied, etc) — this signal is best-effort and must never
+    crash the health probe.
+
+    The session name is the same one ``pi._agent_tail`` uses ("agent").
+    Lowercased here so downstream keyword matching is case-insensitive
+    without each caller having to remember.
+    """
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["tmux", "capture-pane", "-t", "agent",
+             "-p", "-S", str(-lines)],
+            capture_output=True, text=True, timeout=4)
+        return (out.stdout or "").lower()
+    except Exception:                                       # noqa: BLE001
+        return ""
+
+
+def _classify_agent_state(pane_text: str) -> str:
+    """One-word label for the agent's current intent, derived from the
+    last few lines of its tmux pane.
+
+    Returns one of:
+      - ``holding``  — pane contains an explicit hold/idle/awaiting cue
+                       (see ``_HOLD_KEYWORDS``). The agent is correctly
+                       NOT launching because its mandate is exhausted.
+      - ``working``  — pane is non-empty but no hold cue — assume the
+                       agent is actively thinking / launching.
+      - ``unknown``  — pane couldn't be captured (tmux not running, in
+                       tests, etc).
+
+    The classifier is intentionally coarse: production only needs to
+    distinguish "agent says it's holding" from "agent is doing something
+    else". Any new state machine (e.g. detecting "council waiting" or
+    "compiling smoke") can be added later without changing the public
+    contract."""
+    if not pane_text:
+        return "unknown"
+    txt = pane_text.lower()
+    for kw in _HOLD_KEYWORDS:
+        if kw in txt:
+            return "holding"
+    return "working"
+
+
+def _recent_novelty_rejections(seconds: int = RECENT_REJECTION_WINDOW_SEC
+                                ) -> int:
+    """Count ``novelty_rejected`` Event rows in the trailing window.
+
+    This is the RIGHT-NOW signal that distinguishes "agent is currently
+    loop-launching dups" from "agent USED to loop-launch but has now
+    stopped (the new gate + prompt are working)". Without this signal
+    the collision_rate alone is a stale, lagging indicator: 40 % of the
+    last 20 finished runs can be dups while the agent has been holding
+    for the last hour, and the dashboard would still scream LOOPING.
+
+    Returns 0 on any DB error — health probe must never crash."""
+    try:
+        cutoff = (dt.datetime.now(dt.timezone.utc)
+                  - dt.timedelta(seconds=seconds)).isoformat()
+        db = SessionLocal()
+        try:
+            return (db.query(Event)
+                    .filter(Event.type == "novelty_rejected")
+                    .filter(Event.created_at >= cutoff)
+                    .count())
+        finally:
+            db.close()
+    except Exception:                                       # noqa: BLE001
+        return 0
+
+
 def _kept_novel_count(runs: list[Run]) -> int:
     """How many runs in the window are "kept and novel".
 
@@ -346,29 +474,101 @@ def compute_state() -> dict:
             f"{streak} consecutive strategic reviews on the same top "
             f"directive."))
 
-    # ── looping: novelty-hash collision rate over the last 20 finished
-    # runs.  Uses headline_metric within 1% as the duplicate proxy.
+    # ── looping vs needs_direction: distinguish "agent is currently
+    # loop-launching duplicate configs" from "historical dups but agent
+    # has correctly stopped". We use two RIGHT-NOW signals:
+    #
+    #   1) novelty rejections in the last hour. The /api/track/run gate
+    #      emits a ``novelty_rejected`` Event every time it returns 409.
+    #      If that count is 0 the agent has stopped trying to launch
+    #      duplicates — the historical collision rate is stale data.
+    #
+    #   2) the agent's tmux pane text. If it contains a hold cue
+    #      ("holding", "awaiting", "no novel", etc) we have strong
+    #      evidence the agent is intentionally idle, not crashed.
+    #
+    # The state-classifier therefore reads:
+    #
+    #   recent_rejections == 0  AND  agent_state == "holding"
+    #     -> needs_direction (BLUE / info — the GOOD outcome)
+    #   recent_rejections > 0   AND  coll > 30 %  AND  no novel kept
+    #     -> looping (RED / amber — the BAD outcome we used to fire
+    #        on stale history)
+    #   recent_rejections > 0   AND  novel kept run in window
+    #     -> degraded (AMBER — partial loop with progress, warn only)
+    #   coll > 30 %             AND  rejections == 0 but agent NOT holding
+    #     -> looping (defensive: collisions but no exoneration signal)
     loop_runs = _recent_runs(LOOPING_WINDOW)
     coll = _collision_rate(loop_runs)
     details["collision_rate"] = round(coll, 3)
     details["collision_window"] = LOOPING_WINDOW
-    if coll > LOOPING_COLLISION_RATE:
-        reasons.append((LOOPING,
-            f"{int(coll * 100)}% of the last {LOOPING_WINDOW} finished "
-            f"runs are duplicate configurations."))
 
-    # ── dry: no novel kept run in the last 50 launched runs.
+    pane_text = _agent_pane_text()
+    agent_state = _classify_agent_state(pane_text)
+    details["agent_state"] = agent_state
+
+    recent_rejections = _recent_novelty_rejections()
+    details["recent_novelty_rejections"] = recent_rejections
+    details["recent_rejection_window_sec"] = RECENT_REJECTION_WINDOW_SEC
+
+    # Novel kept runs in the dry window — used by both the dry classifier
+    # below AND the degraded vs looping split here.
     dry_runs = _recent_runs(DRY_WINDOW)
     novel = _kept_novel_count(dry_runs)
     details["kept_novel_in_window"] = novel
     details["kept_novel_window"] = DRY_WINDOW
+
+    if coll > LOOPING_COLLISION_RATE:
+        # Pick which sub-state actually applies. Order matters: if the
+        # agent is holding AND not rejecting we ALWAYS report
+        # needs_direction (the agent isn't the problem, the mandate is).
+        if recent_rejections == 0 and agent_state == "holding":
+            reasons.append((NEEDS_DIRECTION,
+                "Agent is holding — it has no novel directive to run. "
+                "Provide a new directive via the agent terminal "
+                "(right rail) or pause research."))
+        elif recent_rejections > 0 and novel > 0:
+            reasons.append((DEGRADED,
+                f"Agent is launching some novel configs but the "
+                f"novelty gate is also rejecting duplicates "
+                f"({recent_rejections} in the last "
+                f"{RECENT_REJECTION_WINDOW_SEC // 60} min)."))
+        elif recent_rejections > 0:
+            reasons.append((LOOPING,
+                f"{int(coll * 100)}% of the last {LOOPING_WINDOW} "
+                f"finished runs are duplicate configurations AND the "
+                f"agent is still trying to launch dups "
+                f"({recent_rejections} novelty-gate rejections in the "
+                f"last {RECENT_REJECTION_WINDOW_SEC // 60} min)."))
+        else:
+            # Defensive: high collision rate but no recent rejections
+            # AND no hold cue. Agent might be wedged silently — keep
+            # the original looping label so the user investigates.
+            reasons.append((LOOPING,
+                f"{int(coll * 100)}% of the last {LOOPING_WINDOW} "
+                f"finished runs are duplicate configurations."))
+    else:
+        # Collision rate is fine — but we may still want to surface
+        # needs_direction if the agent is explicitly holding (GPUs
+        # idle, no rejections, hold cue present). This catches the
+        # case where the dashboard would otherwise read "healthy"
+        # while the human is confused that nothing is running.
+        if recent_rejections == 0 and agent_state == "holding":
+            reasons.append((NEEDS_DIRECTION,
+                "Agent is holding — it has no novel directive to run. "
+                "Provide a new directive via the agent terminal "
+                "(right rail) or pause research."))
+
+    # ── dry: no novel kept run in the last 50 launched runs.
     if dry_runs and novel == 0:
         reasons.append((DRY,
             f"No novel kept runs in the last {len(dry_runs)} launched "
             f"runs (frontier hasn't moved)."))
 
     # Resolve overlapping signals: surface the most severe one to the
-    # user (e.g., stalled > dry > looping > nagged > healthy).
+    # user (e.g., stalled > dry > looping > nagged > healthy). When the
+    # ONLY signal is needs_direction we surface it — but it ties with
+    # healthy on severity, so any real fault wins.
     if not reasons:
         return {"state": HEALTHY, "details": details,
                 "reason": "All systems nominal."}
@@ -388,7 +588,15 @@ def on_state_transition(state: str, prev_state: str,
     output, used to enrich the chat bubble.
     """
     if _SEVERITY.get(state, 0) <= _SEVERITY.get(prev_state, 0):
-        return  # transition didn't worsen — nothing to do.
+        # Worsening severity is the canonical trigger — BUT we always
+        # want the user to see a transition INTO needs_direction at
+        # least once, because it's a "GPUs are idle on purpose" signal
+        # the human needs to act on (provide a new directive or pause
+        # the loop). Without this exception the pill would silently
+        # stay green/amber and the user would never learn why nothing
+        # is running.
+        if not (state == NEEDS_DIRECTION and prev_state != NEEDS_DIRECTION):
+            return  # transition didn't worsen — nothing to do.
     snap = snap or {"state": state, "details": {}, "reason": ""}
     reason = snap.get("reason") or f"Research health is now {state}."
 
@@ -400,7 +608,8 @@ def on_state_transition(state: str, prev_state: str,
                            role="agent", content=bubble,
                            created_at=_iso()))
         sev = "critical" if state == STALLED else (
-            "warning" if state in (NAGGED, LOOPING, DRY) else "info")
+            "warning" if state in (NAGGED, LOOPING, DEGRADED, DRY)
+            else "info")
         ev_type = "research_stuck" if state == STALLED \
             else "research_health"
         db.add(Event(id="ev-" + os.urandom(4).hex(),

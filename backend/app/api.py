@@ -15,6 +15,7 @@ import threading
 
 from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.responses import StreamingResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from . import (archive, authkeys, metrics, monitor, notify, orchestrator,
@@ -395,8 +396,16 @@ async def ideas_delete(request: Request):
 
 
 @router.get("/runs")
-def list_runs(db: Session = Depends(get_session)):
-    return [r.dict() for r in db.query(Run).all()]
+def list_runs(status: str = "", db: Session = Depends(get_session)):
+    """List runs. Optional `?status=X` (or comma-separated `?status=X,Y`)
+    filters by Run.status. Case-insensitive. Unknown statuses just yield
+    an empty result. No filter → all runs."""
+    q = db.query(Run)
+    if status:
+        wanted = [s.strip().lower() for s in status.split(",") if s.strip()]
+        if wanted:
+            q = q.filter(func.lower(Run.status).in_(wanted))
+    return [r.dict() for r in q.all()]
 
 
 @router.get("/runs/{run_id}")
@@ -1259,7 +1268,8 @@ def research_health():
 @router.post("/research/pause")
 async def research_pause():
     """Pause the autonomous research loop. Sets ``research_paused: true``
-    on the onboarding settings row.
+    on the onboarding settings row AND interrupts the running agent /
+    author tmux sessions so Claude Code stops burning tokens RIGHT NOW.
 
     Effects (all read the same flag — single source of truth):
       - Orchestrator: skips launching any new run while paused; in-flight
@@ -1269,22 +1279,16 @@ async def research_pause():
         agent isn't pestered while the human is debugging.
       - /api/track/run: rejects new run registrations with HTTP 423
         Locked, same shape as the council bless gate.
+      - Council: every _call_reviewer / deliberate / strategic_review /
+        bless_async path early-returns, so we don't fire Gemini / GPT
+        API calls while paused.
+      - tmux agent + tmux author: receives Ctrl-C twice (Claude Code
+        halts on the second Ctrl-C) + a literal pause message in the
+        prompt buffer.
     """
-    db = SessionLocal()
-    try:
-        row = db.query(Setting).filter(Setting.key == "onboarding").first()
-        if not row:
-            row = Setting(key="onboarding", value={})
-            db.add(row)
-        cur = dict(row.value) if isinstance(row.value, dict) else {}
-        cur["research_paused"] = True
-        row.value = cur
-        from sqlalchemy.orm.attributes import flag_modified
-        flag_modified(row, "value")
-        db.commit()
-    finally:
-        db.close()
-    return {"ok": True, "paused": True}
+    res = notify.set_research_paused(True)
+    return {"ok": True, "paused": True,
+            "sessions_interrupted": res.get("sessions_interrupted", [])}
 
 
 @router.post("/research/resume")
@@ -1292,22 +1296,12 @@ async def research_resume():
     """Re-enable the autonomous research loop. Counterpart of
     /research/pause — orchestrator resumes launching runs on its next
     tick, PI agent resumes nudging on its next cadence, /api/track/run
-    accepts runs again."""
-    db = SessionLocal()
-    try:
-        row = db.query(Setting).filter(Setting.key == "onboarding").first()
-        if not row:
-            row = Setting(key="onboarding", value={})
-            db.add(row)
-        cur = dict(row.value) if isinstance(row.value, dict) else {}
-        cur["research_paused"] = False
-        row.value = cur
-        from sqlalchemy.orm.attributes import flag_modified
-        flag_modified(row, "value")
-        db.commit()
-    finally:
-        db.close()
-    return {"ok": True, "paused": False}
+    accepts runs again, council un-mutes, and a resume message is typed
+    into the agent / author tmux sessions so the agent picks up where
+    it left off."""
+    res = notify.set_research_paused(False)
+    return {"ok": True, "paused": False,
+            "sessions_interrupted": res.get("sessions_interrupted", [])}
 
 
 @router.get("/agent/raw")
@@ -2053,6 +2047,55 @@ def session_output(name: str):
     return {"text": out.stdout, "alive": True}
 
 
+@router.post("/sessions/{name}/attach")
+def session_attach(name: str):
+    """Wire `pane_stream.enable()` for ``name`` so its raw byte stream
+    becomes available at ``/api/agent/raw?session=<name>``.
+
+    Used by the Sessions tab when the user clicks a run's tab: the
+    frontend POSTs here BEFORE starting its xterm.js stream so the
+    interactive terminal has bytes to read from byte 1.
+
+    For per-run sessions (``diff_*``, ``pr-*``, ``_smoke_*``, user-created
+    debug shells, …) the orchestrator / agent may or may not have called
+    ``pane_stream.enable`` proactively. This endpoint is idempotent —
+    tmux replaces any prior ``pipe-pane`` mapping — so calling it once
+    per user-click is safe.
+
+    Refuses:
+      - names that aren't ``_SAFE_NAME``,
+      - the reserved infra sessions (``agent``/``author``/… — those have
+        their own dedicated boot path and we don't want a misclick to
+        re-truncate their raw stream),
+      - sessions that don't exist (tmux ``has-session`` returns rc≠0).
+
+    Body: empty. Returns JSON ``{"ok": true, "session": "<name>"}`` on
+    success, ``{"ok": false, "error": "<msg>"}`` otherwise (always HTTP
+    200 — matches the JSON-only contract of ``/sessions/create``).
+    """
+    try:
+        if not name or not _SAFE_NAME.match(name) or len(name) > 80:
+            return {"ok": False,
+                    "error": "session name must be 1-80 chars "
+                             "of [A-Za-z0-9_.-=]"}
+        if name in _INFRA_SESSIONS:
+            return {"ok": False,
+                    "error": f"'{name}' is reserved (infra session)"}
+        alive = subprocess.run(
+            ["tmux", "has-session", "-t", name],
+            capture_output=True).returncode == 0
+        if not alive:
+            return {"ok": False,
+                    "error": f"session '{name}' does not exist"}
+        from . import pane_stream
+        pane_stream.enable(name)
+        return {"ok": True, "session": name}
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[sessions] /sessions/{name}/attach crashed: {e!r}",
+              flush=True)
+        return {"ok": False, "error": f"attach failed: {e}"}
+
+
 # ──────────── run logs, kill, system stats, metric names ─────────────────────
 
 @router.get("/runs/{run_id}/logs")
@@ -2155,6 +2198,31 @@ def metrics_keys():
 def run_metric_keys(run_id: str):
     """Keys that THIS run has logged. Drives the drawer 'View all plots'."""
     return {"keys": metrics.run_keys(run_id)}
+
+
+@router.get("/runs/{run_id}/metric_coverage")
+def run_metric_coverage(run_id: str):
+    """Required-default-metric coverage for a single run.
+
+    Returns ``{logged: [...], missing: [...], required: [...]}`` so the
+    drawer can render an explicit hint ("Agent didn't log this key.
+    Required: arui.log({'val_loss': ...})") next to each "(not logged)"
+    placeholder. The same data drives ad-hoc CLI checks.
+    """
+    try:
+        run_keys_set = set(metrics.run_keys(run_id))
+    except Exception:
+        run_keys_set = set()
+    required = list(REQUIRED_DEFAULT_METRICS)
+    logged = [k for k in required if k in run_keys_set]
+    missing = [k for k in required if k not in run_keys_set]
+    return {
+        "run_id": run_id,
+        "required": required,
+        "logged": logged,
+        "missing": missing,
+        "all_keys": sorted(run_keys_set),
+    }
 
 
 @router.get("/metrics/key_coverage")

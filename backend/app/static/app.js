@@ -1912,8 +1912,9 @@ function renderSessions(c) {
         '(research <code>diff_*</code> or paper <code>pr-*</code>). Pick a ' +
         'session above to tail its log — useful when a specific run is ' +
         'misbehaving and you want raw stdout/stderr instead of the aggregated ' +
-        'metric view. Click <b>+ new</b> to spawn an ad-hoc tmux session you ' +
-        'can drive yourself (e.g. <code>nvidia-smi</code>, a debug Python ' +
+        'metric view. Click in the terminal and type — keystrokes go straight ' +
+        'into that tmux. Click <b>+ new</b> to spawn an ad-hoc tmux session ' +
+        'you can drive yourself (e.g. <code>nvidia-smi</code>, a debug Python ' +
         'shell, a manual training run). It will appear as a new tab here.' +
       '</div>' +
     '</div>' +
@@ -1922,7 +1923,9 @@ function renderSessions(c) {
       '<div class="sess-tabs" id="sesstabs"></div>' +
       '<button class="sess-new" id="sessnew" title="Create a new tmux session you can type into">+ new</button>' +
     '</div>' +
-    '<pre class="term" id="sessterm">loading run sessions…</pre></div>';
+    '<div class="sess-termhost" id="sessterm-host">' +
+      '<pre class="term" id="sessterm-empty">loading run sessions…</pre>' +
+    '</div></div>';
   const tabsEl = c.querySelector('#sesstabs');
   // ── "+ new" handler — prompt for a session name, POST /api/sessions/create,
   //    then re-poll so the new tab appears + becomes active.
@@ -1972,8 +1975,52 @@ function renderSessions(c) {
         { title: 'Session create failed' });
     }
   };
-  const term = c.querySelector('#sessterm');
+  // Host div that the per-session xterm is mounted into. We tear the
+  // current xterm down and create a new one whenever the user clicks a
+  // different tab — keeping a single live wrapper at a time avoids
+  // racing two raw-byte streams against each other.
+  const host = c.querySelector('#sessterm-host');
+  let _sessTerm = null;             // active createRailTerm() wrapper
+  let _attachedSession = null;      // name we last POST'd /attach for
   let known = '';
+
+  const showEmptyState = (msg) => {
+    if (_sessTerm) {
+      try { _sessTerm.dispose(); } catch (e) {}
+      _sessTerm = null;
+    }
+    _attachedSession = null;
+    host.innerHTML =
+      '<pre class="term" id="sessterm-empty">' + esc(msg) + '</pre>';
+  };
+
+  // Spin up an xterm for `name`, wire it to /api/agent/raw + /api/agent/keys
+  // exactly the way the Research Agent / Author Agent rails do. We POST to
+  // /api/sessions/<name>/attach FIRST so pane_stream.enable() runs on the
+  // server before our first raw byte read — otherwise we'd just see an
+  // empty file until the session emits its next byte.
+  const mountTerm = async (name) => {
+    if (!name) { showEmptyState('No run sessions yet.'); return; }
+    if (_sessTerm && _sessTerm.container &&
+        _sessTerm.container.dataset.session === name) {
+      return;          // already attached to this session
+    }
+    if (_sessTerm) { try { _sessTerm.dispose(); } catch (e) {} _sessTerm = null; }
+    host.innerHTML = '';
+    // Fire-and-forget the attach call — if it fails we still try to
+    // stream (the file may already exist from a previous attach).
+    try {
+      const r = await post('/sessions/' + encodeURIComponent(name)
+        + '/attach', {});
+      if (r && r.ok) _attachedSession = name;
+    } catch (e) { /* keep going — best-effort */ }
+    const wrap = createRailTerm(name);
+    wrap.container.id = 'sessterm';
+    host.appendChild(wrap.container);
+    _sessTerm = wrap;
+    wrap.startStream();
+  };
+
   const buildTabs = (names) => {
     tabsEl.innerHTML = '';
     if (!names.length) {
@@ -1987,7 +2034,10 @@ function renderSessions(c) {
         S.sessTab = n;
         tabsEl.querySelectorAll('.sess-tab').forEach(x =>
           x.classList.toggle('on', x === b));
-        poll();
+        // Switch the live xterm to the newly selected tab. dispose() of
+        // the previous one happens inside mountTerm() so we never have
+        // two raw-byte streams polling at once.
+        mountTerm(n);
       };
       tabsEl.append(b);
     });
@@ -1997,22 +2047,36 @@ function renderSessions(c) {
       const s = await api('/sessions');
       const names = s.sessions || [];
       const sig = names.join('|');
-      if (sig !== known) { known = sig; buildTabs(names); }
-      if (!names.length) {
-        term.textContent = 'No run sessions yet.\n\nThe agent launches each ' +
-          'training run in its own tmux session — each one will appear above ' +
-          'as a clickable tab showing that run’s live output.';
-        return;
+      if (sig !== known) {
+        known = sig;
+        buildTabs(names);
+        if (!names.length) {
+          showEmptyState(
+            'No run sessions yet.\n\nThe agent launches each training run ' +
+            'in its own tmux session — each one will appear above as a ' +
+            'clickable tab showing that run’s live output.');
+        } else {
+          // Make sure an xterm is mounted for the currently-selected tab.
+          await mountTerm(S.sessTab);
+        }
       }
-      const d = await api('/sessions/' + encodeURIComponent(S.sessTab));
-      const atBottom = term.scrollHeight - term.scrollTop
-        - term.clientHeight < 80;
-      term.textContent = ((d.text || '').replace(/[ \t\r\n]+$/, ''))
-        || (d.alive ? '(no output yet)' : '(session ended)');
-      if (atBottom) term.scrollTop = term.scrollHeight;
     } catch (e) { /* keep last frame */ }
   };
+  // Track the active xterm in the rail's global slot so paintRail()'s
+  // stopTermPoll() cleans it up when the user navigates away.
+  // We override _termHost.dispose() so it ALSO disposes the per-session
+  // xterm — otherwise tab-switching away would leave its raw-byte poll
+  // running in the background.
+  if (_termHost) { try { _termHost.dispose(); } catch (e) {} }
+  _termHost = {
+    dispose: () => {
+      if (_sessTerm) { try { _sessTerm.dispose(); } catch (e) {} _sessTerm = null; }
+    },
+  };
   poll();
+  // Lighter cadence — we only need this to discover newly-spawned
+  // sessions / removed ones. The xterm itself streams independently at
+  // ~250ms via createRailTerm()'s internal tick.
   _termTimer = setInterval(poll, 2500);
 }
 
@@ -6262,7 +6326,23 @@ function _vapPanel(runId, key, hasData) {
     (hasData ? '' : '<span class="vap-no">(not logged)</span>');
   card.append(hd);
   const body = el('div', 'vap-body'); card.append(body);
-  if (!hasData) return card;
+  if (!hasData) {
+    // Replace the empty body with a copy-pastable hint pointing the
+    // researcher at the SDK helper. Without this the missing default plot
+    // looks like a dashboard bug rather than a missing agent log line.
+    const hint = el('div', 'vap-hint');
+    hint.style.cssText = 'padding:8px 10px;color:#8B95A1;font-size:12px;' +
+      'line-height:1.5';
+    hint.innerHTML =
+      `Agent didn&rsquo;t log this key. Required: ` +
+      `<code class="mono">arui.log({'${esc(key)}': ...})</code> ` +
+      `or <code class="mono">arui.log_defaults(...)</code>. ` +
+      `Common aliases like <code class="mono">loss</code>/` +
+      `<code class="mono">accuracy</code>/<code class="mono">learning_rate</code> ` +
+      `are auto-remapped at ingest.`;
+    body.append(hint);
+    return card;
+  }
   let loaded = false;
   const io = new IntersectionObserver(async entries => {
     if (loaded) return;

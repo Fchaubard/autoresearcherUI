@@ -132,6 +132,15 @@ def _launch_run(db, run: Run, gpu_idx: int) -> None:
             ["tmux", "new-session", "-d", "-s", run.id,
              f"cd {folder} && CUDA_VISIBLE_DEVICES={gpu_idx} {cmd} 2>&1"],
             capture_output=True, timeout=10)
+        # Proactively wire pane_stream so the user can click the run's
+        # tab in the Sessions rail and instantly see live bytes — no
+        # /attach round-trip lag. tmux pipe-pane is cheap and idempotent.
+        try:
+            from . import pane_stream
+            pane_stream.enable(run.id)
+        except Exception as e:                              # noqa: BLE001
+            print(f"[paper-runner] pane_stream.enable({run.id}) failed: {e}",
+                  flush=True)
         bus.publish("paper", "run_started",
                     {"run_id": run.id, "gpu": gpu_idx})
         print(f"[paper-runner] launched {run.id} on GPU {gpu_idx}",
