@@ -701,28 +701,29 @@ def compute_state() -> dict:
     _agent_state_early = _classify_agent_state(_pane_text_early)
     details["agent_state"] = _agent_state_early    # may be overwritten below
 
-    # The setting_up gate trips in two cases:
-    #   (a) Truly fresh: onboarded but no runs at all yet — definitely
-    #       in SOP.
-    #   (b) Pre-bless setup phase: agent pane explicitly shows setup
-    #       activity (init_probe / overfit_smoke / scaffolding /
-    #       preflight) AND preflight hasn't been blessed yet. The agent
-    #       may have launched probe runs to verify the code works —
-    #       those count as runs but are NOT real experiments. We do not
-    #       want to call this "needs_direction" while the agent is
-    #       actively building the rig.
-    if has_onboarded and not blessed and (
-            total_any == 0
-            or _agent_state_early == "setting_up"):
+    # The setting_up gate trips only on a TRULY fresh project: onboarded
+    # but no runs ever in the DB. Once any run has been recorded — even
+    # a probe / smoke — the project has past initial SOP and the pill
+    # should reflect actual loop state, not eternal "setting up".
+    # (Previous version also tripped when preflight wasn't blessed +
+    # the agent pane mentioned setup keywords, which made the pill
+    # falsely read "Setting up" whenever the agent was restarted on
+    # an existing project. Francois flagged this 2026-06-05.)
+    if has_onboarded and total_any == 0:
         details["total_runs"] = total_any
         details["preflight_blessed"] = blessed
         return {"state": SETTING_UP,
                 "details": details,
-                "reason": ("Agent is in initial SOP — scaffolding code "
-                           "and running preflight checks. This typically "
-                           "takes 5–15 minutes; the dashboard will turn "
-                           "green once preflight is blessed and the "
-                           "first real experiment is launched.")}
+                "reason": ("Agent is in initial SOP — writing the "
+                           "research codebase (train.py, prepare.py, "
+                           "eval.py), building any compromised models "
+                           "or probes the project needs, and running "
+                           "preflight gates. This can take anywhere "
+                           "from 5 minutes to a few days depending on "
+                           "how much code the agent has to author and "
+                           "test before the first real experiment can "
+                           "launch. The pill turns green once the "
+                           "first experiment finishes.")}
 
     # ── stalled / nagged: count consecutive reviews on the same top dir.
     top_sig = _top_idea_signature()

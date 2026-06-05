@@ -258,23 +258,21 @@ def test_setting_up_when_onboarded_with_no_runs_and_unblessed(
         or "preflight" in snap["reason"].lower()
 
 
-def test_setting_up_falls_back_to_healthy_when_blessed(
-        arui_env, db_session, make_project):
-    """Once preflight is blessed and the first run hasn't yet started,
-    the setting_up signal must stop firing (we don't want the cyan pill
-    sticking around forever on a stalled-pre-launch project)."""
-    import os
+def test_setting_up_falls_through_when_runs_exist(
+        arui_env, db_session, make_project, make_run):
+    """REGRESSION 2026-06-05: once ANY run has been recorded for the
+    project (probe / smoke / real), the setting_up signal MUST stop
+    firing. Previously a restarted agent on a populated project would
+    falsely show "Setting up" because the new boot session hadn't
+    re-blessed preflight yet, even with 40+ kept runs in the DB."""
     from backend.app import stuck_detector
-    from backend.app.models import Setting
     make_project(purpose="Some real research question that justifies SOP.")
-    db_session.add(Setting(key="preflight_blessed",
-                           value={"blessed": True,
-                                  "at": _iso(seconds_ago=10)}))
-    db_session.commit()
+    # A single probe run is enough to mean "past initial SOP".
+    make_run(id="probe1", status="success_smoke", headline_metric=0.5,
+             created_at=_iso(seconds_ago=200),
+             ended_at=_iso(seconds_ago=190))
     snap = stuck_detector.compute_state()
-    # With bless set + no runs + no holding cue, the detector falls
-    # through to healthy (nothing wrong, just waiting on launch).
-    assert snap["state"] in ("healthy", "needs_direction"), snap
+    assert snap["state"] != "setting_up", snap
 
 
 def test_setting_up_skipped_when_no_project_onboarded(arui_env, db_session):
