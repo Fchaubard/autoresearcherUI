@@ -43,23 +43,60 @@ def term_file(session: str) -> Path:
     return _TERM_DIR / f"{safe or 'unknown'}.raw"
 
 
-def enable(session: str, *, mirror_to: Optional[str] = None) -> Path:
+def enable(session: str, *, mirror_to: Optional[str] = None,
+           preserve_history: bool = True) -> Path:
     """Wire `tmux pipe-pane -o` for `session` so its byte stream lands in
     :func:`term_file`. If ``mirror_to`` is given, also append the same
     bytes to that file (a per-workspace persistent log).
 
-    The raw file is truncated first so the next frontend connection
-    starts from a clean slate — otherwise the agent's previous boot
-    output would persist across restarts and confuse the user.
-
     Safe to call multiple times for the same session: tmux replaces any
     prior pipe-pane mapping.
+
+    Args:
+        session: tmux session name.
+        mirror_to: optional path; if set, every byte is also written to
+            this file (used for per-workspace persistent agent.log).
+        preserve_history: when True (default), the existing raw file is
+            preserved AND we capture the pane's current visible buffer
+            (``tmux capture-pane -ep``) into the file before enabling
+            the live pipe — so when the UI connects, it sees both
+            historical context AND new bytes. When False, the file is
+            truncated (used on agent.restart so the next boot starts
+            clean).
     """
     tf = term_file(session)
-    try:
-        tf.write_bytes(b"")          # truncate
-    except OSError:
-        pass
+    if not preserve_history:
+        try:
+            tf.write_bytes(b"")      # truncate
+        except OSError:
+            pass
+    else:
+        # Capture the pane's current visible buffer + scrollback so the
+        # UI sees "what's already there" the moment it connects. Without
+        # this, opening a tab for an agent-created session that's been
+        # running for an hour shows only bytes emitted AFTER we attach
+        # — which usually looks like ``^L`` or nothing at all because
+        # the shell isn't actively writing.
+        try:
+            r = subprocess.run(
+                ["tmux", "capture-pane", "-t", session,
+                 "-e", "-p", "-S", "-2000"],
+                capture_output=True, timeout=5)
+            existing = b""
+            try:
+                existing = tf.read_bytes() if tf.exists() else b""
+            except OSError:
+                existing = b""
+            # If the existing raw file is empty, seed it with the
+            # captured buffer. If it has content already, leave it
+            # alone — we'd duplicate otherwise.
+            if not existing and r.returncode == 0 and r.stdout:
+                # ANSI-aware capture emits text WITHOUT trailing newline
+                # on the cursor line; add CR-LF between captured rows so
+                # xterm renders them as written.
+                tf.write_bytes(r.stdout.replace(b"\n", b"\r\n"))
+        except Exception:                                   # noqa: BLE001
+            pass
     if mirror_to:
         cmd = (f"tee -a {shlex.quote(str(tf))} >> "
                f"{shlex.quote(mirror_to)}")
@@ -68,6 +105,49 @@ def enable(session: str, *, mirror_to: Optional[str] = None) -> Path:
     subprocess.run(["tmux", "pipe-pane", "-t", session, "-o", cmd],
                    capture_output=True)
     return tf
+
+
+def list_tmux_sessions() -> list[str]:
+    """Return every tmux session name visible to the backend's tmux
+    server. Drops infra sessions (arui, arui-cf, agent, author) that the
+    Sessions tab should never show — those have dedicated views."""
+    try:
+        r = subprocess.run(["tmux", "list-sessions", "-F", "#{session_name}"],
+                           capture_output=True, text=True, timeout=5)
+        if r.returncode != 0:
+            return []
+        names = [n.strip() for n in (r.stdout or "").splitlines()
+                 if n.strip()]
+    except Exception:                                       # noqa: BLE001
+        return []
+    INFRA = {"arui", "arui-cf", "agent", "author"}
+    return [n for n in names if n not in INFRA]
+
+
+def sweep_enable_all() -> dict:
+    """Enable pane_stream for every visible non-infra tmux session.
+
+    The agent (and its training scripts) can create tmux sessions via
+    raw ``tmux new-session`` without going through ``/api/sessions/create``
+    — those sessions then have no pipe-pane wired, so opening them in
+    the Sessions tab shows an empty file. This sweeper, run periodically
+    by ``monitor.py``, ensures every session is piped within ~30s of
+    appearing.
+
+    Idempotent: tmux replaces any existing pipe-pane mapping when called
+    on a session that's already piped. Doesn't truncate existing raw
+    files.
+
+    Returns ``{"enabled": [...], "skipped": [...]}`` for logging.
+    """
+    enabled, skipped = [], []
+    for name in list_tmux_sessions():
+        try:
+            enable(name, preserve_history=True)
+            enabled.append(name)
+        except Exception as e:                              # noqa: BLE001
+            skipped.append({"name": name, "error": str(e)[:120]})
+    return {"enabled": enabled, "skipped": skipped}
 
 
 def read_range(session: str, offset: int = 0,

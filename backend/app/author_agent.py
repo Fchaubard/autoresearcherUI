@@ -316,7 +316,8 @@ def start(proposal_id: str = "") -> dict:
         # xterm.js streaming source) AND author.log (per-workspace
         # persistent log). See backend/app/pane_stream.py.
         from . import pane_stream
-        pane_stream.enable(SESSION, mirror_to=str(folder / "author.log"))
+        pane_stream.enable(SESSION, mirror_to=str(folder / "author.log"),
+                           preserve_history=False)
         # Restore any cached xterm dimensions (see RealAgent.start).
         pane_stream.apply_remembered_size(SESSION)
         # Once Claude Code has booted, hand it the brief. Same dance as

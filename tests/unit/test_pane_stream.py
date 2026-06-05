@@ -109,8 +109,15 @@ def test_size_reports_current_bytes(ps):
     assert ps.size(sess) == 3
 
 
-def test_enable_truncates_existing_file_and_invokes_tmux(ps, monkeypatch):
-    """`enable()` always truncates so a fresh stream starts clean."""
+def test_enable_truncates_when_preserve_history_false(ps, monkeypatch):
+    """`enable(preserve_history=False)` is the agent-boot path: wipes
+    the raw stream so the next frontend connection starts clean.
+
+    (Updated 2026-06-05: enable() default behaviour changed to
+    preserve_history=True so opening an already-running session shows
+    historical context instead of an empty pane. The agent boot path
+    explicitly passes preserve_history=False to opt back into the
+    old truncating behaviour.)"""
     sess = "enabletest"
     tf = ps.term_file(sess)
     tf.write_bytes(b"old content")
@@ -118,10 +125,10 @@ def test_enable_truncates_existing_file_and_invokes_tmux(ps, monkeypatch):
     calls = []
     def fake_run(*a, **kw):
         calls.append(list(a[0]) if a else None)
-        class R: returncode = 0
+        class R: returncode = 0; stdout = b""; stderr = b""
         return R()
     monkeypatch.setattr(_sp, "run", fake_run)
-    ps.enable(sess)
+    ps.enable(sess, preserve_history=False)
     assert tf.stat().st_size == 0
     # And we DID try to set up pipe-pane on the right session
     assert any("pipe-pane" in (cmd or []) and sess in (cmd or [])

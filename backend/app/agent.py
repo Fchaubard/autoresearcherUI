@@ -296,7 +296,14 @@ class RealAgent:
         # persistent per-workspace record. One pipe-pane invocation
         # with `tee` does both.
         from . import pane_stream
-        pane_stream.enable(self.session, mirror_to=log)
+        # preserve_history=False — agent (re-)boot wipes the raw stream
+        # file so the next frontend connection sees a clean Claude REPL
+        # rather than the previous boot's output. Other callers (user
+        # session attaches, the periodic sweeper) keep the default
+        # preserve_history=True so an already-running session keeps its
+        # context when freshly attached.
+        pane_stream.enable(self.session, mirror_to=log,
+                           preserve_history=False)
         # If the frontend's xterm has reported dimensions for this
         # session in a prior life, restore them now — otherwise the
         # rail will see Claude rendering at 120x40 (our spawn default)
