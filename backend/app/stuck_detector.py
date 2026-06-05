@@ -110,6 +110,85 @@ DRY_WINDOW = 50
 # pod (a fresh, on-mandate launch should rotate well inside 60 minutes).
 RECENT_REJECTION_WINDOW_SEC = 3600
 
+# How long ALL GPUs must sit idle (util < 5% AND vram < 1 GB) before
+# we'll flip the dashboard to needs_direction. 10 min is long enough
+# that a brief between-runs gap doesn't trip it, short enough that a
+# real "agent gave up" situation surfaces quickly.
+NEEDS_DIRECTION_IDLE_SEC = 10 * 60
+
+# Minimum dwell time before the dashboard pill can flip again. Without
+# this, the 8 s SSE tick and the sliding 20-run window combine to make
+# the pill alternate healthy ↔ needs_direction every cycle, which the
+# user reasonably called "kindof dumb". 2 min is enough that one tick
+# of bad-data doesn't visibly flap the UI; a real persistent problem
+# will still surface after this window.
+STATE_TRANSITION_DEBOUNCE_SEC = 120
+
+# Setting key that holds "since when have all GPUs been idle?". Shared
+# with pi.py's _idle_gpu_escalation so the email + the dashboard pill
+# agree on a single answer.
+_IDLE_WINDOW_KEY = "stuck_idle_window_since"
+
+# Setting key for the debounced state — protects against rapid flapping.
+_DEBOUNCE_KEY = "stuck_debounce"
+
+
+def _idle_window_state(idle_now: bool) -> str | None:
+    """Track when the all-GPUs-idle window began. Returns the ISO start
+    timestamp while we're inside an idle window, or ``None`` if any GPU
+    is currently working. Persists in a Setting so this survives across
+    cycle ticks (and across backend restarts)."""
+    try:
+        db = SessionLocal()
+        try:
+            row = (db.query(Setting)
+                   .filter(Setting.key == _IDLE_WINDOW_KEY).first())
+            if not idle_now:
+                if row is not None:
+                    db.delete(row); db.commit()
+                return None
+            if row is None:
+                now_iso = _iso()
+                db.add(Setting(key=_IDLE_WINDOW_KEY, value={"since": now_iso}))
+                db.commit()
+                return now_iso
+            return (row.value or {}).get("since")
+        finally:
+            db.close()
+    except Exception:                                       # noqa: BLE001
+        return None
+
+
+def _debounce_filter(snap: dict) -> dict:
+    """Suppress rapid state flapping. Returns the snap unchanged on a
+    cold start; on subsequent ticks, if the proposed new state differs
+    from the persisted state AND the persisted state is younger than
+    ``STATE_TRANSITION_DEBOUNCE_SEC``, returns the persisted snap so
+    the dashboard pill stays stable. Once the debounce window expires
+    the new state takes over."""
+    try:
+        prev = _last_state()
+        prev_state = prev.get("state") or HEALTHY
+        prev_at = prev.get("at") or ""
+        if prev_state == snap["state"]:
+            return snap
+        try:
+            age = (dt.datetime.now(dt.timezone.utc).timestamp()
+                   - dt.datetime.fromisoformat(prev_at).timestamp())
+        except Exception:
+            return snap
+        if age < STATE_TRANSITION_DEBOUNCE_SEC:
+            # Hold the previous state; merge the new details for forensics.
+            held = dict(prev)
+            new_details = dict(snap.get("details") or {})
+            new_details["debounced_proposed_state"] = snap["state"]
+            new_details["debounced_proposed_reason"] = snap.get("reason", "")
+            held["details"] = new_details
+            return held
+        return snap
+    except Exception:                                       # noqa: BLE001
+        return snap
+
 # Keywords that, when seen in the trailing window of the agent's tmux
 # pane, indicate the agent is INTENTIONALLY holding (the novelty gate +
 # new prompt are working as designed). Treated as a strong signal for
@@ -659,97 +738,116 @@ def compute_state() -> dict:
             f"{streak} consecutive strategic reviews on the same top "
             f"directive."))
 
-    # ── looping vs needs_direction: distinguish "agent is currently
-    # loop-launching duplicate configs" from "historical dups but agent
-    # has correctly stopped". We use two RIGHT-NOW signals:
+    # ── needs_direction / looping (REWRITTEN 2026-06-05) ─────────────
+    # The old detector tracked a "historical collision rate" (% of the
+    # last 20 finished runs whose novelty_hash matched another run) and
+    # flipped to needs_direction whenever the rate was high. That signal
+    # is bad: deliberate replication, seed-replicate sweeps, and HP
+    # ablations all SHARE configs by design, so the rate spikes high
+    # any time the agent does its job. The pill then flapped
+    # healthy↔needs_direction as the 20-run window slid.
     #
-    #   1) novelty rejections in the last hour. The /api/track/run gate
-    #      emits a ``novelty_rejected`` Event every time it returns 409.
-    #      If that count is 0 the agent has stopped trying to launch
-    #      duplicates — the historical collision rate is stale data.
+    # The new contract uses only RIGHT-NOW evidence:
     #
-    #   2) the agent's tmux pane text. If it contains a hold cue
-    #      ("holding", "awaiting", "no novel", etc) we have strong
-    #      evidence the agent is intentionally idle, not crashed.
+    #   • GPU work signal  — are any GPUs at >=5% util RIGHT NOW?
+    #     (read from the same Gpu rows the monitor writes.) If yes,
+    #     research is healthy regardless of pane text.
     #
-    # The state-classifier therefore reads:
+    #   • idle-too-long    — all GPUs at <5% util for >=10 minutes AND
+    #     agent pane shows a hold cue ("holding"/"awaiting"/...).
+    #     That is the ONLY needs_direction trigger.
     #
-    #   recent_rejections == 0  AND  agent_state == "holding"
-    #     -> needs_direction (BLUE / info — the GOOD outcome)
-    #   recent_rejections > 0   AND  coll > 30 %  AND  no novel kept
-    #     -> looping (RED / amber — the BAD outcome we used to fire
-    #        on stale history)
-    #   recent_rejections > 0   AND  novel kept run in window
-    #     -> degraded (AMBER — partial loop with progress, warn only)
-    #   coll > 30 %             AND  rejections == 0 but agent NOT holding
-    #     -> looping (defensive: collisions but no exoneration signal)
-    loop_runs = _recent_runs(LOOPING_WINDOW)
-    coll = _collision_rate(loop_runs)
-    details["collision_rate"] = round(coll, 3)
-    details["collision_window"] = LOOPING_WINDOW
-
-    # Reuse the agent_state we computed for the setting_up gate (one
-    # tmux capture-pane is plenty per tick).
+    #   • looping (kept as a state but reframed) — there are >=3
+    #     novelty-gate REJECTIONS in the last hour AND zero kept_novel
+    #     runs in that same hour. The novelty *gate* is fine and useful
+    #     (it returns 409 on identical-config submissions and the agent
+    #     should retry with a tweak); but if the agent keeps banging on
+    #     the same dup over and over without any novel run going
+    #     through, that's a real loop. This needs RECENT rejections,
+    #     not historical collisions.
+    #
+    # Collision rate is recorded in `details` for forensic value only —
+    # it never drives a state transition.
     pane_text = _pane_text_early
     agent_state = _agent_state_early
-    details["agent_state"] = agent_state
+
+    # Historical collision rate — purely informational, no longer drives
+    # the state. Cheap to keep for the modal's diagnostics.
+    try:
+        _loop_runs = _recent_runs(LOOPING_WINDOW)
+        details["collision_rate"] = round(_collision_rate(_loop_runs), 3)
+        details["collision_window"] = LOOPING_WINDOW
+    except Exception:                                       # noqa: BLE001
+        details["collision_rate"] = 0.0
+        details["collision_window"] = LOOPING_WINDOW
 
     recent_rejections = _recent_novelty_rejections()
     details["recent_novelty_rejections"] = recent_rejections
     details["recent_rejection_window_sec"] = RECENT_REJECTION_WINDOW_SEC
 
-    # Novel kept runs in the dry window — used by both the dry classifier
-    # below AND the degraded vs looping split here.
     dry_runs = _recent_runs(DRY_WINDOW)
     novel = _kept_novel_count(dry_runs)
     details["kept_novel_in_window"] = novel
     details["kept_novel_window"] = DRY_WINDOW
 
-    if coll > LOOPING_COLLISION_RATE:
-        # Pick which sub-state actually applies. The recent-rejection
-        # signal (last hour) ALWAYS dominates the historical collision
-        # rate (last 20 runs across all of time): if the agent has
-        # STOPPED launching duplicates, the system isn't "looping"
-        # even if it spent the last 30 minutes looping before stopping.
-        # That distinction is the whole point of the
-        # needs_direction state.
-        if recent_rejections == 0:
-            # No recent dup launches — agent has stopped (whether the
-            # tmux pane reads "holding", is offline, or is empty).
-            # Historical collision rate is stale; show needs_direction.
-            tail = (" Agent pane suggests it's holding."
-                    if agent_state == "holding" else "")
-            reasons.append((NEEDS_DIRECTION,
-                "Agent has stopped launching duplicate configs. "
-                "Historical collision rate was "
-                f"{int(coll * 100)}% but no novelty-gate rejection "
-                f"in the last {RECENT_REJECTION_WINDOW_SEC // 60} min. "
-                "Provide a new directive via the agent terminal "
-                "(right rail) or pause research." + tail))
-        elif novel > 0:
-            reasons.append((DEGRADED,
-                f"Agent is launching some novel configs but the "
-                f"novelty gate is also rejecting duplicates "
-                f"({recent_rejections} in the last "
-                f"{RECENT_REJECTION_WINDOW_SEC // 60} min)."))
-        else:
-            reasons.append((LOOPING,
-                f"{int(coll * 100)}% of the last {LOOPING_WINDOW} "
-                f"finished runs are duplicate configurations AND the "
-                f"agent is still trying to launch dups "
-                f"({recent_rejections} novelty-gate rejections in the "
-                f"last {RECENT_REJECTION_WINDOW_SEC // 60} min)."))
-    else:
-        # Collision rate is fine — but we may still want to surface
-        # needs_direction if the agent is explicitly holding (GPUs
-        # idle, no rejections, hold cue present). This catches the
-        # case where the dashboard would otherwise read "healthy"
-        # while the human is confused that nothing is running.
-        if recent_rejections == 0 and agent_state == "holding":
-            reasons.append((NEEDS_DIRECTION,
-                "Agent is holding — it has no novel directive to run. "
-                "Provide a new directive via the agent terminal "
-                "(right rail) or pause research."))
+    # Read live GPU util / VRAM. If any GPU is doing meaningful work
+    # right now, research is HEALTHY by definition — every other signal
+    # is a forensic detail. The dashboard pill must reflect "is work
+    # happening?", not "did the last 20 runs share novelty hashes?"
+    try:
+        from .models import Gpu as _Gpu
+        _db = SessionLocal()
+        try:
+            _gpus = _db.query(_Gpu).all()
+            gpus_total = len(_gpus)
+            gpus_working = sum(
+                1 for g in _gpus
+                if (g.util_pct or 0) >= 5 or (g.vram_used_mb or 0) >= 1024)
+        finally:
+            _db.close()
+    except Exception:                                       # noqa: BLE001
+        gpus_total = 0
+        gpus_working = 0
+    details["gpus_total"] = gpus_total
+    details["gpus_working"] = gpus_working
+
+    # idle-too-long tracker (kept in the same Setting the email-alert
+    # uses, so they agree on "since when") — only fires after 10 min
+    # so a brief between-runs lull never trips needs_direction.
+    idle_now = (gpus_total > 0 and gpus_working == 0)
+    idle_since = _idle_window_state(idle_now)
+    details["idle_since"] = idle_since
+    idle_sec = 0
+    if idle_since:
+        try:
+            idle_sec = max(
+                0,
+                int(dt.datetime.now(dt.timezone.utc).timestamp()
+                    - dt.datetime.fromisoformat(idle_since).timestamp()))
+        except Exception:
+            idle_sec = 0
+    details["idle_for_sec"] = idle_sec
+
+    # Looping: recent rejections >= 3 AND zero novel runs in the same
+    # hour. Drops the historical collision-rate dependency.
+    if recent_rejections >= 3 and novel == 0:
+        reasons.append((LOOPING,
+            f"Novelty gate has rejected {recent_rejections} "
+            f"duplicate-config submissions in the last "
+            f"{RECENT_REJECTION_WINDOW_SEC // 60} min and no novel run "
+            "has been kept — the agent is stuck on the same idea. "
+            "Add a new directive or pause research."))
+    # needs_direction: all GPUs idle for >= 10 min AND the pane shows a
+    # hold cue. Both must be true — a brief pause between runs is OK.
+    elif (gpus_total > 0 and gpus_working == 0
+          and idle_sec >= NEEDS_DIRECTION_IDLE_SEC
+          and agent_state == "holding"):
+        mins = idle_sec // 60
+        reasons.append((NEEDS_DIRECTION,
+            f"All {gpus_total} GPU(s) have been idle for {mins} min and "
+            "the agent's tmux pane shows it's holding (no directive to "
+            "run). Open the agent terminal in the right rail and either "
+            "send a new directive or pause research."))
 
     # ── dry: no novel kept run in the last 50 launched runs.
     if dry_runs and novel == 0:
@@ -862,7 +960,12 @@ def tick() -> dict:
     DB reads + one file read. Thread-safe across pi.cycle and api calls.
     """
     with _LOCK:
-        snap = compute_state()
+        raw_snap = compute_state()
+        # Debounce rapid state flips. Without this the 8 s SSE tick
+        # combined with the sliding GPU-util window could make the
+        # dashboard pill alternate healthy ↔ needs_direction every
+        # cycle (Francois 2026-06-05).
+        snap = _debounce_filter(raw_snap)
         prev = _last_state()
         prev_state = prev.get("state") or HEALTHY
         if snap["state"] != prev_state:
