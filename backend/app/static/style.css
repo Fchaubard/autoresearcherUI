@@ -65,6 +65,43 @@ button{cursor:pointer}
 .rh-pill.rh-degraded{background:#f59e0b22;color:#fbbf24}
 .rh-pill.rh-stalled{background:#f43f5e22;color:#f87171;
   animation:rh-pulse 1.6s infinite}
+/* awaiting_completion_review: agent has declared the purpose answered;
+   the council is reviewing the evidence (usually 5-10 minutes). This
+   is a positive state — research is paused on purpose — so we render
+   it as INDIGO / PURPLE, not amber. */
+.rh-pill.rh-awaiting_completion_review{background:#6366f122;color:#a5b4fc}
+/* complete: the council has APPROVED the agent's conclusion. The user
+   can now move to paper mode. Brighter green with a celebratory pulse
+   so they can't miss it. */
+.rh-pill.rh-complete{background:#22c55e33;color:#34d399;
+  font-weight:600;animation:rh-celebrate 2s infinite}
+@keyframes rh-celebrate{
+  0%,100%{box-shadow:0 0 0 0 #22c55e55}
+  50%{box-shadow:0 0 0 8px #22c55e00}
+}
+/* Top-of-page banner shown when state == complete. Big, celebratory,
+   actionable — three buttons: Write the paper / View evidence /
+   Reject conclusion. Hidden by default; app.js toggles the .show
+   class when the conclusion is approved. */
+.complete-banner{display:none;padding:14px 18px;
+  background:linear-gradient(90deg,#22c55e22,#6366f122);
+  border:1px solid #22c55e55;border-radius:10px;margin:12px;
+  color:#e8edf2;font-size:14px;line-height:1.4}
+.complete-banner.show{display:block}
+.complete-banner .cb-title{font-weight:700;font-size:16px;
+  color:#34d399;margin-bottom:6px}
+.complete-banner .cb-summary{color:#cbd5e1;margin:6px 0 10px}
+.complete-banner .cb-actions{display:flex;gap:8px;flex-wrap:wrap}
+.complete-banner .cb-actions button{padding:8px 14px;border-radius:6px;
+  border:none;cursor:pointer;font-size:13px;font-weight:600}
+.complete-banner .cb-primary{background:#22c55e;color:#0a3d1f}
+.complete-banner .cb-primary:hover{background:#34d399}
+.complete-banner .cb-secondary{background:#1f2937;color:#e8edf2;
+  border:1px solid #475569 !important}
+.complete-banner .cb-secondary:hover{background:#374151}
+.complete-banner .cb-danger{background:#1f2937;color:#fca5a5;
+  border:1px solid #fca5a555 !important}
+.complete-banner .cb-danger:hover{background:#7f1d1d33}
 @keyframes rh-pulse{
   0%,100%{box-shadow:0 0 0 0 #f43f5e55}
   50%{box-shadow:0 0 0 6px #f43f5e00}

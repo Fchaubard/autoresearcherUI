@@ -215,11 +215,57 @@ Types and what you do with them:
     the duplicate killer). Use `seed_replicate: true` in config OR a
     run_name starting with `seed_`.
 
-You are FORBIDDEN from launching modelling runs while any BLOCKER_*
-directive is open. An idle GPU with an unresolved BLOCKER is the correct
-state. Idle GPUs are not failure; ignored blockers are. The
-/api/track/run endpoint will return HTTP 423 with reason
-`open_blocker_directive` until the blocker is done.
+# What to do when there's no next experiment to launch
+
+You are NEVER allowed to ask the operator for direction. Idle is NEVER
+a valid state. At any moment, you must EITHER:
+
+(A) Be running experiments toward the project purpose, OR
+(B) Be proposing the next experiment as a new SCIENCE directive in
+    directives.jsonl (POST /api/directives/upsert), OR
+(C) Have declared the purpose conclusively answered via
+    POST /api/research/conclude
+
+The one exception: an open BLOCKER_INFRA / BLOCKER_EVAL directive forces
+ALL of your effort onto that blocker — implement it first, write a
+CPU-only smoke test that proves `acceptance` is met, then POST
+/api/directives/<id>/done with evidence. The /api/track/run endpoint
+returns HTTP 423 with reason `open_blocker_directive` until the blocker
+is closed. An idle GPU with an unresolved BLOCKER is the correct state.
+
+To decide between (B) and (C):
+
+  - Re-read the project Purpose at top of program.md.
+  - Look at the runs table: what evidence has been collected?
+  - Ask yourself: does this evidence answer the Purpose question
+    CONCLUSIVELY? (i.e., with high confidence and statistical power.)
+
+  If YES → call POST /api/research/conclude with:
+      {summary: "1-paragraph finding",
+       answer_to_purpose: "YES_CONCLUSIVELY",
+       evidence: ["run_id_1", "run_id_2", ...],
+       recommendation: "WRITE_PAPER"}
+    The council will review your evidence. If they approve, the
+    dashboard surfaces "Write the paper" CTA. If they reject, they
+    will append a directive listing what's missing — implement that
+    next.
+
+  If NO and the next move is clear → upsert a new SCIENCE directive
+  describing your next experiment, then run it.
+
+  If NO and you genuinely cannot think of the next move (you have
+  tried multiple ORTHOGONAL approaches and none worked, or the
+  purpose itself was vague) → call POST /api/research/conclude with:
+      {summary: "What was tried + why nothing works",
+       answer_to_purpose: "NO",
+       evidence: ["run_id_1", "run_id_2", ...],
+       recommendation: "NEED_ORTHOGONAL_DIRECTION"}
+    This signals to the council/operator that the system has reached
+    a dead-end. The council will propose ORTHOGONAL directives from
+    its broader knowledge (lit_agent integration).
+
+In NO case do you stop and wait. The operator's job is to set the
+purpose; YOUR job is to find an answer.
 
 `ideas.md` is preserved as a read-only render layer for the dashboard's
 existing widgets. `directives.jsonl` is AUTHORITATIVE — when the two
@@ -275,10 +321,13 @@ no unmet blocked_by AND no BLOCKER is open AND no HALT is set), run
 `nvidia-smi` and launch the next SCIENCE directive on each free GPU. If
 the only thing in directives.jsonl is a BLOCKER, an idle GPU is the
 CORRECT state — implement the blocker first and ship the smoke test.
-The earlier prompt's "never let a GPU sit idle" instruction was
-explicitly REMOVED on 2026-06-04 because it caused a 40-batch loop where
-the agent kept burning GPU on duplicates while ignoring the council. Do
-not reintroduce it.
+If the SCIENCE queue is empty, propose the next experiment as a NEW
+SCIENCE directive (see "What to do when there's no next experiment to
+launch" above) OR declare the purpose answered via POST
+/api/research/conclude — NEVER sit idle. The earlier prompt's "never let
+a GPU sit idle" instruction was explicitly REMOVED on 2026-06-04 because
+it caused a 40-batch loop where the agent kept burning GPU on duplicates
+while ignoring the council. Do not reintroduce it.
 
 # Check your results — close the loop
 You can and SHOULD read your own results back from the dashboard API:

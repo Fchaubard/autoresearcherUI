@@ -1265,6 +1265,133 @@ def research_health():
                 "reason": "health probe failed; defaulting to healthy"}
 
 
+@router.post("/research/conclude")
+async def research_conclude(request: Request):
+    """The agent declares the research purpose conclusively answered.
+
+    Body:
+      {
+        "summary": "<1-paragraph summary of what was learned>",
+        "answer_to_purpose": "YES_CONCLUSIVELY|YES_PARTIAL|NO",
+        "evidence": ["run_id_1", "run_id_2", ...],
+        "recommendation": "WRITE_PAPER|NEED_ORTHOGONAL_DIRECTION|NEED_MORE_DATA"
+      }
+
+    Effects:
+      - Persists conclude_summary, conclude_at, etc. on the Setting row
+        ``research_conclusion`` with status ``pending``.
+      - Emits a Event ``research_concluded`` (severity=info).
+      - Triggers an async council completion-review. The reviewers
+        decide APPROVED / REJECTED / NEEDS_MORE; the verdict lands back
+        on the same Setting row.
+
+    The dashboard then surfaces ``awaiting_completion_review`` until the
+    council returns. After APPROVED the state flips to ``complete`` and
+    the user can move to paper mode. After REJECTED the council's
+    ``missing_evidence`` list tells the agent what to do next.
+
+    This is the only legal exit out of "the queue is empty" besides
+    upserting a new SCIENCE directive — the agent prompt forbids idle.
+    """
+    from fastapi.responses import JSONResponse
+    from . import council as _c
+    body = await _safe_json(request)
+    summary = str(body.get("summary") or "").strip()
+    answer = str(body.get("answer_to_purpose") or "").strip().upper()
+    evidence = body.get("evidence") or []
+    recommendation = str(body.get("recommendation") or "").strip().upper()
+    if not summary:
+        return JSONResponse(
+            {"ok": False, "error": "summary is required"},
+            status_code=400)
+    if answer not in ("YES_CONCLUSIVELY", "YES_PARTIAL", "NO"):
+        return JSONResponse(
+            {"ok": False, "error":
+             "answer_to_purpose must be YES_CONCLUSIVELY|YES_PARTIAL|NO"},
+            status_code=400)
+    if not isinstance(evidence, list):
+        return JSONResponse(
+            {"ok": False, "error": "evidence must be a list of run_ids"},
+            status_code=400)
+    if (recommendation and recommendation not in
+            ("WRITE_PAPER", "NEED_ORTHOGONAL_DIRECTION", "NEED_MORE_DATA")):
+        return JSONResponse(
+            {"ok": False, "error":
+             ("recommendation must be WRITE_PAPER|"
+              "NEED_ORTHOGONAL_DIRECTION|NEED_MORE_DATA")},
+            status_code=400)
+    # Emit Event so it shows up in the Summary feed live.
+    db = SessionLocal()
+    try:
+        db.add(Event(
+            id="ev-" + os.urandom(4).hex(),
+            type="research_concluded", severity="info", actor="agent",
+            message=(f"Agent declared the research purpose "
+                     f"{answer.replace('_', ' ').lower()}: "
+                     f"{summary[:180]}")[:280],
+            created_at=dt.datetime.now(dt.timezone.utc).isoformat()))
+        db.commit()
+    finally:
+        db.close()
+    state = _c.review_completion_async(
+        evidence_run_ids=[str(x) for x in evidence],
+        summary=summary,
+        answer_to_purpose=answer,
+        recommendation=recommendation)
+    try:
+        bus.publish("events", "research_health", {})
+    except Exception:
+        pass
+    return {"ok": True, "conclusion": state}
+
+
+@router.get("/research/conclusion")
+def research_conclusion_get():
+    """Snapshot of the current research-conclusion state.
+
+    Returns ``{"status": "none|pending|approved|rejected", "summary": ...,
+    "answer_to_purpose": ..., "evidence": [...], "recommendation": ...,
+    "council_verdict": {...}, "conclude_at": "...", ...}``. The dashboard
+    polls this to render the "Research complete" banner / "council is
+    reviewing" pill / write-the-paper CTA.
+    """
+    from . import council as _c
+    return _c.conclusion_state()
+
+
+@router.post("/research/conclusion/clear")
+async def research_conclusion_clear(request: Request):
+    """Operator-only: clear the current conclusion (rejects it).
+
+    Body: {"reason": "<optional one-line reason>",
+            "blocker_directive": {<optional directive dict>}}.
+
+    When the operator hits "Reject conclusion" on the dashboard they may
+    optionally include a BLOCKER directive describing what was wrong;
+    we upsert it so the agent picks it up on the next tick. The
+    conclusion state is wiped (status=none) so the loop returns to its
+    pre-conclusion state."""
+    from . import council as _c
+    from . import directives as _d
+    body = await _safe_json(request)
+    reason = str(body.get("reason") or "").strip()
+    blocker = body.get("blocker_directive") or None
+    out = _c.clear_conclusion(reason=reason)
+    upserted = None
+    if isinstance(blocker, dict) and blocker:
+        try:
+            stored, _created = _d.upsert(blocker)
+            upserted = stored
+        except Exception as e:                              # noqa: BLE001
+            print(f"[research/conclusion/clear] blocker upsert failed: "
+                  f"{e}", flush=True)
+    try:
+        bus.publish("events", "research_health", {})
+    except Exception:
+        pass
+    return {"ok": True, "conclusion": out, "blocker": upserted}
+
+
 @router.post("/research/pause")
 async def research_pause():
     """Pause the autonomous research loop. Sets ``research_paused: true``

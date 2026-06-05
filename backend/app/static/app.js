@@ -513,7 +513,15 @@ async function pollResearchHealth() {
       dry:             'Dry',
       needs_direction: 'Needs direction',
       degraded:        'Degraded',
+      // Conclusion-flow states (Piece #3): agent declared the purpose
+      // answered and the council is reviewing → indigo "Reviewing
+      // completion"; council approved → green "Research complete" with
+      // a trophy icon to make it unmissable.
+      awaiting_completion_review: 'Reviewing completion',
+      complete:        'Research complete',
     };
+    // Repaint the "Write the paper" banner when state changes.
+    try { renderCompleteBanner(s); } catch (e) { /* defensive */ }
     pill.className = 'pill rh-pill rh-' + state;
     // Default to the literal state name (not 'Healthy') for any
     // unknown state so a new backend state is at least visible
@@ -542,6 +550,107 @@ function openResearchHealth() {
       + (d.kept_novel_in_window ?? 0),
   ].join('\n');
   aruiAlert(msg, { title: 'Research health', okText: 'Close' });
+}
+
+/* "Research complete" banner — Piece #6.
+ * When stuck_detector.state==='complete' (council approved the agent's
+ * conclusion) we surface a celebratory top-of-page banner with three
+ * actions:
+ *   - Write the paper now → POST /paper/enter then navigate to /write-paper
+ *   - View evidence → opens a modal listing the cited run_ids
+ *   - Reject conclusion → operator types a reason, we clear the
+ *                        conclusion + optionally upsert a BLOCKER.
+ *
+ * The banner element is created lazily on the first call. We hide it
+ * (remove .show) for every other state.
+ */
+function renderCompleteBanner(health) {
+  let banner = document.getElementById('complete-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'complete-banner';
+    banner.className = 'complete-banner';
+    // Insert right under the header.
+    const host = document.querySelector('.app') || document.body;
+    host.insertBefore(banner, host.firstChild);
+  }
+  const state = health && health.state;
+  if (state !== 'complete') {
+    banner.classList.remove('show');
+    banner.innerHTML = '';
+    return;
+  }
+  const c = ((health.details || {}).conclusion) || {};
+  const summary = (c.summary || health.reason || 'Research complete.');
+  const evidence = c.evidence || [];
+  banner.classList.add('show');
+  banner.innerHTML =
+    '<div class="cb-title">'
+    + '\u{1F3C6} Council has approved the agent’s conclusion.</div>'
+    + '<div class="cb-summary">Summary: '
+    + escapeHtml(summary).slice(0, 600) + '</div>'
+    + '<div class="cb-actions">'
+    + '<button class="cb-primary" id="cb-write">'
+    + 'Write the paper now →</button>'
+    + '<button class="cb-secondary" id="cb-evidence">'
+    + 'View evidence (' + evidence.length + ')</button>'
+    + '<button class="cb-danger" id="cb-reject">'
+    + 'Reject conclusion (resume research)</button>'
+    + '</div>';
+  const btnWrite = document.getElementById('cb-write');
+  if (btnWrite) btnWrite.onclick = onWriteThePaperClick;
+  const btnEv = document.getElementById('cb-evidence');
+  if (btnEv) btnEv.onclick = () => {
+    const lines = evidence.length
+      ? evidence.map(r => '  - ' + r).join('\n')
+      : '(no run_ids cited)';
+    aruiAlert('Cited evidence runs:\n' + lines,
+      { title: 'Evidence', okText: 'Close' });
+  };
+  const btnRej = document.getElementById('cb-reject');
+  if (btnRej) btnRej.onclick = onRejectConclusionClick;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function onWriteThePaperClick() {
+  // Enter paper mode + jump to the write-paper view. Paper mode entry
+  // is idempotent (the backend tolerates re-enter) so a double click
+  // doesn't break anything.
+  try {
+    await post('/paper/enter', {});
+  } catch (e) { /* paper module may not be present; just navigate */ }
+  // Hash-based routing matches the rest of the app.
+  if (typeof location !== 'undefined') {
+    try { location.hash = '#/write-paper'; } catch (e) {}
+  }
+}
+
+async function onRejectConclusionClick() {
+  const reason = (typeof prompt === 'function')
+    ? (prompt(
+        'What’s wrong with the conclusion? '
+        + '(This will be filed as a BLOCKER for the agent.)',
+        '') || '').trim()
+    : '';
+  if (!reason) return;
+  const blocker = {
+    type: 'BLOCKER_INFRA',
+    priority: 1000,
+    what: 'Operator rejected the agent’s conclusion: ' + reason,
+    acceptance: ('Address the operator’s concern: '
+                 + reason + ' — then re-attempt /api/research/conclude.'),
+    idea_class: 'INFRA',
+    why: 'Conclusion rejected by operator on the dashboard.',
+    author: 'operator',
+  };
+  try {
+    await post('/research/conclusion/clear',
+      { reason, blocker_directive: blocker });
+  } catch (e) { console.warn('[reject conclusion] failed', e); }
 }
 
 /* Pre-flight code-bless banner. Top-of-page banner that shows whether

@@ -63,7 +63,7 @@ from .db import SessionLocal
 from .models import ChatMessage, Event, Run, Setting
 
 # The user-visible state names in worst-first order. ``healthy`` is the
-# absence of every signal; the other five are emitted by compute_state.
+# absence of every signal; the other states are emitted by compute_state.
 HEALTHY = "healthy"
 NEEDS_DIRECTION = "needs_direction"   # info, NOT a problem to fix
 NAGGED = "nagged"
@@ -71,6 +71,13 @@ STALLED = "stalled"
 LOOPING = "looping"
 DEGRADED = "degraded"
 DRY = "dry"
+# Conclusion-flow states. The agent has POSTed /api/research/conclude;
+# while the council reviews we surface ``awaiting_completion_review``
+# (purple/indigo info pill — research is paused on purpose, not a
+# fault). When the council returns APPROVED we flip to ``complete``,
+# a celebratory GREEN/trophy pill with the "Write the paper" CTA.
+AWAITING_COMPLETION_REVIEW = "awaiting_completion_review"
+COMPLETE = "complete"
 
 # Severity ordering — higher is worse. Used when we have multiple
 # triggers firing at once so we surface the most actionable one.
@@ -79,7 +86,15 @@ DRY = "dry"
 # still want to surface it to the user but never want it to drown out
 # a real fault like ``looping`` or ``stalled``. The dashboard pill
 # treats it as a BLUE info colour (see static/style.css .rh-needs_direction).
+#
+# AWAITING_COMPLETION_REVIEW and COMPLETE both sit at severity 0 with
+# healthy — neither is a problem to fix — but compute_state() returns
+# them DIRECTLY (short-circuiting the rest of the checks) when the
+# conclusion-state row says so. They are NOT meant to lose to a stale
+# nagged/looping signal: when the agent has declared done, that is the
+# foreground story.
 _SEVERITY = {HEALTHY: 0, NEEDS_DIRECTION: 0,
+             AWAITING_COMPLETION_REVIEW: 0, COMPLETE: 0,
              NAGGED: 1, LOOPING: 2, DEGRADED: 2, DRY: 3, STALLED: 4}
 
 # Thresholds from RESEARCH_IMPROVEMENT_PLAN.md section 8.
@@ -450,6 +465,27 @@ def _kept_novel_count(runs: list[Run]) -> int:
 # ─────────────────────────── public API ───────────────────────────────
 
 
+def _conclusion_snapshot() -> dict:
+    """Best-effort read of the ``research_conclusion`` Setting row.
+
+    Returns the dict (with at least ``status``) or ``{"status": "none"}``
+    on any error. Pure DB read — never raises into compute_state."""
+    try:
+        db = SessionLocal()
+        try:
+            row = (db.query(Setting)
+                   .filter(Setting.key == "research_conclusion").first())
+            if row and isinstance(row.value, dict):
+                out = dict(row.value)
+                out.setdefault("status", "none")
+                return out
+            return {"status": "none"}
+        finally:
+            db.close()
+    except Exception:                                       # noqa: BLE001
+        return {"status": "none"}
+
+
 def compute_state() -> dict:
     """Compute the current health of the research loop.
 
@@ -459,6 +495,52 @@ def compute_state() -> dict:
     """
     details: dict = {}
     reasons: list[tuple[str, str]] = []          # (state, human reason)
+
+    # ── conclusion-flow short-circuit ─────────────────────────────────
+    # When the agent has declared the project purpose answered, that is
+    # the dominant story on the dashboard — even if the queue happens to
+    # look ``nagged`` or ``looping`` from a stale prior window. The
+    # operator wants to see either "council is reviewing" or "complete,
+    # write the paper" prominently, NOT a yellow nagged pill that was
+    # accurate ten minutes ago.
+    cs = _conclusion_snapshot()
+    cs_status = (cs.get("status") or "none").lower()
+    if cs_status == "pending":
+        verdict = cs.get("council_verdict") or {}
+        details["conclusion"] = {
+            "status": cs_status,
+            "summary": (cs.get("summary") or "")[:600],
+            "answer_to_purpose": cs.get("answer_to_purpose"),
+            "evidence": cs.get("evidence") or [],
+            "recommendation": cs.get("recommendation"),
+            "conclude_at": cs.get("conclude_at"),
+            "council_verdict": verdict,
+        }
+        return {"state": AWAITING_COMPLETION_REVIEW,
+                "details": details,
+                "reason": ("Agent declared research complete — council "
+                           "reviewing evidence.")}
+    if cs_status == "approved":
+        verdict = cs.get("council_verdict") or {}
+        details["conclusion"] = {
+            "status": cs_status,
+            "summary": (cs.get("summary") or "")[:600],
+            "answer_to_purpose": cs.get("answer_to_purpose"),
+            "evidence": cs.get("evidence") or [],
+            "recommendation": cs.get("recommendation"),
+            "conclude_at": cs.get("conclude_at"),
+            "council_verdict": verdict,
+        }
+        short = (cs.get("summary") or "").strip().split("\n", 1)[0][:240]
+        return {"state": COMPLETE,
+                "details": details,
+                "reason": (f"Research complete: {short}. Ready to write "
+                           f"the paper.")}
+    # ``rejected`` falls through — the agent should resume work; the
+    # health probe goes back to its normal classification (so a rejected
+    # conclusion + a stale looping signal can both surface). The agent
+    # prompt tells the agent to read missing_evidence and upsert a new
+    # SCIENCE directive.
 
     # ── stalled / nagged: count consecutive reviews on the same top dir.
     top_sig = _top_idea_signature()
@@ -600,7 +682,17 @@ def on_state_transition(state: str, prev_state: str,
         # the loop). Without this exception the pill would silently
         # stay green/amber and the user would never learn why nothing
         # is running.
-        if not (state == NEEDS_DIRECTION and prev_state != NEEDS_DIRECTION):
+        #
+        # The conclusion-flow transitions (awaiting_completion_review
+        # and complete) carry the same exception — both are positive
+        # info-events the user MUST see immediately ("agent says it's
+        # done", "council blessed it — go write the paper"). They sit
+        # at severity 0 alongside healthy so without this branch a
+        # healthy→complete transition would be silently swallowed.
+        info_state_first_entry = (
+            state in (NEEDS_DIRECTION, AWAITING_COMPLETION_REVIEW, COMPLETE)
+            and prev_state != state)
+        if not info_state_first_entry:
             return  # transition didn't worsen — nothing to do.
     snap = snap or {"state": state, "details": {}, "reason": ""}
     reason = snap.get("reason") or f"Research health is now {state}."
@@ -615,8 +707,14 @@ def on_state_transition(state: str, prev_state: str,
         sev = "critical" if state == STALLED else (
             "warning" if state in (NAGGED, LOOPING, DEGRADED, DRY)
             else "info")
-        ev_type = "research_stuck" if state == STALLED \
-            else "research_health"
+        if state == STALLED:
+            ev_type = "research_stuck"
+        elif state == AWAITING_COMPLETION_REVIEW:
+            ev_type = "research_awaiting_completion_review"
+        elif state == COMPLETE:
+            ev_type = "research_complete"
+        else:
+            ev_type = "research_health"
         db.add(Event(id="ev-" + os.urandom(4).hex(),
                      type=ev_type, severity=sev, actor="stuck_detector",
                      message=(f"{state}: {reason}")[:280],

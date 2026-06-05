@@ -464,6 +464,211 @@ def cycle_paper(force: bool = False) -> dict | None:
             "messages_sent": sent, "model": model}
 
 
+# ── auto-propose next move when needs_direction lingers ───────────────
+
+
+# The setting key on which the most recent auto-propose timestamp lands
+# (so we don't fire it more than once per idle window).
+_LAST_AUTO_PROPOSE_KEY = "pi_last_auto_propose_at"
+
+# How long the system must sit in ``needs_direction`` before the PI
+# automatically kicks the council to propose a new move. 15 minutes is
+# long enough to be "the agent really has nothing left", short enough
+# to keep the dashboard from feeling stuck.
+_IDLE_PROPOSE_THRESHOLD_SEC = 15 * 60
+
+# Minimum spacing between auto-propose calls — so the PI doesn't burn
+# council tokens by firing once per cycle on every tick after the
+# threshold trips. After the first auto-propose we wait at least this
+# long before considering another, even if needs_direction persists.
+_AUTO_PROPOSE_COOLDOWN_SEC = 30 * 60
+
+
+def _last_auto_propose_at() -> dt.datetime | None:
+    try:
+        db = SessionLocal()
+        try:
+            row = (db.query(Setting)
+                   .filter(Setting.key == _LAST_AUTO_PROPOSE_KEY).first())
+            v = row.value if row else None
+            if isinstance(v, dict):
+                s = v.get("at")
+                if s:
+                    return dt.datetime.fromisoformat(
+                        str(s).replace("Z", "+00:00"))
+            return None
+        finally:
+            db.close()
+    except Exception:
+        return None
+
+
+def _mark_auto_propose_now() -> None:
+    try:
+        db = SessionLocal()
+        try:
+            now = _iso()
+            row = (db.query(Setting)
+                   .filter(Setting.key == _LAST_AUTO_PROPOSE_KEY).first())
+            if row:
+                row.value = {"at": now}
+            else:
+                db.add(Setting(key=_LAST_AUTO_PROPOSE_KEY,
+                               value={"at": now}))
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[pi] mark_auto_propose_now failed: {e}", flush=True)
+
+
+def _last_stuck_state() -> dict:
+    """Read the persisted stuck_detector snapshot Setting row.
+
+    Returns a dict with at least ``state`` and ``at`` keys (or
+    ``{"state": "healthy"}`` if missing). This is what the
+    auto-propose threshold check uses so it sees a consistent
+    state across PI ticks."""
+    try:
+        db = SessionLocal()
+        try:
+            row = (db.query(Setting)
+                   .filter(Setting.key == "stuck_detector_state").first())
+            if row and isinstance(row.value, dict):
+                return dict(row.value)
+            return {"state": "healthy"}
+        finally:
+            db.close()
+    except Exception:
+        return {"state": "healthy"}
+
+
+def _needs_direction_since() -> dt.datetime | None:
+    """When did the system most recently transition INTO needs_direction?
+
+    We use the persisted stuck_detector state row's ``at`` timestamp.
+    The detector overwrites that on every tick (transition or not), so
+    in practice if the state hasn't changed for X minutes ``at`` is the
+    last tick — but the persistent state is only ``needs_direction``
+    while the loop has been in that state, which is the signal we want.
+    """
+    try:
+        db = SessionLocal()
+        try:
+            row = (db.query(Setting)
+                   .filter(Setting.key == "stuck_detector_state").first())
+            if not row or not isinstance(row.value, dict):
+                return None
+            if row.value.get("state") != "needs_direction":
+                return None
+            at = row.value.get("at")
+            if not at:
+                return None
+            return dt.datetime.fromisoformat(
+                str(at).replace("Z", "+00:00"))
+        finally:
+            db.close()
+    except Exception:
+        return None
+
+
+def _maybe_propose_next_move() -> bool:
+    """If stuck_detector has been ``needs_direction`` for >= 15 minutes
+    AND research is not paused/halted AND no conclusion is in flight,
+    proactively ask the council to propose the next move.
+
+    Returns True if the auto-propose fired (caller short-circuits the
+    LLM PI cycle to avoid double-spending tokens). The propose itself
+    is async — it returns quickly and the worker thread writes results
+    later. We also post a chat bubble so the operator sees what
+    happened.
+
+    Idempotent within a 30-minute cooldown window."""
+    # Use the persisted snapshot, not a fresh compute_state(): the
+    # "needs_direction for 15 minutes" check must read the SAME state
+    # that the stuck_detector wrote on its last tick, otherwise we'd
+    # flap between recomputes and miss the threshold. ``tick()`` is
+    # called immediately before this in cycle(), so the row is fresh.
+    snap = _last_stuck_state()
+    if snap.get("state") != "needs_direction":
+        return False
+    # Skip if research is paused/halted — the PI has its own pause gate
+    # above, but this is a defensive belt-and-braces check in case the
+    # paused/halt check is moved later.
+    try:
+        from . import notify as _notify
+        if _notify.research_paused():
+            return False
+        halted, _ = _notify.research_halted()
+        if halted:
+            return False
+    except Exception:
+        pass
+    # Skip if a conclusion is in flight or already approved — the agent
+    # is already in the "done" path; we shouldn't propose more work.
+    try:
+        from . import council as _c
+        cs = _c.conclusion_state()
+        if (cs.get("status") or "none").lower() in ("pending", "approved"):
+            return False
+    except Exception:
+        pass
+    # How long has the loop been in needs_direction?
+    since = _needs_direction_since()
+    if since is None:
+        return False
+    age_sec = (dt.datetime.now(dt.timezone.utc) - since).total_seconds()
+    if age_sec < _IDLE_PROPOSE_THRESHOLD_SEC:
+        return False
+    # Cooldown to avoid spamming the council.
+    last = _last_auto_propose_at()
+    if last is not None:
+        since_last = (dt.datetime.now(dt.timezone.utc)
+                      - last).total_seconds()
+        if since_last < _AUTO_PROPOSE_COOLDOWN_SEC:
+            return False
+    # All gates passed — fire the propose.
+    try:
+        from . import council as _c
+        out = _c.propose_next_move_async()
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[pi] propose_next_move_async failed: {e}", flush=True)
+        return False
+    if not (out and out.get("started")):
+        return False
+    _mark_auto_propose_now()
+    # Surface the auto-propose to the operator: chat bubble + Event so
+    # the Summary feed shows why nothing was nagged.
+    try:
+        db = SessionLocal()
+        try:
+            db.add(ChatMessage(
+                id="cm-" + os.urandom(4).hex(),
+                role="agent",
+                content=("[PI agent: agent has been idle "
+                         f"{int(age_sec // 60)}m — proactively asking "
+                         "council to propose the next move.]"),
+                created_at=_iso()))
+            db.add(Event(
+                id="ev-" + os.urandom(4).hex(),
+                type="pi_auto_propose_next_move", severity="info",
+                actor="pi",
+                message=(f"PI auto-proposed next move after "
+                         f"{int(age_sec // 60)}m needs_direction.")[:280],
+                created_at=_iso()))
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[pi] auto-propose audit failed: {e}", flush=True)
+    try:
+        bus.publish("events", "research_health", {})
+    except Exception:
+        pass
+    print(f"[pi] auto-propose fired (idle {int(age_sec//60)}m)", flush=True)
+    return True
+
+
 def _escalation_halt_seen_recently(window_minutes: int = 60) -> bool:
     """True iff an ``escalation_halt`` Event was emitted in the last
     ``window_minutes``. Used by the PI cycle to auto-halt — once the
@@ -527,6 +732,19 @@ def cycle(force: bool = False) -> dict | None:
         stuck_detector.tick()
     except Exception as e:                                  # noqa: BLE001
         print(f"[pi] stuck_detector tick failed: {e}", flush=True)
+    # Idle-too-long auto-propose (Piece #5): when the system has been in
+    # ``needs_direction`` for >= 15 minutes AND research is not paused
+    # AND no conclusion is in flight, proactively ask the council to
+    # propose the next move. The point is to prevent the agent from
+    # quietly sitting on "GPUs are idle, awaiting human" indefinitely —
+    # by design the agent prompt forbids idle, but if the agent does
+    # idle anyway, the PI kicks the council to propose work.
+    try:
+        if _maybe_propose_next_move():
+            return {"concerns": "auto-proposed next move",
+                    "messages_sent": 0, "model": ""}
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[pi] auto-propose failed: {e}", flush=True)
     cfg = _settings()
     if not cfg.get("pi_agent_enabled", True) and not force:
         return None

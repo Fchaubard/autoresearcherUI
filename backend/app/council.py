@@ -2676,3 +2676,443 @@ def bless_async(workspace: str, bless_meta: dict | None = None) -> dict:
                      daemon=True, name="council-bless").start()
     return bless_status()
 
+
+# ════════════════════════════════════════════════════════════════════════
+#  Research conclusion review (agent declares "the purpose is answered")
+# ════════════════════════════════════════════════════════════════════════
+#
+# Why this exists
+# ---------------
+# The agent is forbidden from sitting idle. When its directive queue is
+# empty it has exactly two legal moves:
+#   (B) propose a new SCIENCE directive, OR
+#   (C) declare the research purpose conclusively answered and ask the
+#       council to bless that conclusion.
+#
+# This block implements (C). The agent POSTs /api/research/conclude with
+# a 1-paragraph summary + the run_ids that support its claim. We persist
+# the conclusion as a Setting row ``research_conclusion`` with status
+# ``pending``, fire an async council review, and the stuck_detector then
+# surfaces the state as ``awaiting_completion_review`` (purple/indigo).
+# When the council returns we set status=approved or rejected; the
+# dashboard then surfaces "complete" (green/trophy) or kicks the agent
+# to address the missing evidence the council called out.
+#
+# State lives in Setting key ``research_conclusion``:
+#   {
+#     "status": "pending|approved|rejected",
+#     "summary": "<agent's 1-paragraph finding>",
+#     "answer_to_purpose": "YES_CONCLUSIVELY|YES_PARTIAL|NO",
+#     "evidence": ["run_id_1", ...],
+#     "recommendation": "WRITE_PAPER|NEED_ORTHOGONAL_DIRECTION|NEED_MORE_DATA",
+#     "conclude_at": "<iso>",
+#     "council_verdict": {                      # set after review
+#         "verdict": "APPROVED|REJECTED|NEEDS_MORE",
+#         "reasons": [...],
+#         "missing_evidence": [...],
+#         "summary": "<one-paragraph council judgment>",
+#         "verdicts": {reviewer: {...}},
+#         "reviewed_at": "<iso>",
+#     },
+#   }
+
+
+_RESEARCH_CONCLUSION_KEY = "research_conclusion"
+
+
+_COMPLETION_REVIEW_SYSTEM = (
+    "You are a senior research advisor on a council reviewing whether "
+    "an autonomous ML research agent's conclusion that the project "
+    "purpose has been answered is BACKED BY THE EVIDENCE.\n\n"
+    "You will be given:\n"
+    "  - the project Purpose (what question was the agent trying to answer?)\n"
+    "  - the agent's one-paragraph summary of what was learned\n"
+    "  - the agent's claim level: YES_CONCLUSIVELY, YES_PARTIAL, or NO\n"
+    "  - the agent's recommendation: WRITE_PAPER / NEED_ORTHOGONAL_DIRECTION / NEED_MORE_DATA\n"
+    "  - the run ids the agent cites as evidence (with metrics + status)\n"
+    "  - the project-wide best metric and baseline\n"
+    "  - all prior runs as one-liners (so you can sanity-check the claim)\n\n"
+    "Decide:\n"
+    "  - APPROVED — the evidence really does answer the Purpose. The user\n"
+    "    can move to paper mode. Be STRICT: at minimum the cited runs\n"
+    "    must (a) actually exist, (b) be 'kept' or 'success' status,\n"
+    "    (c) directly speak to the Purpose, (d) be statistically credible\n"
+    "    (multiple seeds OR a single decisive non-trivial gap). For NO\n"
+    "    claims the bar is 'agent tried multiple orthogonal approaches\n"
+    "    and they failed' — APPROVE only if that's actually the case.\n"
+    "  - REJECTED — the evidence does NOT support the conclusion. The\n"
+    "    research must continue. Give the agent concrete `missing_evidence`\n"
+    "    items it should produce next (these will be turned into new\n"
+    "    SCIENCE directives by the orchestrator).\n"
+    "  - NEEDS_MORE — directionally right but more confirmation runs are\n"
+    "    needed before paper. Same `missing_evidence` shape applies.\n\n"
+    "Return STRICT JSON only — no markdown fence — matching:\n"
+    "  {\n"
+    "    \"verdict\": \"APPROVED\" | \"REJECTED\" | \"NEEDS_MORE\",\n"
+    "    \"reasons\": [\"<one-line rationale>\", ...],\n"
+    "    \"missing_evidence\": [\"<concrete experiment the agent should run next>\", ...],\n"
+    "    \"summary\": \"<one-paragraph judgment for the dashboard>\"\n"
+    "  }\n"
+    "Be terse. Be specific. The agent will read your `missing_evidence`\n"
+    "literally and turn each item into a SCIENCE directive — write them\n"
+    "as concrete experiments, not vague platitudes."
+)
+
+
+def _conclusion_state_get() -> dict:
+    db = SessionLocal()
+    try:
+        row = (db.query(Setting)
+               .filter(Setting.key == _RESEARCH_CONCLUSION_KEY).first())
+        if row and isinstance(row.value, dict):
+            return dict(row.value)
+        return {"status": "none"}
+    finally:
+        db.close()
+
+
+def _conclusion_state_set(state: dict) -> None:
+    state = dict(state)
+    state.setdefault("updated_at",
+                     dt.datetime.now(dt.timezone.utc).isoformat())
+    db = SessionLocal()
+    try:
+        row = (db.query(Setting)
+               .filter(Setting.key == _RESEARCH_CONCLUSION_KEY).first())
+        if row:
+            row.value = state
+        else:
+            db.add(Setting(key=_RESEARCH_CONCLUSION_KEY, value=state))
+        db.commit()
+    finally:
+        db.close()
+    try:
+        from .bus import bus
+        bus.publish("events", "research_health", {"state":
+                                                    state.get("status")})
+    except Exception:
+        pass
+
+
+def conclusion_state() -> dict:
+    """Snapshot of the current research-conclusion state (dashboard read).
+
+    Returns the raw setting row plus a normalised ``status`` of
+    ``none|pending|approved|rejected``. ``none`` means the agent hasn't
+    declared completion (or the conclusion was cleared by the operator).
+    """
+    s = _conclusion_state_get()
+    # Defensive normalisation — older rows / partial writes shouldn't
+    # crash the dashboard pill.
+    if not isinstance(s, dict):
+        return {"status": "none"}
+    s.setdefault("status", "none")
+    return s
+
+
+def clear_conclusion(reason: str = "") -> dict:
+    """Wipe the current conclusion (used when the operator rejects it).
+
+    Leaves a small audit Event so the timeline shows the rejection.
+    Returns the cleared state."""
+    prev = _conclusion_state_get()
+    _conclusion_state_set({"status": "none",
+                           "cleared_at":
+                               dt.datetime.now(dt.timezone.utc).isoformat(),
+                           "cleared_reason": (reason or "")[:500],
+                           "previous": prev if prev.get("status") != "none"
+                                       else None})
+    try:
+        db = SessionLocal()
+        try:
+            db.add(Event(
+                id="ev-" + os.urandom(4).hex(),
+                type="research_conclusion_cleared",
+                severity="info", actor="user",
+                message=(f"Research conclusion cleared by operator. "
+                         f"Reason: {reason or '(no reason given)'}")[:280],
+                created_at=dt.datetime.now(dt.timezone.utc).isoformat()))
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[council/conclude] clear event-emit failed: {e}",
+              flush=True)
+    return conclusion_state()
+
+
+def _build_completion_review_context(evidence_run_ids: list[str],
+                                       summary: str,
+                                       answer_to_purpose: str,
+                                       recommendation: str) -> dict | None:
+    db = SessionLocal()
+    try:
+        proj = db.query(Project).first()
+        if not proj:
+            return None
+        every_run = db.query(Run).all()
+        # Pull the explicitly-cited evidence runs
+        ev_runs = [db.query(Run).filter(Run.id == rid).first()
+                   for rid in evidence_run_ids]
+        ev_runs = [r for r in ev_runs if r is not None]
+        ev_block = [{
+            "id": r.id, "name": r.run_name, "status": r.status,
+            "headline_metric": r.headline_metric,
+            "baseline_delta": r.baseline_delta,
+            "config": r.config if isinstance(r.config, dict) else {},
+        } for r in ev_runs]
+        # All runs as compact one-liners (frontier-movers first, crashed
+        # next) so the reviewer can sanity-check the claim.
+        frontier = _frontier_ids(every_run)
+        maximize = proj.metric_direction == "maximize"
+
+        def _key(r):
+            on_front = r.id in frontier
+            is_crash = (r.status == "crashed")
+            return (0 if on_front else (1 if is_crash else 2),
+                    r.created_at or "")
+        others = sorted(every_run, key=_key)
+        run_lines = [_compact_one_line(r, frontier, maximize)
+                     for r in others]
+        run_lines_text = "\n".join(run_lines)[:18000]
+        stats = _aggregate_stats(every_run, proj)
+        return {
+            "project": {
+                "name": proj.name, "purpose": proj.purpose,
+                "metric": proj.validation_metric,
+                "direction": proj.metric_direction,
+                "baseline_metric": getattr(proj, "baseline_metric", None),
+            },
+            "agent_claim": {
+                "summary": summary,
+                "answer_to_purpose": answer_to_purpose,
+                "recommendation": recommendation,
+                "n_evidence_runs": len(ev_block),
+            },
+            "evidence_runs": ev_block,
+            "aggregate": stats,
+            "all_prior_runs_count": len(every_run),
+            "all_prior_runs_oneliners": run_lines_text,
+        }
+    finally:
+        db.close()
+
+
+def _completion_review_worker(evidence_run_ids: list[str], summary: str,
+                                answer_to_purpose: str,
+                                recommendation: str) -> None:
+    cfg = _settings()
+    reviewers = _available_reviewers(cfg)
+    if not reviewers:
+        # No reviewers — auto-approve so the agent isn't blocked, but
+        # record it honestly so the dashboard tells the user nothing
+        # actually got reviewed.
+        existing = _conclusion_state_get()
+        existing.update({
+            "status": "approved",
+            "council_verdict": {
+                "verdict": "APPROVED",
+                "reasons": ["no council reviewers configured — auto-approved"],
+                "missing_evidence": [],
+                "summary": ("No reviewers configured; conclusion was "
+                            "auto-approved. Add an OpenAI or Gemini key "
+                            "to enable real completion review."),
+                "verdicts": {},
+                "auto": True,
+                "reviewed_at":
+                    dt.datetime.now(dt.timezone.utc).isoformat(),
+            },
+        })
+        _conclusion_state_set(existing)
+        _emit_completion_event(
+            "research_completion_auto_approved",
+            "Research conclusion auto-approved (no reviewers).")
+        return
+    ctx = _build_completion_review_context(
+        evidence_run_ids, summary, answer_to_purpose, recommendation)
+    if ctx is None:
+        existing = _conclusion_state_get()
+        existing.update({
+            "status": "rejected",
+            "council_verdict": {
+                "verdict": "REJECTED",
+                "reasons": ["no project — completion review aborted"],
+                "missing_evidence": [],
+                "summary": "Could not load the project; conclusion rejected.",
+                "verdicts": {},
+                "reviewed_at":
+                    dt.datetime.now(dt.timezone.utc).isoformat(),
+            },
+        })
+        _conclusion_state_set(existing)
+        return
+    user_prompt = (
+        "Review the agent's claim that the project Purpose has been "
+        "answered. Return STRICT JSON per the schema in the system "
+        "message.\n\n"
+        + json.dumps(ctx, indent=2, default=str))[:60000]
+    verdicts: dict[str, dict] = {}
+    for reviewer in reviewers:
+        v = _call_reviewer(reviewer, _COMPLETION_REVIEW_SYSTEM,
+                            user_prompt, cfg)
+        if not v:
+            verdicts[reviewer] = {"verdict": None,
+                                  "reasons": [],
+                                  "missing_evidence": [],
+                                  "summary":
+                                  f"{reviewer}: call failed (token / quota?)"}
+            continue
+        verdicts[reviewer] = {
+            "verdict": str(v.get("verdict") or "").upper(),
+            "reasons": list(v.get("reasons") or []),
+            "missing_evidence": list(v.get("missing_evidence") or []),
+            "summary": (v.get("summary") or "")[:600],
+        }
+    # Aggregate: ALL working reviewers must say APPROVED. Otherwise it's
+    # either REJECTED or NEEDS_MORE (worst wins).
+    working = [r for r, v in verdicts.items()
+               if v.get("verdict") in ("APPROVED", "REJECTED", "NEEDS_MORE")]
+    if not working:
+        final_verdict = "REJECTED"
+    elif all(verdicts[r]["verdict"] == "APPROVED" for r in working):
+        final_verdict = "APPROVED"
+    elif any(verdicts[r]["verdict"] == "REJECTED" for r in working):
+        final_verdict = "REJECTED"
+    else:
+        final_verdict = "NEEDS_MORE"
+    reasons_agg: list[str] = []
+    missing_agg: list[str] = []
+    summaries: list[str] = []
+    for r, v in verdicts.items():
+        for x in v.get("reasons", []):
+            reasons_agg.append(f"[{r}] {x}")
+        for x in v.get("missing_evidence", []):
+            missing_agg.append(f"[{r}] {x}")
+        if v.get("summary"):
+            summaries.append(f"[{r}] {v.get('summary')}")
+    status_out = ("approved" if final_verdict == "APPROVED"
+                  else "rejected")
+    existing = _conclusion_state_get()
+    existing.update({
+        "status": status_out,
+        "council_verdict": {
+            "verdict": final_verdict,
+            "reasons": reasons_agg,
+            "missing_evidence": missing_agg,
+            "summary": "\n".join(summaries)[:2000],
+            "verdicts": verdicts,
+            "reviewed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        },
+    })
+    _conclusion_state_set(existing)
+    # When the council REJECTED or said NEEDS_MORE we want the agent to
+    # immediately turn the missing_evidence into directives so the loop
+    # restarts itself without the operator. We don't auto-upsert (that
+    # would step on the agent's planning); instead we emit a Chat bubble
+    # + Event with the list and the strategic_review pipeline catches it.
+    sev = "info" if final_verdict == "APPROVED" else "warning"
+    msg = ("Research conclusion APPROVED — write the paper."
+           if final_verdict == "APPROVED" else
+           f"Research conclusion {final_verdict} — "
+           f"{len(missing_agg)} missing-evidence item(s) returned.")
+    _emit_completion_event(
+        "research_completion_reviewed", msg, severity=sev)
+
+
+def _emit_completion_event(ev_type: str, message: str,
+                             severity: str = "info") -> None:
+    """Persist an Event + ChatMessage for the completion-review flow."""
+    try:
+        db = SessionLocal()
+        try:
+            ts = dt.datetime.now(dt.timezone.utc).isoformat()
+            db.add(Event(id="ev-" + os.urandom(4).hex(),
+                         type=ev_type, severity=severity, actor="council",
+                         message=message[:280], created_at=ts))
+            db.add(ChatMessage(
+                id="cm-" + os.urandom(4).hex(),
+                role="agent",
+                content=("[completion review] " + message)[:1200],
+                created_at=ts))
+            db.commit()
+        finally:
+            db.close()
+        try:
+            from .bus import bus
+            bus.publish("events", "research_health", {})
+        except Exception:
+            pass
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[council/conclude] event-emit failed: {e}", flush=True)
+
+
+def review_completion_async(evidence_run_ids: list[str],
+                              summary: str,
+                              answer_to_purpose: str,
+                              recommendation: str = "") -> dict:
+    """Kick off an async council review of the agent's conclusion.
+
+    Sets ``research_conclusion`` to ``pending`` immediately and spawns a
+    background worker thread. The worker writes the verdict back into
+    the same Setting row when it's done."""
+    # Persist the agent's claim BEFORE we run the review — the dashboard
+    # shows it immediately so the user can see what the agent is
+    # asserting while the council deliberates.
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
+    _conclusion_state_set({
+        "status": "pending",
+        "summary": (summary or "")[:4000],
+        "answer_to_purpose": answer_to_purpose or "",
+        "evidence": list(evidence_run_ids or [])[:200],
+        "recommendation": recommendation or "",
+        "conclude_at": now,
+    })
+    threading.Thread(target=_completion_review_worker,
+                     args=(list(evidence_run_ids or []),
+                           summary or "",
+                           answer_to_purpose or "",
+                           recommendation or ""),
+                     daemon=True, name="council-completion").start()
+    return conclusion_state()
+
+
+# ════════════════════════════════════════════════════════════════════════
+#   Proactive "propose next move" trigger (called from pi.cycle when
+#   the system has been ``needs_direction`` for too long)
+# ════════════════════════════════════════════════════════════════════════
+
+
+def propose_next_move_async() -> dict:
+    """Kick off a strategic council call whose ONE job is to either
+    (a) upsert the next SCIENCE directive, OR (b) flag that the agent
+    should call /api/research/conclude with NEED_ORTHOGONAL_DIRECTION.
+
+    Reuses ``strategic_review`` over the most recent N runs (or all of
+    them if there are fewer). Returns {"started": bool, "reason": str}
+    immediately; the actual upsert happens inside ``_strategic_worker``.
+    """
+    global _BATCH_INFLIGHT
+    cfg = _settings()
+    if not _available_reviewers(cfg):
+        return {"started": False, "reason": "no_reviewers"}
+    db = SessionLocal()
+    try:
+        n = max(_strategic_threshold(cfg), 1)
+        runs = (db.query(Run)
+                .filter(Run.status.in_(["kept", "discarded", "crashed",
+                                        "failed", "success", "kept_novel",
+                                        "kept_replicate"]))
+                .order_by(Run.ended_at.desc())
+                .limit(n).all())
+        ids = [r.id for r in runs]
+    finally:
+        db.close()
+    with _BATCH_LOCK:
+        if _BATCH_INFLIGHT:
+            return {"started": False, "reason": "already_inflight"}
+        _BATCH_INFLIGHT = True
+    threading.Thread(target=_strategic_worker, args=(ids,), daemon=True,
+                     name="council-propose-next").start()
+    return {"started": True, "reason": "ok",
+            "n_runs": len(ids)}
+
