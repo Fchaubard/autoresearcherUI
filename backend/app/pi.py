@@ -188,21 +188,26 @@ def _idle_gpu_escalation(ctx: dict) -> None:
         if now_ts - last_ts < _IDLE_GPU_REPEAT_SEC:
             return
         mins = int(age_sec // 60)
-        subject = (f"[autoresearcherUI] {total} GPU(s) IDLE for {mins} min "
-                   "— research loop appears stuck")
-        body = (
-            f"All {total} GPU(s) have been idle for {mins} minutes.\n\n"
-            "Likely causes:\n"
-            "  • Agent crashed or is waiting in the REPL.\n"
-            "  • Council deliberation is in progress.\n"
-            "  • Preflight has not yet been blessed.\n"
-            "  • A directive was malformed and the agent gave up.\n\n"
-            "Action: open the dashboard, check the agent's tmux pane "
-            "(right rail), and send a directive or restart if needed.\n\n"
-            "— autoresearcherUI PI agent")
+        subject = (f"[autoresearcherUI] {total} GPU(s) idle {mins}m "
+                   "— research loop may be stuck")
         try:
             from . import notify
-            notify.send(subject, body)
+            notify.send_alert(
+                subject=subject,
+                headline=(f"All {total} GPU(s) have been idle for "
+                          f"{mins} minutes."),
+                bullets=[
+                    "Agent may have crashed or be waiting in the REPL.",
+                    "Council deliberation may be in progress.",
+                    "Preflight may not yet have been blessed.",
+                    "A directive may have been malformed and the agent "
+                    "gave up.",
+                ],
+                action_text=(
+                    "Open the dashboard, check the agent's tmux pane in "
+                    "the right rail, and either send a directive or "
+                    "restart the loop if needed."),
+                severity="warning")
             print(f"[pi] idle-gpu alert email sent (idle={mins}m).",
                   flush=True)
         except Exception as e:                              # noqa: BLE001

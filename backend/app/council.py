@@ -2769,7 +2769,13 @@ _COMPLETION_REVIEW_SYSTEM = (
     "  - the agent's one-paragraph summary of what was learned\n"
     "  - the agent's claim level: YES_CONCLUSIVELY, YES_PARTIAL, or NO\n"
     "  - the agent's recommendation: WRITE_PAPER / NEED_ORTHOGONAL_DIRECTION / NEED_MORE_DATA\n"
-    "  - the run ids the agent cites as evidence (with metrics + status)\n"
+    "  - the run ids the agent cites as evidence; each carries its headline\n"
+    "    metric AND a `final_metrics` block (benign utility_f1/utility_fair,\n"
+    "    fpr_block, he_utility_f1, eval_seconds). When the Purpose requires\n"
+    "    'without materially damaging utility', VERIFY it from these\n"
+    "    `final_metrics` (e.g. utility comparable to the clean/no-defense\n"
+    "    reference, FPR acceptable) rather than rejecting for 'no utility\n"
+    "    evidence' — the utility numbers are in `final_metrics`.\n"
     "  - the project-wide best metric and baseline\n"
     "  - all prior runs as one-liners (so you can sanity-check the claim)\n\n"
     "Decide:\n"
@@ -2895,10 +2901,32 @@ def _build_completion_review_context(evidence_run_ids: list[str],
         ev_runs = [db.query(Run).filter(Run.id == rid).first()
                    for rid in evidence_run_ids]
         ev_runs = [r for r in ev_runs if r is not None]
+        # Enrich each evidence run with its FINAL benign-utility / FPR / latency
+        # metrics so the completion reviewers can verify the Purpose's
+        # "without materially damaging utility" clause. Previously ev_block
+        # carried only headline_metric (= ASR), so utility was structurally
+        # unverifiable and complete conclusions were rejected for "no utility
+        # evidence." (Fix applied per AGENT_NEEDS_RESTART.md, authorised by PI.)
+        from . import metrics as _metrics
+
+        def _final_metrics(rid):
+            try:
+                series = _metrics.query(rid, ["utility_f1", "utility_fair",
+                                              "fpr_block", "he_utility_f1",
+                                              "eval_seconds", "asr_hidden"])
+            except Exception:
+                return {}
+            out = {}
+            for k, pts in (series or {}).items():
+                if pts and pts[-1] and pts[-1][1] is not None:
+                    out[k] = round(float(pts[-1][1]), 4)
+            return out
+
         ev_block = [{
             "id": r.id, "name": r.run_name, "status": r.status,
             "headline_metric": r.headline_metric,
             "baseline_delta": r.baseline_delta,
+            "final_metrics": _final_metrics(r.id),
             "config": r.config if isinstance(r.config, dict) else {},
         } for r in ev_runs]
         # All runs as compact one-liners (frontier-movers first, crashed

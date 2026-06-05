@@ -645,6 +645,75 @@ def _shell(subtitle, body_html, dashboard_url) -> str:
         'GPUs.</div></div></body></html>')
 
 
+# ───────────────────────── alert email helper ──────────────────────────────
+
+
+def send_alert(subject: str,
+                headline: str,
+                bullets: list[str] | None = None,
+                action_text: str = "",
+                severity: str = "warning") -> bool:
+    """Send a one-off ALERT email in the same dark themed style as the
+    digest. Used by ``pi._idle_gpu_escalation`` and any other "something
+    is wrong, here's a link to the dashboard" path. Keeps these emails
+    visually consistent with the digest emails the operator already
+    expects.
+
+    Args:
+        subject: email subject line (raw, no styling).
+        headline: short one-line summary rendered in a colored stripe
+            at the top of the body. Match severity: red = critical,
+            amber = warning, blue = info.
+        bullets: optional list of supporting bullets rendered below the
+            headline. Each entry is a plain string; HTML escaping is
+            applied.
+        action_text: optional plain English action sentence rendered
+            in muted gray below the bullets. Example:
+            "Open the dashboard, check the agents tmux pane, and
+            either send a directive or restart."
+        severity: one of "critical" / "warning" / "info".
+
+    Returns True on successful queue / send, False on configured-but-
+    failed, and False on disabled (no SMTP credentials). Never raises.
+    """
+    cfg = _cfg()
+    dashboard_url = _dashboard_url(cfg)
+    color = {"critical": "#F43F5E",
+              "warning":  "#F59E0B",
+              "info":     "#6366F1"}.get(severity, "#F59E0B")
+    badge = severity.upper()
+    body_html = (
+        f'<div style="display:inline-block;padding:4px 10px;border-radius:'
+        f'16px;background:{color}22;color:{color};font-size:11px;'
+        f'font-weight:700;letter-spacing:0.5px;margin-bottom:10px;">'
+        f'{_esc(badge)}</div>'
+        f'<div style="font-size:15px;font-weight:600;color:#E6E8EB;'
+        f'line-height:1.4;margin:0 0 12px;">{_esc(headline)}</div>')
+    if bullets:
+        body_html += '<ul style="margin:4px 0 12px 0;padding-left:18px;">'
+        for b in bullets:
+            body_html += (
+                f'<li style="margin:4px 0;color:#C7CAD0;font-size:13px;'
+                f'line-height:1.55;">{_esc(b)}</li>')
+        body_html += '</ul>'
+    if action_text:
+        body_html += (
+            f'<p style="margin:14px 0 0;color:#9BA1A8;font-size:12.5px;'
+            f'line-height:1.55;">{_esc(action_text)}</p>')
+    html = _shell(subject, body_html, dashboard_url)
+    # Plain-text fallback for clients that ignore HTML.
+    text_lines = [f"[{badge}] {headline}"]
+    if bullets:
+        text_lines.append("")
+        text_lines.extend(f"  • {b}" for b in bullets)
+    if action_text:
+        text_lines += ["", action_text]
+    if dashboard_url:
+        text_lines += ["", f"Dashboard: {dashboard_url}"]
+    text_lines += ["", "— autoresearcherUI"]
+    return send(subject, "\n".join(text_lines), html)
+
+
 # ───────────────────────────── metric helpers ──────────────────────────────
 
 def _baseline_metric(db, proj) -> float | None:

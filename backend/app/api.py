@@ -536,6 +536,29 @@ def get_phase(db: Session = Depends(get_session)):
     return {"phase": ph, "at": "", "detail": {}, "fallback_used": True}
 
 
+@router.get("/health")
+def get_health(db: Session = Depends(get_session)):
+    """The dashboard pill, modal, and PI all consume this. Source of
+    truth for "is the loop OK?". See backend/app/health/service.py for
+    the assembly logic. Returns the same HealthSnapshot.as_dict()
+    shape on every call so the frontend can cache + diff."""
+    try:
+        from .health import service as _hs
+        snap = _hs.compute()
+        return snap.as_dict()
+    except Exception as e:                                  # noqa: BLE001
+        # Health computation must NEVER 500 the dashboard. Return a
+        # safe fallback so the pill still renders something.
+        print(f"[api] /health crashed: {e}", flush=True)
+        return {
+            "phase": {"phase": "bootstrap", "at": "",
+                       "detail": {}, "fallback_used": True},
+            "summary": f"health unavailable: {e!s}"[:240],
+            "issues": [],
+            "facts": {"error": True, "exception": str(e)[:240]},
+        }
+
+
 @router.post("/phase")
 async def post_phase(request: Request):
     """Agent reports its current lifecycle phase. Persists the value

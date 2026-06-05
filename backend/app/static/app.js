@@ -490,47 +490,72 @@ function render() {
  * detail modal (opened by clicking the pill) can render without a
  * second round trip. */
 let _LAST_HEALTH = null;
+// Phase pill labels (PR 2 of state-control rewrite 2026-06-05). These
+// map the agent-reported lifecycle phase to a human-readable string
+// for the dashboard pill. The pill itself shows phase; the title +
+// modal expose any active Issues.
+const _PHASE_LABELS = {
+  bootstrap:              'Setting up',
+  planning:               'Planning',
+  launching_runs:         'Launching runs',
+  watching_runs:          'Watching runs',
+  council_review:         'Council review',
+  idle_waiting_direction: 'Awaiting direction',
+  concluding:             'Concluding',
+  complete:               'Research complete',
+  error:                  'Error',
+};
+// Severity → pill style class (matches the existing rh-* CSS).
+const _SEV_CLASS = ['rh-healthy', 'rh-needs_direction', 'rh-stalled'];
+
 async function pollResearchHealth() {
   const tick = async () => {
     let s;
-    try { s = await api('/research_health'); } catch (e) { return; }
+    // Try the new /api/health first; fall back to the legacy
+    // /api/research_health while PR 6 is still pending (delete
+    // stuck_detector). Once PR 6 lands, the legacy path goes away.
+    try {
+      s = await api('/health');
+    } catch (e) {
+      try { s = await api('/research_health'); }
+      catch (e2) { return; }
+    }
     if (!s) return;
     _LAST_HEALTH = s;
     const pill = document.getElementById('research-health');
     if (!pill) return;
-    const state = s.state || 'healthy';
-    // BUG FIX: this labels map was missing 'needs_direction' and
-    // 'degraded', so when stuck_detector returned those states the
-    // pill silently fell back to "Healthy" — the user saw a green
-    // pill while the modal correctly showed needs_direction. Every
-    // state the backend can emit MUST have a label here, otherwise
-    // the dashboard lies to the user.
-    const labels = {
-      healthy:         'Healthy',
-      setting_up:      'Setting up',
-      nagged:          'Nagged',
-      stalled:         'Stalled',
-      looping:         'Looping',
-      dry:             'Dry',
-      needs_direction: 'Needs direction',
-      degraded:        'Degraded',
-      // Conclusion-flow states (Piece #3): agent declared the purpose
-      // answered and the council is reviewing → indigo "Reviewing
-      // completion"; council approved → green "Research complete" with
-      // a trophy icon to make it unmissable.
-      awaiting_completion_review: 'Reviewing completion',
-      complete:        'Research complete',
-    };
+    // New schema: HealthSnapshot {phase:{phase,...}, summary, issues, facts}
+    // Old schema: {state, reason, details}
+    const isNew = !!(s.phase && typeof s.phase === 'object');
+    if (isNew) {
+      const phase = (s.phase && s.phase.phase) || 'bootstrap';
+      const sev = (s.facts && s.facts.top_severity) || 0;
+      const label = _PHASE_LABELS[phase] || phase;
+      const cls = _SEV_CLASS[sev] || 'rh-healthy';
+      pill.className = 'pill rh-pill ' + cls;
+      pill.innerHTML = '<span class="dot"></span>' + label;
+      pill.title = (s.summary || 'All systems nominal.')
+        + '  (click for details)';
+    } else {
+      // Legacy schema fallback — keep until /api/research_health is
+      // removed in PR 6. Same labels dict the legacy code used.
+      const state = s.state || 'healthy';
+      const labels = {
+        healthy: 'Healthy', setting_up: 'Setting up',
+        nagged: 'Nagged', stalled: 'Stalled', looping: 'Looping',
+        dry: 'Dry', needs_direction: 'Needs direction',
+        degraded: 'Degraded',
+        awaiting_completion_review: 'Reviewing completion',
+        complete: 'Research complete',
+      };
+      pill.className = 'pill rh-pill rh-' + state;
+      pill.innerHTML = '<span class="dot"></span>'
+        + (labels[state] || state);
+      pill.title = (s.reason || 'Research loop is healthy.')
+        + '  (click for details)';
+    }
     // Repaint the "Write the paper" banner when state changes.
     try { renderCompleteBanner(s); } catch (e) { /* defensive */ }
-    pill.className = 'pill rh-pill rh-' + state;
-    // Default to the literal state name (not 'Healthy') for any
-    // unknown state so a new backend state is at least visible
-    // instead of silently hidden.
-    pill.innerHTML = '<span class="dot"></span>'
-      + (labels[state] || state);
-    pill.title = (s.reason || 'Research loop is healthy.')
-      + '  (click for details)';
   };
   tick();
   addTimer(setInterval(tick, 8000));
@@ -538,11 +563,40 @@ async function pollResearchHealth() {
 
 function openResearchHealth() {
   const s = _LAST_HEALTH || { state: 'healthy', details: {}, reason: '' };
+  // PR 2 modal: render the HealthSnapshot if the new shape is present
+  // (phase + issues[]). Each issue is a deviation with evidence + a
+  // list of actions the operator can take inline.
+  if (s.phase && typeof s.phase === 'object') {
+    const phase = (s.phase && s.phase.phase) || 'bootstrap';
+    const phaseLabel = _PHASE_LABELS[phase] || phase;
+    const issues = s.issues || [];
+    const lines = [
+      'Phase: ' + phaseLabel
+        + (s.phase.fallback_used ? '  (DB-derived fallback)' : ''),
+      (s.phase.at ? ('Reported at: ' + new Date(s.phase.at).toLocaleString())
+                  : 'Reported at: (never — agent has not called arui.phase yet)'),
+      '',
+      issues.length === 0
+        ? 'No active issues — research loop is healthy.'
+        : ('Active issues (' + issues.length + '):'),
+    ];
+    for (const i of issues) {
+      const sev = ['INFO','WARN','CRIT'][i.severity || 0] || 'INFO';
+      lines.push('');
+      lines.push('[' + sev + '] ' + i.summary);
+      // Render the evidence keys as a compact key:value block.
+      const ev = i.evidence || {};
+      for (const k of Object.keys(ev)) {
+        if (typeof ev[k] === 'object') continue;  // skip nested for now
+        lines.push('  ' + k + ': ' + ev[k]);
+      }
+    }
+    aruiAlert(lines.join('\n'),
+              { title: 'Research health', okText: 'Close' });
+    return;
+  }
+  // Legacy shape (will go away after PR 6).
   const d = s.details || {};
-  // Modal layout — collision_rate was removed 2026-06-05 because it
-  // counted deliberate replication and HP sweeps as 'bad', confused
-  // operators, and never drove a state anyway. Show what actually
-  // matters: GPU work signal + recent novelty rejections.
   const gw = d.gpus_working;
   const gt = d.gpus_total;
   const idle = d.idle_for_sec || 0;
