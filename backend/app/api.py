@@ -9,6 +9,7 @@ import math
 import os
 import random
 import re
+import shlex
 import subprocess
 import threading
 
@@ -1469,58 +1470,72 @@ async def session_create(request: Request):
     the agent/infra sessions (agent, author, arui, arui-cf, …).
 
     Body: {"session": "<name>"}
+
+    Belt-and-suspenders: the whole body is wrapped so that ANY exception
+    (NameError, missing workspace dir, tmux timeout, auth import-fail,
+    shlex on None, …) returns a JSON {"ok": False, "error": "…"} with
+    HTTP 200 instead of a 500 HTML page. The frontend's r.json() would
+    crash on a 500 HTML body ("SyntaxError: Unexpected token 'I'…").
     """
-    body = await _safe_json(request)
-    name = (body.get("session") or "").strip()
-    if not name or not _SAFE_NAME.match(name) or len(name) > 60:
-        return {"ok": False,
-                "error": "session name must be 1-60 chars "
-                         "of [A-Za-z0-9_.-=]"}
-    if name in _INFRA_SESSIONS:
-        return {"ok": False,
-                "error": f"'{name}' is reserved (infra session)"}
-    if subprocess.run(["tmux", "has-session", "-t", name],
-                      capture_output=True).returncode == 0:
-        return {"ok": False, "error": f"session '{name}' already exists"}
-    # Build env: copy passcode + the standard arui vars so the new
-    # shell behaves like the agent's. Workspace cwd defaults to the
-    # active project workspace if one exists, else /root.
-    env_parts = ["IS_SANDBOX=1"]
     try:
-        from . import auth as _auth
-        pc = _auth._saved_passcode()
-        if pc:
-            env_parts.append(f"ARUI_INGEST_TOKEN={shlex.quote(pc)}")
-    except Exception:                                       # noqa: BLE001
-        pass
-    env_parts.append("ARUI_INGEST_URL=http://127.0.0.1:8000")
-    # Find a workspace dir if any project exists.
-    cwd = "/root"
-    try:
-        ws = DATA_DIR / "workspace"
-        if ws.exists():
-            for entry in ws.iterdir():
-                if entry.is_dir():
-                    cwd = str(entry)
-                    break
-    except Exception:                                       # noqa: BLE001
-        pass
-    cmd = f"cd {shlex.quote(cwd)} && {' '.join(env_parts)} bash"
-    r = subprocess.run(
-        ["tmux", "new-session", "-d", "-s", name, "-x", "120", "-y", "40", cmd],
-        capture_output=True, text=True, timeout=8)
-    if r.returncode != 0:
-        return {"ok": False,
-                "error": (r.stderr or "tmux new-session failed")[:200]}
-    # Hook pipe-pane so the new session's bytes flow into the rail
-    # xterm.js stream the same way as the agent session.
-    try:
-        from . import pane_stream
-        pane_stream.enable(name)
+        body = await _safe_json(request)
+        name = (body.get("session") or "").strip()
+        if not name or not _SAFE_NAME.match(name) or len(name) > 60:
+            return {"ok": False,
+                    "error": "session name must be 1-60 chars "
+                             "of [A-Za-z0-9_.-=]"}
+        if name in _INFRA_SESSIONS:
+            return {"ok": False,
+                    "error": f"'{name}' is reserved (infra session)"}
+        if subprocess.run(["tmux", "has-session", "-t", name],
+                          capture_output=True).returncode == 0:
+            return {"ok": False,
+                    "error": f"session '{name}' already exists"}
+        # Build env: copy passcode + the standard arui vars so the new
+        # shell behaves like the agent's. Workspace cwd defaults to the
+        # active project workspace if one exists, else /root.
+        env_parts = ["IS_SANDBOX=1"]
+        try:
+            from . import auth as _auth
+            pc = _auth._saved_passcode()
+            if pc:
+                env_parts.append(f"ARUI_INGEST_TOKEN={shlex.quote(pc)}")
+        except Exception:                                   # noqa: BLE001
+            pass
+        env_parts.append("ARUI_INGEST_URL=http://127.0.0.1:8000")
+        # Find a workspace dir if any project exists.
+        cwd = "/root"
+        try:
+            ws = DATA_DIR / "workspace"
+            if ws.exists():
+                for entry in ws.iterdir():
+                    if entry.is_dir():
+                        cwd = str(entry)
+                        break
+        except Exception:                                   # noqa: BLE001
+            pass
+        cmd = f"cd {shlex.quote(cwd)} && {' '.join(env_parts)} bash"
+        r = subprocess.run(
+            ["tmux", "new-session", "-d", "-s", name,
+             "-x", "120", "-y", "40", cmd],
+            capture_output=True, text=True, timeout=8)
+        if r.returncode != 0:
+            return {"ok": False,
+                    "error": (r.stderr or "tmux new-session failed")[:200]}
+        # Hook pipe-pane so the new session's bytes flow into the rail
+        # xterm.js stream the same way as the agent session.
+        try:
+            from . import pane_stream
+            pane_stream.enable(name)
+        except Exception as e:                              # noqa: BLE001
+            print(f"[sessions] pane_stream.enable({name}) failed: {e}",
+                  flush=True)
+        return {"ok": True, "session": name, "cwd": cwd}
     except Exception as e:                                  # noqa: BLE001
-        print(f"[sessions] pane_stream.enable({name}) failed: {e}",
-              flush=True)
-    return {"ok": True, "session": name, "cwd": cwd}
+        # Never let a stray exception become a 500 HTML body —
+        # the frontend can't JSON.parse "Internal Server Error".
+        print(f"[sessions] /sessions/create crashed: {e!r}", flush=True)
+        return {"ok": False, "error": f"session create failed: {e}"}
 
 
 @router.get("/sessions/{name}")

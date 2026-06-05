@@ -779,8 +779,20 @@ body.resizing{user-select:none}
 .dr-h2{font-size:9.5px;text-transform:uppercase;letter-spacing:.7px;
   color:var(--muted);font-weight:700;margin:18px 0 7px}
 .dr-bd .prose{font-size:12.5px;color:var(--text-2);line-height:1.65}
-.kv{display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:11.5px}
-.kv dt{color:var(--muted)} .kv dd{font-family:var(--mono);text-align:right}
+.kv{display:grid;grid-template-columns:minmax(60px,auto) minmax(0,1fr);
+  gap:5px 14px;font-size:11.5px;max-width:100%;overflow:hidden}
+.kv dt{color:var(--muted);min-width:0;overflow-wrap:break-word;word-break:break-word}
+.kv dd{font-family:var(--mono);text-align:right;min-width:0;max-width:100%;
+  overflow-wrap:anywhere;word-break:break-all;white-space:normal;margin:0}
+/* long-config helpers (rendered inside .kv dd) */
+.kv dd .lc-more{display:inline-block;margin-left:6px;color:var(--accent);
+  cursor:pointer;font-family:inherit;font-size:10.5px;text-decoration:underline;
+  text-underline-offset:2px}
+.kv dd .lc-full{display:none;white-space:normal;word-break:break-all;
+  margin-top:4px;color:var(--text-2)}
+.kv dd.lc-open .lc-full{display:block}
+.kv dd.lc-open .lc-preview,.kv dd.lc-open .lc-more.lc-more-show{display:none}
+.kv dd .lc-count{color:var(--muted);font-size:10.5px;margin-right:4px}
 .iconbtn{background:var(--panel);border:1px solid var(--border);
   color:var(--text-2);width:28px;height:28px;border-radius:7px;font-size:14px}
 .btn{background:var(--panel);border:1px solid var(--border);color:var(--text);

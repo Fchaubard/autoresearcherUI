@@ -443,3 +443,204 @@ def test_paper_claim_update_ok(client, db_session):
 def test_run_kill_rejects_bad_id(client):
     r = client.post("/api/runs/bad+id/kill")
     assert r.json().get("ok") is False
+
+
+# ──────────── /sessions/create — the "+ new" button bug ────────────────────
+# Regression for the bug where a missing `import shlex` made the endpoint
+# raise NameError, which FastAPI turned into a 500 HTML body
+# ("Internal Server Error"). The frontend then crashed inside JSON.parse
+# with "SyntaxError: Unexpected token 'I'…". The contract now is:
+# the endpoint NEVER returns non-JSON — on any failure path it returns
+# {"ok": False, "error": "<msg>"} with HTTP 200.
+
+
+def _ok_subprocess_handler(fake_subprocess):
+    """Make `has-session` return rc=1 (doesn't exist) and everything else
+    return rc=0. The endpoint can then proceed past the existence check."""
+
+    class FC:
+        def __init__(self, stdout="", stderr="", returncode=0):
+            self.stdout, self.stderr, self.returncode = (
+                stdout, stderr, returncode)
+
+    def _h(args, **kw):
+        if len(args) >= 2 and args[0] == "tmux" and args[1] == "has-session":
+            return FC(returncode=1)  # not present → caller may create
+        return FC(returncode=0)
+
+    fake_subprocess.set_handler(_h)
+
+
+def test_sessions_create_happy_path_returns_json_ok(client, fake_subprocess):
+    """A normal create call returns JSON with ok=True."""
+    _ok_subprocess_handler(fake_subprocess)
+    r = client.post("/api/sessions/create", json={"session": "dbg1"})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/json")
+    body = r.json()
+    assert body["ok"] is True
+    assert body["session"] == "dbg1"
+    # verify we actually invoked tmux new-session
+    assert any(
+        c["args"][:2] == ["tmux", "new-session"]
+        for c in fake_subprocess
+    )
+
+
+def test_sessions_create_bad_name_returns_json_error(client, fake_subprocess):
+    """Garbage name → ok=False, valid JSON, NOT 500."""
+    _ok_subprocess_handler(fake_subprocess)
+    r = client.post("/api/sessions/create", json={"session": "bad name!!"})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/json")
+    body = r.json()
+    assert body["ok"] is False
+    assert "1-60 chars" in body["error"]
+
+
+def test_sessions_create_empty_body_returns_json_error(client, fake_subprocess):
+    """No body at all → still JSON ok=False, never a 500."""
+    _ok_subprocess_handler(fake_subprocess)
+    r = client.post("/api/sessions/create")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/json")
+    body = r.json()
+    assert body["ok"] is False
+    assert body["error"]
+
+
+def test_sessions_create_reserved_name(client, fake_subprocess):
+    """Infra-session name is reserved — clean JSON refusal."""
+    _ok_subprocess_handler(fake_subprocess)
+    r = client.post("/api/sessions/create", json={"session": "agent"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert "reserved" in body["error"]
+
+
+def test_sessions_create_already_exists(client, fake_subprocess):
+    """tmux has-session returns rc=0 → JSON 'already exists' message."""
+
+    class FC:
+        def __init__(self, returncode=0):
+            self.stdout, self.stderr, self.returncode = "", "", returncode
+
+    # rc=0 on every call means has-session reports it exists.
+    fake_subprocess.set_handler(lambda a, **kw: FC(returncode=0))
+    r = client.post("/api/sessions/create", json={"session": "dbg2"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert "already exists" in body["error"]
+
+
+def test_sessions_create_no_workspace_dir(client, fake_subprocess, arui_env):
+    """DATA_DIR / 'workspace' doesn't exist → cwd falls back to /root,
+    endpoint still returns JSON ok=True (not a 500)."""
+    _ok_subprocess_handler(fake_subprocess)
+    # arui_env's tmp data_dir has no 'workspace' subdir → exercises the
+    # `ws.exists()` False branch.
+    r = client.post("/api/sessions/create", json={"session": "dbg3"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["cwd"] == "/root"
+
+
+def test_sessions_create_with_workspace_dir(client, fake_subprocess, arui_env):
+    """If DATA_DIR/workspace/<proj>/ exists, cwd is set to it. This
+    exercises the previously-unimported `shlex.quote(cwd)` line — the
+    original NameError bug. With the import in place, this returns JSON
+    ok=True instead of crashing."""
+    ws = arui_env / "workspace" / "myproj"
+    ws.mkdir(parents=True, exist_ok=True)
+    _ok_subprocess_handler(fake_subprocess)
+    r = client.post("/api/sessions/create", json={"session": "dbg4"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["cwd"].endswith("myproj")
+
+
+def test_sessions_create_tmux_failure_returns_json_error(
+    client, fake_subprocess,
+):
+    """If tmux new-session returns non-zero, we relay stderr as JSON
+    rather than blowing up with a 500."""
+
+    class FC:
+        def __init__(self, stdout="", stderr="", returncode=0):
+            self.stdout, self.stderr, self.returncode = (
+                stdout, stderr, returncode)
+
+    def _h(args, **kw):
+        if args[:2] == ["tmux", "has-session"]:
+            return FC(returncode=1)
+        if args[:2] == ["tmux", "new-session"]:
+            return FC(stderr="tmux: server not running", returncode=1)
+        return FC(returncode=0)
+
+    fake_subprocess.set_handler(_h)
+    r = client.post("/api/sessions/create", json={"session": "dbg5"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert "tmux" in body["error"]
+
+
+def test_sessions_create_auth_import_failure_still_returns_json(
+    client, fake_subprocess, monkeypatch,
+):
+    """If `auth._saved_passcode()` blows up, the inner try/except swallows
+    it and we still get a clean JSON ok=True."""
+    _ok_subprocess_handler(fake_subprocess)
+    from backend.app import auth
+
+    def boom():
+        raise RuntimeError("synthetic auth blow-up")
+
+    monkeypatch.setattr(auth, "_saved_passcode", boom)
+    r = client.post("/api/sessions/create", json={"session": "dbg6"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+
+
+def test_sessions_create_pane_stream_failure_still_returns_json(
+    client, fake_subprocess, monkeypatch,
+):
+    """pane_stream.enable() crashing must NOT break the response."""
+    _ok_subprocess_handler(fake_subprocess)
+    from backend.app import pane_stream
+    monkeypatch.setattr(
+        pane_stream, "enable",
+        lambda name: (_ for _ in ()).throw(RuntimeError("pipe-pane busted")),
+    )
+    r = client.post("/api/sessions/create", json={"session": "dbg7"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+
+
+def test_sessions_create_catastrophic_failure_returns_json_not_html(
+    client, fake_subprocess, monkeypatch,
+):
+    """Even if subprocess.run itself raises (e.g. tmux binary missing),
+    the endpoint MUST return JSON ok=False, never an HTML 500 page —
+    that's what made the frontend crash with 'SyntaxError: Unexpected
+    token "I"' in the original bug report.
+    """
+    import subprocess as _sp
+
+    def boom(*a, **kw):
+        raise FileNotFoundError("tmux: command not found")
+
+    monkeypatch.setattr(_sp, "run", boom, raising=True)
+    r = client.post("/api/sessions/create", json={"session": "dbg8"})
+    # The critical assertions: 200 + JSON body.
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/json")
+    body = r.json()
+    assert body["ok"] is False
+    assert "tmux" in body["error"] or "failed" in body["error"]

@@ -5,7 +5,7 @@ const S = {
   project: null, runs: [], ideas: [], events: [], chat: [], gpus: [],
   metrics: {}, filter: 'all', search: '', sel: null, ylog: false,
   railTab: 'summary', sessTab: null, view: 'dashboard', cmp: [], cmpMetric: '',
-  sortKey: 'time', sortAsc: true,    // main table sort — default ASC by time
+  sortKey: 'time', sortAsc: false,   // main table sort — default DESC by time (newest first)
 };
 
 const api = (p) => fetch('/api' + p).then(r => r.json());
@@ -36,6 +36,48 @@ const el = (t, c, h) => { const n = document.createElement(t);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>]/g,
   m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[m]));
 const fmt = (v, d = 4) => (v == null || isNaN(v)) ? '—' : (+v).toFixed(d);
+// _fmtCfgVal — render a config value for the drawer's "Config — what changed"
+// section. Long strings (>80 chars) or many-item comma lists (>3) get
+// truncated to a short preview with a [show all] expander so the value never
+// blows the drawer out horizontally. Returns escaped HTML.
+const _fmtCfgVal = (v) => {
+  const PREVIEW_CHARS = 80;
+  const LIST_THRESH = 3;
+  // arrays / objects stringify cleanly
+  let raw;
+  if (v == null) raw = '';
+  else if (Array.isArray(v)) raw = v.join(', ');
+  else if (typeof v === 'object') {
+    try { raw = JSON.stringify(v); } catch { raw = String(v); }
+  } else raw = String(v);
+  // detect comma-separated list
+  const parts = raw.split(',').map(s => s.trim()).filter(Boolean);
+  const isList = parts.length > LIST_THRESH;
+  const isLong = raw.length > PREVIEW_CHARS;
+  if (!isList && !isLong) return esc(raw);
+  if (isList) {
+    // many comma-separated items: show count + first 2 + "… +N"
+    const head = parts.slice(0, 2).join(', ');
+    const more = parts.length - 2;
+    const preview =
+      `<span class="lc-count">${parts.length} items:</span>` +
+      `<span class="lc-preview">${esc(head)}` +
+      (more > 0 ? `, … <span class="lc-more lc-more-show">+${more} more</span>` : '') +
+      `</span>` +
+      `<span class="lc-full">${esc(raw)}</span>` +
+      (more > 0 ? '' :
+        ` <span class="lc-more">[show all]</span>`);
+    return preview;
+  }
+  // long single value
+  const head = raw.slice(0, PREVIEW_CHARS);
+  const restLen = raw.length - PREVIEW_CHARS;
+  return (
+    `<span class="lc-preview">${esc(head)}…` +
+    ` <span class="lc-more lc-more-show">(${restLen} more chars)</span></span>` +
+    `<span class="lc-full">${esc(raw)}</span>`
+  );
+};
 const MONO = "'SF Mono',Menlo,monospace";
 const ago = (iso) => { if (!iso) return ''; const s = (Date.now() - +new Date(iso)) / 1000;
   if (s < 60) return Math.max(1, s | 0) + 's ago';
@@ -1074,10 +1116,11 @@ function paintTable() {
     const q = S.search.toLowerCase();
     rows = rows.filter(r => (r.name + ' ' + r.desc).toLowerCase().includes(q));
   }
-  // Sort: default key 'time' (started_at), ascending. Click any column header
-  // to toggle the sort. Queued rows (no time) sink to the end either way.
+  // Sort: default key 'time' (started_at), DESCENDING — newest run on top.
+  // Click any column header to toggle the sort. Queued rows (no time) sink
+  // to the end either way.
   const sortBy = S.sortKey || 'time';
-  const asc = S.sortAsc !== false;
+  const asc = S.sortAsc === true;
   const getVal = r => {
     switch (sortBy) {
       case 'exp': return r._exp_num;
@@ -1121,7 +1164,7 @@ function paintTable() {
   ];
   const hrow = COLS.map(([k, label]) => {
     const on = (S.sortKey || 'time') === k;
-    const arrow = on ? (S.sortAsc !== false ? ' ▲' : ' ▼') : '';
+    const arrow = on ? (S.sortAsc === true ? ' ▲' : ' ▼') : '';
     return `<th data-sort="${k}" class="th-sort${on ? ' on' : ''}">`
       + esc(label) + `<span class="th-arrow">${arrow}</span></th>`;
   }).join('');
@@ -1654,18 +1697,42 @@ function renderSessions(c) {
     if (!name) return;
     const clean = String(name).trim();
     if (!clean) return;
+    // Bulletproof handler: the backend SHOULD always return JSON, but if
+    // it ever ships an HTML 500 ("Internal Server Error") or the network
+    // hiccups, we must NOT crash with "SyntaxError: Unexpected token 'I'…".
+    // So: try fetch → check r.ok → try r.text() → try JSON.parse → show
+    // a clean error at every step.
+    let resp = null;
     try {
-      const r = await post('/sessions/create', { session: clean });
-      if (r && r.ok) {
-        S.sessTab = r.session || clean;
-        // Force the tab bar to re-poll so the new session appears
-        await poll();
-      } else {
-        aruiAlert((r && r.error) || 'Could not create session',
-          { title: 'Session create failed' });
-      }
+      resp = await fetch('/api/sessions/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session: clean }),
+      });
     } catch (e) {
-      aruiAlert(String(e), { title: 'Session create failed' });
+      aruiAlert('Network error: ' + String(e && e.message || e),
+        { title: 'Session create failed' });
+      return;
+    }
+    let raw = '';
+    try { raw = await resp.text(); } catch (e) { raw = ''; }
+    let body = null;
+    try { body = raw ? JSON.parse(raw) : null; } catch (e) { body = null; }
+    if (!resp.ok || !body) {
+      // Either non-2xx or unparseable body — show a clean message.
+      const snippet = (raw || '').slice(0, 200).replace(/\s+/g, ' ').trim();
+      const msg = (body && body.error)
+        || (snippet ? `server ${resp.status}: ${snippet}` : `server ${resp.status}`);
+      aruiAlert(msg, { title: 'Session create failed' });
+      return;
+    }
+    if (body.ok) {
+      S.sessTab = body.session || clean;
+      // Force the tab bar to re-poll so the new session appears
+      await poll();
+    } else {
+      aruiAlert(body.error || 'Could not create session',
+        { title: 'Session create failed' });
     }
   };
   const term = c.querySelector('#sessterm');
@@ -2244,7 +2311,16 @@ async function openDrawer(runId) {
     bd.append(el('div', 'dr-h2', 'Config — what changed'));
     const cdl = el('dl', 'kv');
     Object.entries(run.config).forEach(([k, v]) =>
-      cdl.innerHTML += `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`);
+      cdl.insertAdjacentHTML('beforeend',
+        `<dt>${esc(k)}</dt><dd>${_fmtCfgVal(v)}</dd>`));
+    // wire up the [show all] expanders
+    cdl.querySelectorAll('.lc-more').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const dd = btn.closest('dd');
+        if (dd) dd.classList.toggle('lc-open');
+      });
+    });
     bd.append(cdl);
     const cp = el('button', 'btn', 'Copy repro command');
     cp.style.marginTop = '8px';
