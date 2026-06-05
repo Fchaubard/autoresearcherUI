@@ -263,6 +263,91 @@ def research_paused() -> bool:
         return False
 
 
+def research_halted() -> tuple[bool, str]:
+    """Hard-halt state (RESEARCH_IMPROVEMENT_PLAN #6).
+
+    Distinct from ``research_paused``: paused is a user convenience that
+    skips launching new runs and lets the PI back off. ``research_halted``
+    is a HARD STOP triggered by the strategic council's ESCALATION_HALT or
+    by the PI agent via POST /api/halt — it blocks ALL runs (including
+    probe / smoke), surfaces a red banner on the dashboard, and only
+    lifts when a human marks it resolved via POST /api/halt/resume.
+
+    Stored on the onboarding row as a small dict
+    ``research_halted: {at: iso, reason: str}`` (truthy iff halted)."""
+    try:
+        from .db import SessionLocal
+        from .models import Setting
+        db = SessionLocal()
+        try:
+            row = (db.query(Setting)
+                   .filter(Setting.key == "onboarding").first())
+            if not row or not isinstance(row.value, dict):
+                return False, ""
+            v = row.value.get("research_halted")
+            if not v:
+                return False, ""
+            if isinstance(v, dict):
+                return True, str(v.get("reason") or "")
+            # legacy truthy form
+            return True, ""
+        finally:
+            db.close()
+    except Exception:                                       # noqa: BLE001
+        return False, ""
+
+
+def set_research_halted(halted: bool, reason: str = "") -> None:
+    """Set / clear the hard-halt state. Called by the strategic council
+    when verdict==ESCALATION_HALT, by the PI agent when it sees an
+    escalation event in the last hour, and by the dashboard's Resume
+    button. Emits a single Event so the chat feed reflects the change."""
+    try:
+        import datetime as _dt
+        import os as _os
+        from sqlalchemy.orm.attributes import flag_modified
+        from .bus import bus as _bus
+        from .db import SessionLocal
+        from .models import Event, Setting
+        db = SessionLocal()
+        try:
+            row = (db.query(Setting)
+                   .filter(Setting.key == "onboarding").first())
+            if not row:
+                row = Setting(key="onboarding", value={})
+                db.add(row)
+            cur = dict(row.value) if isinstance(row.value, dict) else {}
+            if halted:
+                cur["research_halted"] = {
+                    "at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                    "reason": (reason or "")[:500],
+                }
+            else:
+                cur["research_halted"] = None
+            row.value = cur
+            flag_modified(row, "value")
+            ev = Event(id="ev-" + _os.urandom(4).hex(),
+                       type=("research_halted" if halted
+                             else "research_resumed"),
+                       severity=("critical" if halted else "info"),
+                       actor="system",
+                       message=(("RESEARCH HALTED: " + (reason or "(no reason)"))
+                                if halted else
+                                "Research resumed by human PI."),
+                       created_at=_dt.datetime.now(
+                           _dt.timezone.utc).isoformat())
+            db.add(ev)
+            db.commit()
+            try:
+                _bus.publish("events", "event", ev.dict())
+            except Exception:
+                pass
+        finally:
+            db.close()
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[notify] set_research_halted failed: {e}", flush=True)
+
+
 def send(subject, text, html=None, images=None) -> bool:
     """Send a notification to the configured recipients. True on success.
 

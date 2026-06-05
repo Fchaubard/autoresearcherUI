@@ -190,6 +190,15 @@ INTERVENE if you see any of:
 DO NOT INTERVENE if everything looks healthy. It is fine to return zero
 messages — be sparing, every message interrupts the agent.
 
+ESCALATION_HALT (RESEARCH_IMPROVEMENT_PLAN #6):
+  If you see an `escalation_halt` Event from the strategic council in
+  the last hour you are REQUIRED to call POST /api/halt with a one-line
+  reason — that sets `research_halted` and blocks every subsequent
+  /api/track/run including probes. Do NOT also nag the agent at that
+  point — nagging is noise; the system needs to stop. (This branch is
+  also auto-triggered before the LLM call as a safety net so a single
+  escalation can never be ignored.)
+
 Return JSON ONLY, no markdown fence, matching this schema:
 {
   "concerns": "<1-3 sentences summarising what you see. Use 'OK.' if all
@@ -455,6 +464,30 @@ def cycle_paper(force: bool = False) -> dict | None:
             "messages_sent": sent, "model": model}
 
 
+def _escalation_halt_seen_recently(window_minutes: int = 60) -> bool:
+    """True iff an ``escalation_halt`` Event was emitted in the last
+    ``window_minutes``. Used by the PI cycle to auto-halt — once the
+    strategic council has escalated, the PI is REQUIRED to set
+    research_halted via the same code path as POST /api/halt.
+
+    Cheap pure-DB read, never raises."""
+    try:
+        cutoff = (dt.datetime.now(dt.timezone.utc)
+                  - dt.timedelta(minutes=window_minutes)).isoformat()
+        db = SessionLocal()
+        try:
+            ev = (db.query(Event)
+                  .filter(Event.type == "escalation_halt")
+                  .filter(Event.created_at >= cutoff)
+                  .order_by(Event.created_at.desc())
+                  .first())
+            return ev is not None
+        finally:
+            db.close()
+    except Exception:                                       # noqa: BLE001
+        return False
+
+
 def cycle(force: bool = False) -> dict | None:
     """Run one PI cycle. Branches on project mode — paper mode delegates
     to cycle_paper() which nags the author agent instead."""
@@ -465,6 +498,26 @@ def cycle(force: bool = False) -> dict | None:
             return cycle_paper(force=force)
     except Exception:
         pass
+    # PI HARD-HALT AUTHORITY (RESEARCH_IMPROVEMENT_PLAN #6): if the
+    # strategic council escalated in the last hour, the PI is REQUIRED
+    # to set research_halted. The agent has demonstrated it ignores
+    # prose advice — at this point nagging is just noise; the system
+    # needs to stop. We short-circuit BEFORE calling the LLM so an
+    # escalating loop never burns more council tokens.
+    if _escalation_halt_seen_recently(60):
+        try:
+            from . import notify as _notify
+            halted, _ = _notify.research_halted()
+            if not halted:
+                _notify.set_research_halted(
+                    True, reason=("Strategic council ESCALATION_HALT — "
+                                  "PI auto-halted research"))
+                print("[pi] ESCALATION_HALT seen — auto-halted research",
+                      flush=True)
+        except Exception as e:                              # noqa: BLE001
+            print(f"[pi] auto-halt failed: {e}", flush=True)
+        return {"concerns": "research halted by PI",
+                "messages_sent": 0, "model": ""}
     # Stuck detector tick (PLAN item #8): runs every PI cycle, fires
     # state-transition side-effects (chat bubble / event / escalation
     # email) when the loop's health worsens. Cheap pure-DB read; never

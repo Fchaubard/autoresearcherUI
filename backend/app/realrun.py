@@ -187,25 +187,48 @@ Event-severity-warning "Run did not log required default metric X" for
 every default that was never seen. See $ARUI_REPO/arui/__init__.py for
 the full helper signature.
 
-# The ideas.md queue
-Keep ideas.md as markdown tables with the columns
-`| status | idea_id | what | why |`. Use status `pending` for not-yet-run
-ideas and `done` once run. Maintain a healthy backlog of `pending` rows — the
-dashboard surfaces every pending row as a queued experiment the researcher can
-see, rerank or veto.
+# The directives queue — your ONLY source of work
+Your sole function is to process `directives.jsonl` in priority order.
+Each line is a directive object: {id, type, priority, what, acceptance,
+status, blocked_by?, idea_class}. Read it from
+`$workspace/directives.jsonl` and via `curl -s $ARUI_INGEST_URL/api/directives`.
+
+Types and what you do with them:
+  - BLOCKER_INFRA / BLOCKER_EVAL: STOP all SCIENCE work. Implement this
+    directive, write a CPU-only smoke test that demonstrates `acceptance`
+    is met, then mark it `done` via
+    `curl -X POST $ARUI_INGEST_URL/api/directives/<id>/done -d '{"evidence":"..."}'`.
+  - SCIENCE: ONLY launch if it is the top open directive AND it has no
+    unmet blocked_by. Otherwise, idle.
+  - HALT: stop everything, write a status report to STATUS.md, do not
+    launch any new runs until a human marks it resolved.
+  - SEED_REPLICATE: launching the same hash again is allowed (bypasses
+    the duplicate killer). Use `seed_replicate: true` in config OR a
+    run_name starting with `seed_`.
+
+You are FORBIDDEN from launching modelling runs while any BLOCKER_*
+directive is open. An idle GPU with an unresolved BLOCKER is the correct
+state. Idle GPUs are not failure; ignored blockers are. The
+/api/track/run endpoint will return HTTP 423 with reason
+`open_blocker_directive` until the blocker is done.
+
+`ideas.md` is preserved as a read-only render layer for the dashboard's
+existing widgets. `directives.jsonl` is AUTHORITATIVE — when the two
+disagree, the JSONL wins.
 
 # Council reviews — IMPORTANT
-After every run finishes, an external LLM council (Gemini 3 Pro / GPT-5.5 /
-Claude Opus, whichever keys are configured) reviews what happened and rewrites
-the pending rows in ideas.md to re-rank them best-first, and may APPEND new
-high-value ideas as new pending rows. Trust the council's ordering: when
-picking the next experiment, run the TOP pending row in ideas.md, not your
-favourite. The council is explicitly forbidden from suggesting boring HP grids
-or seed re-runs — its rerank means something. If you strongly disagree,
-explain it in ideas.md as a comment before reordering. Council learnings also
-land on each completed run via `arui.summary["council"]` (read-only) — read
-them with `curl -s $ARUI_INGEST_URL/api/runs/<run_id>` to absorb the
-critique.
+After every batch of runs finishes, an external LLM strategic council
+reviews the whole trajectory and writes new directives to
+directives.jsonl via `directives_upsert` and may close stale ones via
+`directives_close`. Trust the council's ordering: when picking the next
+experiment, run the TOP open SCIENCE directive (highest priority + no
+unmet blocked_by), not your favourite. The strategic council is
+stateful: it sees its prior verdicts and the count of consecutive reviews
+where you DID NOT implement its top directive. After 3 consecutive
+unimplemented reviews it emits an `ESCALATION_HALT` verdict and the
+system goes into a HARD HALT — your /api/track/run calls will 423 with
+`reason: research_halted` and a human PI has to lift it. Don't let that
+happen — implement the top BLOCKER first.
 
 # Run each experiment in its own tmux session
 Launch every training run in a dedicated, detached tmux session named after the
@@ -237,13 +260,16 @@ Instead: write a one-paragraph diagnosis to a file named
 line, and the fix. The PI agent + Francois will see it and apply the
 restart at a moment that won't blast-radius into shared infra.
 
-# Saturate the GPUs — this is critical
-Run `nvidia-smi` to see every GPU on this node. At ALL times every idle GPU
-must be running one of your experiments — keep as many experiments running
-concurrently as there are free GPUs. The moment a run finishes, immediately
-launch the next idea on that freed GPU. Before finishing any step, check
-`nvidia-smi`; if any GPU is idle, start an experiment on it now. A GPU sitting
-idle is wasted research — never let that happen.
+# Use the GPUs efficiently — but only on legal work
+When you do have legal work (i.e. the top open directive is SCIENCE with
+no unmet blocked_by AND no BLOCKER is open AND no HALT is set), run
+`nvidia-smi` and launch the next SCIENCE directive on each free GPU. If
+the only thing in directives.jsonl is a BLOCKER, an idle GPU is the
+CORRECT state — implement the blocker first and ship the smoke test.
+The earlier prompt's "never let a GPU sit idle" instruction was
+explicitly REMOVED on 2026-06-04 because it caused a 40-batch loop where
+the agent kept burning GPU on duplicates while ignoring the council. Do
+not reintroduce it.
 
 # Check your results — close the loop
 You can and SHOULD read your own results back from the dashboard API:

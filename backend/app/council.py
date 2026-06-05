@@ -253,7 +253,22 @@ their points, adopt their framing (your output should match theirs on
 verdict + top-3 rerank + veto set). If you DISAGREE, restate your position
 but ALSO address their argument specifically in the "learning" field — say
 why their take is wrong or incomplete. The goal is to converge on the
-strongest call, not to be stubborn. Keep returning the same JSON schema."""
+strongest call, not to be stubborn. Keep returning the same JSON schema.
+
+ADVERSARIAL MODE (conditional — only when the user message contains the
+header "PRIOR STRATEGIC VERDICT: stagnant" or "PRIOR STRATEGIC VERDICT:
+regressing"):
+  The project is stuck. Agreement is the failure mode here — both of you
+  have been agreeing for batches and nothing has moved. If you are the
+  SECOND reviewer (the one with the other reviewer's position appended),
+  you MUST role-play as adversarial: argue that the OTHER reviewer's
+  continued recommendation IS THE PROBLEM, propose a strictly different
+  action — e.g. close the open BLOCKER, pivot the project's hypothesis,
+  switch to an ORTHOGONAL direction. At least ONE of the two final
+  positions must propose an ORTHOGONAL direction (set verdict and
+  new_ideas + directives_upsert accordingly). The tiebreaker (claude)
+  reads both and picks. Do NOT shy away from saying the prior advice
+  was wrong — that's the entire point of adversarial mode."""
 
 
 TIEBREAKER_SYSTEM = """You are the tiebreaker on a senior advisory panel for
@@ -277,6 +292,41 @@ ML research project. The agent has just finished a BATCH of N parallel
 experiments (one per GPU). Your job is not to micro-review each one but
 to step back and decide what the AGENT SHOULD DO NEXT — a strategic call
 on the whole project trajectory, based on this batch + all prior history.
+
+YOU ARE STATEFUL. The orchestrator injects three deterministic facts
+into the user message under the heading "PRIOR STRATEGIC STATE":
+  - previous_top_directive_id: the directive id you flagged as top at
+    your last review (or "" if there was no prior review)
+  - previous_directive_implemented: YES / NO / IN_PROGRESS — was that
+    top directive implemented by the agent between the prior review and
+    now? (computed deterministically — do not contradict it)
+  - consecutive_unimplemented_count: how many reviews in a row that same
+    top directive id has been carried over with implemented==NO. This
+    is the load-bearing escalation counter.
+
+MANDATORY ESCALATION RULE (do not soften):
+  If previous_directive_implemented=="NO" for 3 consecutive reviews on
+  the same previous_top_directive_id, you MUST set
+  verdict="ESCALATION_HALT", append a HALT directive of priority 9999 in
+  directives_upsert, AND the tiebreaker (claude) MUST be invoked even
+  on agreement. The agent has demonstrated it ignores prose advice — the
+  only remaining channel is a hard HALT that bypasses the agent and
+  surfaces to the human PI.
+
+ORTHOGONAL QUOTA (RESEARCH_IMPROVEMENT_PLAN #5):
+  Every entry in directives_upsert MUST include an idea_class in
+  {INCREMENTAL, ORTHOGONAL, REPRODUCE, INFRA, ABLATION}.
+  - ORTHOGONAL means a fundamentally different model class, training
+    objective, or data regime — NOT a re-shuffle of the current pool.
+  - REPRODUCE means: pull a relevant recent arXiv paper and propose to
+    reproduce its core claim on this project's data.
+  - The ratio of INCREMENTAL to ORTHOGONAL across all open directives
+    must not exceed 3:1.
+  - If verdict has been "stagnant" for >= 2*GPU_COUNT consecutive
+    reviews, directives_upsert MUST include at least one
+    idea_class="ORTHOGONAL" or "REPRODUCE" entry. A validator will
+    REJECT your output if it violates this — your call will not be
+    persisted.
 
 GOAL: Maximize EV-per-GPU-hour. Boring is fine if it consolidates a
 result. Stabilizing a working method (lr search, regularization,
@@ -322,7 +372,11 @@ Strategic-review-specific note on `learning`:
 
 JSON ONLY, no markdown, schema:
 {
-  "verdict": "progress" | "stagnant" | "regressing",
+  "previous_top_directive_id": "<echo back the id you were shown, or ''>",
+  "previous_directive_implemented": "YES" | "NO" | "IN_PROGRESS",
+  "consecutive_unimplemented_count": <int — echo back the deterministic
+    value you were shown; do not recompute>,
+  "verdict": "progress" | "stagnant" | "regressing" | "ESCALATION_HALT",
   "learning": "<follow the HYPOTHESIS / RESULT / WHY / GENERALIZABLE
     INSIGHT / NEXT EXPERIMENT contract verbatim. Cite run_ids in RESULT.
     If you cannot fill HYPOTHESIS+RESULT+WHY truthfully from the batch
@@ -334,13 +388,29 @@ JSON ONLY, no markdown, schema:
      "why": "<falsifiable hypothesis>"}
   ],
   "veto": ["<idea_id_to_drop>", ...],
-  "pivot": {"recommend": true|false, "to_what": "<one-line direction>"}
+  "pivot": {"recommend": true|false, "to_what": "<one-line direction>"},
+  "directives_upsert": [
+    {"id": "<d-XXXX or omit for auto>",
+     "type": "BLOCKER_INFRA|BLOCKER_EVAL|SCIENCE|HALT|SEED_REPLICATE",
+     "priority": <int>,
+     "what": "<one-line description>",
+     "acceptance": "<how we know it's done>",
+     "idea_class": "INCREMENTAL|ORTHOGONAL|REPRODUCE|INFRA|ABLATION",
+     "why": "<optional hypothesis>",
+     "blocked_by": ["<other_directive_id>", ...]}
+  ],
+  "directives_close": ["<directive_id>", ...]
 }
 
 - rerank_pending: ONLY existing pending idea_ids, best first.
 - new_ideas: 0-5 entries. Concrete HP values where relevant.
 - pivot: only set recommend=true if the data strongly supports it (>100
-  flat runs, or this project's hypothesis is materially contradicted)."""
+  flat runs, or this project's hypothesis is materially contradicted).
+- directives_upsert: 0-5 entries. Drives directives.jsonl (the
+  authoritative command queue). New directives without an id get auto-
+  generated ids. To update an existing directive (priority change, status
+  bump) include its id.
+- directives_close: 0-5 ids the council vetoes / marks complete."""
 
 
 # ── context bundle ────────────────────────────────────────────────────────
@@ -1140,8 +1210,10 @@ def _strategic_worker(batch_run_ids: list[str]) -> None:
             if not review:
                 return
             # Persist a single Event + ChatMessage so the UI shows it,
-            # apply rerank/new ideas to ideas.md, and write learning to
-            # lessons.md.
+            # apply rerank/new ideas to ideas.md (kept as read-only render
+            # for backward compat), drive directives.jsonl (authoritative
+            # via _persist_strategic -> _apply_to_directives_jsonl), and
+            # write learning to lessons.md.
             _persist_strategic(batch_run_ids, review)
             _apply_to_ideas_md(review)
         finally:
@@ -1209,15 +1281,43 @@ def _build_strategic_context(batch_run_ids: list[str]) -> dict | None:
         db.close()
 
 
-def _strategic_ctx_text(ctx: dict) -> str:
+def _strategic_ctx_text(ctx: dict, strategic_state: dict | None = None) -> str:
     runs_block = ctx.pop("all_prior_runs_oneliners", "") or "(none)"
     lessons_block = ctx.pop("lessons_so_far", "").strip() or "(none yet)"
+    # Strategic state header — deterministic block consumed by the LLM
+    # without recomputation. The escalation rule + orthogonal quota are
+    # both downstream of these three numbers.
+    if strategic_state:
+        state_block = (
+            "=== PRIOR STRATEGIC STATE (deterministic — echo back) ===\n"
+            f"previous_top_directive_id: "
+            f"{strategic_state.get('previous_top_directive_id', '')}\n"
+            f"previous_directive_implemented: "
+            f"{strategic_state.get('previous_directive_implemented', 'YES')}\n"
+            f"consecutive_unimplemented_count: "
+            f"{strategic_state.get('consecutive_unimplemented_count', 0)}\n"
+            f"PRIOR 3 STRATEGIC VERDICTS:\n"
+            + "\n".join(f"  - {v}" for v in
+                       (strategic_state.get('prior_verdicts') or [])
+                       [:3]) + "\n\n"
+        )
+        # Surface the last verdict explicitly — DEBATE_SYSTEM checks for
+        # the literal "PRIOR STRATEGIC VERDICT: stagnant" / "regressing"
+        # to flip into adversarial mode.
+        last_verdict = (strategic_state.get('prior_verdicts') or [""])[0]
+        if last_verdict:
+            state_block += (
+                f"PRIOR STRATEGIC VERDICT: {last_verdict}\n\n"
+            )
+    else:
+        state_block = ""
     return (
         "You are doing a STRATEGIC review of a BATCH of recent runs (one "
         "wave of parallel experiments). Step back: look at the WHOLE "
         "project trajectory, this batch's results, and recommend the next "
         "research move. Return JSON per schema.\n\n"
-        "=== LESSONS LEARNED SO FAR (your prior reviews) ===\n"
+        + state_block
+        + "=== LESSONS LEARNED SO FAR (your prior reviews) ===\n"
         + lessons_block + "\n\n"
         f"=== ALL PRIOR RUNS ({ctx.get('all_prior_runs_count', 0)} total — "
         "frontier-movers ★ first, then crashed) ===\n"
@@ -1227,12 +1327,51 @@ def _strategic_ctx_text(ctx: dict) -> str:
         " ===\n" + json.dumps(ctx, indent=2, default=str))
 
 
+def _compute_strategic_state() -> dict:
+    """Deterministically compute the orchestrator-side fields the
+    strategic prompt depends on (RESEARCH_IMPROVEMENT_PLAN #2).
+
+    Returns:
+      {
+        "previous_top_directive_id": "<id>",
+        "previous_directive_implemented": "YES|NO|IN_PROGRESS",
+        "consecutive_unimplemented_count": <int>,
+        "prior_verdicts": ["<v_last>", "<v_-2>", "<v_-3>"],
+        "stagnant_streak": <int>,
+      }
+    """
+    prev_top = _previous_top_directive_id()
+    implemented = _was_directive_implemented(prev_top) if prev_top else "YES"
+    # Count consecutive unimplemented only if implemented==NO right now.
+    if implemented == "NO":
+        # Add +1 for the current review BEFORE recording it.
+        ccu = _consecutive_unimplemented_count(prev_top) + 1
+    else:
+        ccu = 0
+    h = _strategic_history()
+    prior_verdicts = [str(e.get("verdict") or "") for e in h[:3]]
+    stagnant_streak = _consecutive_stagnant_count()
+    return {
+        "previous_top_directive_id": prev_top,
+        "previous_directive_implemented": implemented,
+        "consecutive_unimplemented_count": ccu,
+        "prior_verdicts": prior_verdicts,
+        "stagnant_streak": stagnant_streak,
+    }
+
+
 def strategic_review(batch_run_ids: list[str]) -> dict | None:
     """Run ONE expert through the strategic-review prompt over a batch.
     Strategic reviews don't debate — they're already a 'reflection' call
     that asks the model to look at the whole trajectory at once. We pick
     the highest-quality reviewer available (claude > openai > gemini)
-    since the call only fires every N runs and we want the best judgment."""
+    since the call only fires every N runs and we want the best judgment.
+
+    The orchestrator-computed strategic state (previous top directive,
+    implemented?, consecutive unimplemented count) is injected into the
+    user message verbatim — the LLM is instructed to echo back the
+    deterministic fields rather than re-compute them.
+    """
     cfg = _settings()
     available = _available_reviewers(cfg)
     if not available:
@@ -1247,25 +1386,54 @@ def strategic_review(batch_run_ids: list[str]) -> dict | None:
     ctx = _build_strategic_context(batch_run_ids)
     if not ctx:
         return None
-    user = _strategic_ctx_text(ctx)
+    strategic_state = _compute_strategic_state()
+    user = _strategic_ctx_text(ctx, strategic_state=strategic_state)
     print(f"[council/strategic] running {reviewer} over batch of "
-          f"{len(batch_run_ids)} runs", flush=True)
+          f"{len(batch_run_ids)} runs; ccu="
+          f"{strategic_state['consecutive_unimplemented_count']}",
+          flush=True)
     out = _call_reviewer(reviewer, STRATEGIC_SYSTEM, user, cfg)
     if not out:
         return None
+    # HARD ESCALATION OVERRIDE — deterministic, not LLM-trusted. If
+    # the orchestrator computed >= 3 consecutive unimplemented on the
+    # same top directive, FORCE verdict=ESCALATION_HALT regardless of
+    # what the model said, AND append a HALT directive if the council
+    # didn't already include one.
+    if strategic_state["consecutive_unimplemented_count"] >= 3:
+        out["verdict"] = "ESCALATION_HALT"
+        ups = list(out.get("directives_upsert") or [])
+        if not any(str(d.get("type")) == "HALT" for d in ups):
+            ups.append({
+                "type": "HALT",
+                "priority": 9999,
+                "what": (f"ESCALATION_HALT: {strategic_state['consecutive_unimplemented_count']} "
+                         "consecutive reviews on top directive "
+                         f"{strategic_state['previous_top_directive_id']} with "
+                         "no implementation — human PI required"),
+                "acceptance": "Human PI marks this HALT resolved",
+                "idea_class": "INFRA",
+                "author": "council:escalation",
+            })
+        out["directives_upsert"] = ups
     out["scope"] = "strategic"
     out["batch_run_ids"] = batch_run_ids
     out["reviewer"] = reviewer + " (strategic)"
+    out["strategic_state"] = strategic_state
     return out
 
 
 def _persist_strategic(batch_run_ids: list[str], review: dict) -> None:
     """Persist a strategic review: write a ChatMessage + Event so it's
-    visible in the Summary feed, append the learning to lessons.md, and
-    mark each batch run's config['strategic_review_id']."""
+    visible in the Summary feed, append the learning to lessons.md, mark
+    each batch run's config['strategic_review_id'], and record an entry
+    in strategic_review_history for the next call's escalation counter.
+    """
     db = SessionLocal()
     learning = (review.get("learning") or "").strip()
     pivot = review.get("pivot") or {}
+    verdict = str(review.get("verdict") or "").lower()
+    is_halt = verdict == "escalation_halt"
     rev_id = "rv-" + os.urandom(4).hex()
     try:
         # tag each run with the strategic_review's id
@@ -1279,19 +1447,91 @@ def _persist_strategic(batch_run_ids: list[str], review: dict) -> None:
             r.config = cfg
         msg = (f"[Strategic review · {review.get('reviewer')}] "
                + (learning or "(no learning)"))[:1200]
-        if pivot.get("recommend"):
+        if is_halt:
+            msg = ("[Strategic review — ESCALATION_HALT] "
+                   "Agent has ignored the same top directive for "
+                   "3+ reviews. Hard-halting runs pending human PI.\n\n"
+                   + (learning or ""))[:1200]
+        elif pivot.get("recommend"):
             msg = (f"[Strategic review — RECOMMENDING PIVOT to: "
                    f"{pivot.get('to_what', '?')}]  ") + (learning or "")
         db.add(ChatMessage(id="cm-" + os.urandom(4).hex(),
                            role="agent", content=msg, created_at=_iso()))
         db.add(Event(id="ev-" + os.urandom(4).hex(),
-                     type="strategic_review", severity="info",
+                     type=("escalation_halt" if is_halt
+                           else "strategic_review"),
+                     severity=("critical" if is_halt else "info"),
                      actor="council:" + (review.get("reviewer") or "?"),
-                     message=learning[:280] or "Strategic review completed",
+                     message=(("ESCALATION_HALT: " if is_halt else "")
+                              + (learning[:280] or
+                                 "Strategic review completed")),
                      created_at=_iso()))
         db.commit()
     finally:
         db.close()
+    # Persist directives + history.
+    try:
+        report = _apply_to_directives_jsonl(review)
+        review["directives_report"] = report
+        if report.get("rejected"):
+            db = SessionLocal()
+            try:
+                db.add(Event(id="ev-" + os.urandom(4).hex(),
+                             type="council_validator_rejected",
+                             severity="warning",
+                             actor="council:strategic",
+                             message=("Council output rejected: "
+                                      + str(report["rejected"])[:240]),
+                             created_at=_iso()))
+                db.commit()
+            finally:
+                db.close()
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[council/strategic] directives apply failed: {e}",
+              flush=True)
+    # Record a tiny summary in strategic_review_history so the NEXT call
+    # can compute consecutive_unimplemented_count deterministically.
+    try:
+        # Resolve "top directive id" — prefer the council's first upsert,
+        # else fall back to whatever top_open() now sees.
+        from . import directives as _d
+        ups = review.get("directives_upsert") or []
+        top_did = ""
+        if ups and isinstance(ups[0], dict):
+            top_did = str(ups[0].get("id") or "")
+        if not top_did:
+            t = _d.top_open()
+            top_did = str(t.get("id") or "") if t else ""
+        prev_top = (review.get("strategic_state") or {}).get(
+            "previous_top_directive_id") or ""
+        # If the new top is the same as the previous AND the implemented
+        # field is NO, that's the streak signal.
+        prev_impl = (review.get("strategic_state") or {}).get(
+            "previous_directive_implemented") or "YES"
+        _append_strategic_history({
+            "id": rev_id,
+            "at": _iso(),
+            "verdict": verdict,
+            "top_directive_id": top_did,
+            "previous_top_directive_id": prev_top,
+            "implemented": prev_impl,
+            "reviewer": review.get("reviewer") or "",
+        })
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[council/strategic] history append failed: {e}",
+              flush=True)
+    # If we escalated, set research_halted so /api/track/run blocks ALL
+    # runs (including _probe/_smoke). The PI agent will also see the
+    # ESCALATION_HALT event and call /api/halt explicitly.
+    if is_halt:
+        try:
+            from . import notify
+            notify.set_research_halted(
+                True, reason=(learning[:240] or
+                              "Strategic council escalation"))
+        except Exception as e:                              # noqa: BLE001
+            print(f"[council/strategic] set_research_halted failed: {e}",
+                  flush=True)
     try:
         _append_lesson(
             reviewer=(review.get("reviewer") or "strategic"),
@@ -1587,6 +1827,235 @@ def _apply_to_ideas_md(review: dict) -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════
+#         Strategic review state — escalation counter + history
+#         (RESEARCH_IMPROVEMENT_PLAN #2 / #5 / #10)
+# ════════════════════════════════════════════════════════════════════════
+# We persist the last N strategic verdicts to a Setting row so the
+# escalation counter survives process restarts. Each entry is a small
+# dict — the LLM call dwarfs any DB overhead so we store the whole
+# review (sans `rounds` to keep size bounded).
+
+_STRAT_HISTORY_KEY = "strategic_review_history"
+_STRAT_HISTORY_MAX = 30
+
+
+def _strategic_history() -> list[dict]:
+    """Return the persisted history (newest first)."""
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(
+            Setting.key == _STRAT_HISTORY_KEY).first()
+        if row and isinstance(row.value, dict):
+            v = row.value.get("entries") or []
+            return list(v) if isinstance(v, list) else []
+        return []
+    finally:
+        db.close()
+
+
+def _append_strategic_history(entry: dict) -> None:
+    """Persist a small summary of a strategic verdict so future reviews
+    can compute consecutive_unimplemented_count deterministically."""
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(
+            Setting.key == _STRAT_HISTORY_KEY).first()
+        existing: list[dict] = []
+        if row and isinstance(row.value, dict):
+            existing = list(row.value.get("entries") or [])
+        existing.insert(0, entry)
+        existing = existing[:_STRAT_HISTORY_MAX]
+        value = {"entries": existing}
+        if row:
+            row.value = value
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(row, "value")
+        else:
+            db.add(Setting(key=_STRAT_HISTORY_KEY, value=value))
+        db.commit()
+    finally:
+        db.close()
+
+
+def _previous_top_directive_id() -> str:
+    """The most recent persisted top_directive_id, or "" if none."""
+    h = _strategic_history()
+    if not h:
+        return ""
+    return str(h[0].get("top_directive_id") or "")
+
+
+def _was_directive_implemented(top_directive_id: str) -> str:
+    """Has the top directive from the last review been implemented?
+    Returns YES / NO / IN_PROGRESS based on the current directives.jsonl
+    state. Deterministic — no LLM involved."""
+    if not top_directive_id:
+        return "YES"  # nothing to check — vacuously true
+    from . import directives as _d
+    cur = _d.get(top_directive_id)
+    if cur is None:
+        # Directive no longer exists — treat as implemented (council may
+        # have replaced it with new structure).
+        return "YES"
+    st = (cur.get("status") or "").lower()
+    if st in ("done", "vetoed"):
+        return "YES"
+    if st == "in_progress":
+        return "IN_PROGRESS"
+    return "NO"
+
+
+def _consecutive_unimplemented_count(prev_top: str) -> int:
+    """Count the consecutive trailing history entries where the SAME
+    top_directive_id was carried over with implemented=NO. Deterministic —
+    the LLM only echoes this back, it does not compute it."""
+    if not prev_top:
+        return 0
+    h = _strategic_history()
+    streak = 0
+    for entry in h:
+        if (str(entry.get("top_directive_id") or "") == prev_top
+                and str(entry.get("implemented") or "").upper() == "NO"):
+            streak += 1
+        else:
+            break
+    return streak
+
+
+# ════════════════════════════════════════════════════════════════════════
+#         directives.jsonl applier + validator
+#         (RESEARCH_IMPROVEMENT_PLAN #1 / #5)
+# ════════════════════════════════════════════════════════════════════════
+
+# Hard cap on INCREMENTAL:ORTHOGONAL ratio across all OPEN directives.
+# A council output that would push the ratio above this is rejected.
+_MAX_INCREMENTAL_ORTHOGONAL_RATIO = 3.0
+
+
+def _gpu_count_for_quota() -> int:
+    """Same as _gpu_count but inlined here so the test can monkey-patch
+    just this without touching the batch trigger."""
+    return _gpu_count()
+
+
+def _consecutive_stagnant_count() -> int:
+    """How many trailing strategic reviews have verdict ∈
+    {stagnant, regressing}. Used by the ORTHOGONAL-quota rule."""
+    h = _strategic_history()
+    streak = 0
+    for entry in h:
+        v = str(entry.get("verdict") or "").lower()
+        if v in ("stagnant", "regressing", "escalation_halt"):
+            streak += 1
+        else:
+            break
+    return streak
+
+
+def _validate_directives_upsert(upsert: list[dict],
+                                  prior_verdict: str,
+                                  stagnant_streak: int) -> tuple[bool, str]:
+    """Enforce the schema + quota rules from RESEARCH_IMPROVEMENT_PLAN #5.
+
+    Returns (ok, error). ``ok=False`` means the council's output should
+    NOT be persisted — the caller surfaces ``error`` as a Setting +
+    Event so the next review knows what went wrong.
+
+    Rules:
+      1. Every entry must pass directives.validate_directive() — in
+         particular every entry MUST carry idea_class ∈ IDEA_CLASSES.
+      2. If we've been stagnant/regressing for >= 2*GPU_COUNT consecutive
+         reviews, the upsert MUST include at least one ORTHOGONAL or
+         REPRODUCE directive.
+      3. Combined with currently-open directives, the INCREMENTAL :
+         ORTHOGONAL ratio must not exceed 3:1. (REPRODUCE counts on the
+         ORTHOGONAL side.)
+    """
+    from . import directives as _d
+    if not isinstance(upsert, list):
+        return False, "directives_upsert must be a list"
+    # 1) per-entry validation.
+    for i, d in enumerate(upsert):
+        ok, err = _d.validate_directive(d)
+        if not ok:
+            return False, f"entry #{i}: {err}"
+        if not d.get("idea_class"):
+            return False, (f"entry #{i}: idea_class is REQUIRED on every "
+                           "directives_upsert entry")
+    # 2) ORTHOGONAL/REPRODUCE quota when stagnant.
+    gpu_n = max(_gpu_count_for_quota(), 1)
+    quota_floor = 2 * gpu_n
+    if stagnant_streak >= quota_floor and upsert:
+        has_diverging = any(
+            (d.get("idea_class") in ("ORTHOGONAL", "REPRODUCE"))
+            for d in upsert)
+        if not has_diverging:
+            return False, (
+                f"verdict has been stagnant/regressing for {stagnant_streak} "
+                f">= 2*GPU_COUNT={quota_floor} consecutive reviews — "
+                "directives_upsert MUST include >= 1 ORTHOGONAL or REPRODUCE "
+                "entry but none was provided")
+    # 3) 3:1 INCREMENTAL:ORTHOGONAL across OPEN directives.
+    cur = _d.counts_by_idea_class()
+    for d in upsert:
+        ic = d.get("idea_class") or "INCREMENTAL"
+        cur[ic] = cur.get(ic, 0) + 1
+    inc = cur.get("INCREMENTAL", 0)
+    orth = cur.get("ORTHOGONAL", 0) + cur.get("REPRODUCE", 0)
+    if orth > 0 and inc / orth > _MAX_INCREMENTAL_ORTHOGONAL_RATIO:
+        return False, (
+            f"INCREMENTAL:ORTHOGONAL ratio across all OPEN directives "
+            f"would be {inc}:{orth} which exceeds the hard cap of 3:1")
+    # 3b) all-INCREMENTAL with no orthogonal anywhere: only reject if the
+    # number of open INCREMENTAL is already at or above the floor (4) —
+    # this guards against the system collapsing to HP grids when the
+    # council is healthy. We surface this as a soft warning, not a hard
+    # rejection, so a council that's NOT stagnant can still ship purely
+    # incremental work.
+    return True, ""
+
+
+def _apply_to_directives_jsonl(review: dict) -> dict:
+    """Translate a strategic review's ``directives_upsert`` /
+    ``directives_close`` payloads into the directives.jsonl file.
+
+    Returns a small report ``{"upserted": N, "closed": M, "rejected": "..."}``
+    that the caller can attach to the persisted strategic review for
+    visibility on the dashboard.
+
+    On validator failure NOTHING is persisted — the caller sees
+    ``rejected=<reason>`` and emits an Event so the next strategic
+    review knows the prior output was bad.
+    """
+    from . import directives as _d
+    upsert = list(review.get("directives_upsert") or [])
+    close_ids = list(review.get("directives_close") or [])
+    prior_verdict = str(review.get("verdict") or "").lower()
+    stagnant_streak = _consecutive_stagnant_count()
+    ok, err = _validate_directives_upsert(
+        upsert, prior_verdict=prior_verdict,
+        stagnant_streak=stagnant_streak)
+    if not ok:
+        print(f"[council/directives] REJECTED: {err}", flush=True)
+        return {"upserted": 0, "closed": 0, "rejected": err}
+    n_up = 0
+    n_close = 0
+    for entry in upsert:
+        try:
+            _d.upsert(entry)
+            n_up += 1
+        except Exception as e:                              # noqa: BLE001
+            print(f"[council/directives] upsert failed: {e}", flush=True)
+    for did in close_ids:
+        try:
+            if _d.close(str(did), evidence="closed by strategic council"):
+                n_close += 1
+        except Exception as e:                              # noqa: BLE001
+            print(f"[council/directives] close failed: {e}", flush=True)
+    return {"upserted": n_up, "closed": n_close, "rejected": ""}
+
+
+# ════════════════════════════════════════════════════════════════════════
 #                       Code-bless — pre-flight code review
 # ════════════════════════════════════════════════════════════════════════
 #
@@ -1626,6 +2095,12 @@ single run if left in. Examples of blockers:
     metrics
   - missing seed handling that makes runs non-deterministic without warning
   - the dataset loader assumes a path that doesn't exist on this node
+  - SEED-TASK GATE (RESEARCH_IMPROVEMENT_PLAN #7): the validation set has
+    < 100 examples and program.md does NOT explicitly mark
+    `dataset_kind: smoke`. This is a smoke task, not a research baseline.
+  - SEED-TASK GATE: the agent's bless request reports `train_30s: true`
+    (train.py runs to completion in < 30s on a single CPU). That is a
+    smoke test, not a research baseline.
 
 Do NOT flag:
   - style nits, hyperparameter choices, model architecture preferences,
@@ -1982,9 +2457,73 @@ def is_code_blessed() -> bool:
     return False
 
 
-def _bless_worker(workspace: str) -> None:
+def seed_task_blockers(meta: dict | None) -> list[str]:
+    """Deterministic seed-task gate (RESEARCH_IMPROVEMENT_PLAN #7).
+
+    ``meta`` carries the agent-reported metadata about its baseline
+    that the council can't reliably extract from source alone. Recognised
+    keys (all optional):
+      - val_set_size: int — number of validation examples
+      - dataset_kind: str — "smoke" means the agent EXPLICITLY accepts
+        a small val set and the gate skips the size check
+      - train_30s: bool — True means train.py finishes in < 30s on
+        a single CPU (smoke-task signal)
+      - program_md_marks_smoke: bool — convenience alias for dataset_kind
+
+    Returns a list of human-readable blocker strings (empty if the gate
+    passes). Surfaces nothing if no meta is supplied — the gate is opt-in
+    via the agent's bless payload.
+    """
+    out: list[str] = []
+    if not isinstance(meta, dict):
+        return out
+    smoke_marked = (
+        str(meta.get("dataset_kind") or "").lower() == "smoke"
+        or bool(meta.get("program_md_marks_smoke")))
+    val_n = meta.get("val_set_size")
+    try:
+        val_n_int = int(val_n) if val_n is not None else None
+    except (TypeError, ValueError):
+        val_n_int = None
+    if val_n_int is not None and val_n_int < 100 and not smoke_marked:
+        out.append(
+            f"[seed-task] validation set has {val_n_int} examples (< 100) "
+            "and program.md does not mark dataset_kind: smoke — this is a "
+            "smoke task, not a research baseline. Mark it as smoke in "
+            "program.md OR use a real validation set with >= 100 examples.")
+    if bool(meta.get("train_30s")):
+        out.append(
+            "[seed-task] train.py reportedly runs to completion in < 30s "
+            "on a single CPU — this is a smoke test, not a research "
+            "baseline. Build a real training pipeline before requesting "
+            "bless.")
+    return out
+
+
+def _bless_worker(workspace: str, bless_meta: dict | None = None) -> None:
     cfg = _settings()
     reviewers = _available_reviewers(cfg)
+    # ─── seed-task gate (RESEARCH_IMPROVEMENT_PLAN #7) ─────────────────
+    # Deterministic check — runs BEFORE the LLM call so the agent gets
+    # the exact reason without burning council tokens.
+    seed_blockers = seed_task_blockers(bless_meta)
+    if seed_blockers:
+        _bless_state_set({
+            "status": "rejected",
+            "summary": ("Seed-task gate blocked the bless — agent must "
+                        "scale the dataset / build a real training "
+                        "pipeline first."),
+            "blockers": seed_blockers,
+            "suggestions": [
+                "Mark program.md with `dataset_kind: smoke` if you "
+                "deliberately want to evaluate on a tiny set.",
+                "Otherwise scale val_set_size >= 100 examples and "
+                "ensure train.py takes >= 30s on a single CPU.",
+            ],
+            "verdicts": {},
+            "seed_task_gate": True,
+        })
+        return
     # If no reviewers are configured we cannot block forever; auto-approve
     # but record the verdict honestly so the dashboard says so.
     if not reviewers:
@@ -2075,7 +2614,7 @@ def _bless_worker(workspace: str) -> None:
         print(f"[council/bless] event-emit failed: {e}", flush=True)
 
 
-def bless_async(workspace: str) -> dict:
+def bless_async(workspace: str, bless_meta: dict | None = None) -> dict:
     """Kick off a fresh review of ``workspace``. Returns the state
     immediately (pending); the verdict is written later by the worker.
 
@@ -2085,7 +2624,12 @@ def bless_async(workspace: str) -> dict:
     optimises and the architecture isn't broken at init, so we short-
     circuit before burning council tokens. The agent gets a clear
     `blocked_on_preflight` status + the missing-step blocker list and
-    knows what to do."""
+    knows what to do.
+
+    ``bless_meta`` carries agent-reported seed-task metadata
+    (val_set_size, dataset_kind, train_30s) so the deterministic seed-
+    task gate (RESEARCH_IMPROVEMENT_PLAN #7) can run before the LLM
+    call. See :func:`seed_task_blockers` for the exact rules."""
     blockers = preflight_blocking_reasons()
     if blockers:
         _bless_state_set({
@@ -2106,7 +2650,8 @@ def bless_async(workspace: str) -> dict:
     _bless_state_set({"status": "pending",
                       "summary": "Council is reviewing the codebase…",
                       "blockers": [], "suggestions": [], "verdicts": {}})
-    threading.Thread(target=_bless_worker, args=(workspace,),
+    threading.Thread(target=_bless_worker,
+                     args=(workspace, bless_meta),
                      daemon=True, name="council-bless").start()
     return bless_status()
 

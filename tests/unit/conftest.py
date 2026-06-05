@@ -46,6 +46,7 @@ _RELOAD_MODULES = [
     "backend.app.authkeys",
     "backend.app.novelty",
     "backend.app.stuck_detector",
+    "backend.app.directives",
     "backend.app.api",
     "backend.app",
     "backend",

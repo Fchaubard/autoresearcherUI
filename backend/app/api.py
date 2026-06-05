@@ -503,7 +503,15 @@ async def council_bless(request: Request):
     background. The agent's prompt instructs it to call this after
     scaffolding code, then poll /api/council/bless/status before any
     training run. The /api/track/run endpoint refuses (HTTP 423) until
-    the verdict is 'approved'."""
+    the verdict is 'approved'.
+
+    Body may include seed-task metadata (RESEARCH_IMPROVEMENT_PLAN #7)
+    consumed by the deterministic seed-task gate:
+      - val_set_size: int
+      - dataset_kind: "smoke" to opt out of the size gate
+      - train_30s: bool — true if the agent observed train.py finish in
+        < 30s on a single CPU (smoke-task signal)
+    """
     from . import council as _c
     body = await _safe_json(request)
     # Default to the current project's workspace; allow override for tests.
@@ -522,7 +530,13 @@ async def council_bless(request: Request):
         name = ((cfg.get("repo_name") or
                  (proj.name if proj else "research") or "research").strip())
         workspace = str(DATA_DIR / "workspace" / name)
-    return _c.bless_async(workspace)
+    bless_meta = {
+        k: body[k]
+        for k in ("val_set_size", "dataset_kind", "train_30s",
+                  "program_md_marks_smoke")
+        if k in body
+    }
+    return _c.bless_async(workspace, bless_meta=bless_meta or None)
 
 
 @router.get("/council/bless/status")
@@ -621,10 +635,33 @@ async def preflight_bless(request: Request):
 async def track_run(request: Request):
     from fastapi.responses import JSONResponse
     from . import council as _c
+    from . import directives as _directives
     from . import novelty
     body = await request.json()
     name = body.get("name", f"run-{_rng.randrange(16**6):06x}")
     config = body.get("config", {}) or {}
+    # HARD-HALT GATE (RESEARCH_IMPROVEMENT_PLAN #6): when the strategic
+    # council escalates or the PI agent calls /api/halt, ALL runs are
+    # blocked — including _probe / _smoke. Only a human PI resume lifts
+    # this. Checked BEFORE the probe whitelist on purpose.
+    halted, halt_reason = notify.research_halted()
+    if halted:
+        return JSONResponse({
+            "ok": False, "blocked": True, "reason": "research_halted",
+            "halt_reason": halt_reason,
+            "hint": ("Research is HALTED — POST /api/halt/resume "
+                     "(requires admin passcode) to unlock."),
+        }, status_code=423)
+    # OPEN HALT DIRECTIVE: directives.jsonl HALT directives block ALL
+    # runs (including probes) until the human PI closes them. Same shape.
+    halt_d = _directives.open_halt()
+    if halt_d:
+        return JSONResponse({
+            "ok": False, "blocked": True, "reason": "halt_directive",
+            "directive": halt_d,
+            "hint": ("There is an open HALT directive — resolve it via "
+                     "POST /api/directives/<id>/done."),
+        }, status_code=423)
     # CODE-BLESS GATE: the council must approve the codebase before the
     # first training run can register. The agent's prompt knows the dance
     # (POST /api/council/bless → poll /api/council/bless/status →
@@ -632,6 +669,22 @@ async def track_run(request: Request):
     # any name starting with _probe / _smoke for the agent's pre-flight
     # smoke tests, which prove the code RUNS at all before bless.
     if not novelty.is_probe_or_smoke(name):
+        # BLOCKER directive gate (RESEARCH_IMPROVEMENT_PLAN #1): a real
+        # run must yield to any open BLOCKER_INFRA / BLOCKER_EVAL
+        # directive. The agent's prompt instructs it to implement the
+        # blocker first and POST /api/directives/<id>/done with evidence.
+        blocker_kind = _directives.open_blocker_kind()
+        if blocker_kind:
+            return JSONResponse({
+                "ok": False, "blocked": True,
+                "reason": "open_blocker_directive",
+                "blocker_kind": blocker_kind,
+                "hint": ("There is an open " + blocker_kind + " directive — "
+                         "implement it first, then POST "
+                         "/api/directives/<id>/done with evidence. "
+                         "Probe / smoke runs (_probe / _smoke names) are "
+                         "still allowed."),
+            }, status_code=423)
         # RESEARCH-PAUSED GATE: the user can hit "Pause research" in
         # Settings (Task #1) to stop the loop without killing in-flight
         # runs. Same 423-Locked shape as the bless gate so the agent
@@ -1062,6 +1115,120 @@ def research_status():
     correctly, and by anything else that wants to know whether the
     loop is asleep (e.g. status badges)."""
     return {"paused": notify.research_paused()}
+
+
+# ───────── directives.jsonl — authoritative command queue (PLAN #1) ─────
+
+@router.get("/directives")
+def directives_list():
+    """List every directive, oldest first. Each is a dict per the
+    schema in backend/app/directives.py. Cheap pure file read."""
+    from . import directives as _d
+    items = _d.read_all()
+    return {"directives": items,
+            "open_count": sum(1 for d in items
+                              if d.get("status") == _d.STATUS_OPEN)}
+
+
+@router.get("/directives/{directive_id}")
+def directives_get(directive_id: str):
+    """Single directive by id, or 404."""
+    from fastapi.responses import JSONResponse
+    from . import directives as _d
+    d = _d.get(directive_id)
+    if not d:
+        return JSONResponse({"error": "not_found",
+                              "id": directive_id}, status_code=404)
+    return d
+
+
+@router.post("/directives/upsert")
+async def directives_upsert(request: Request):
+    """Upsert one directive. Body: {"directive": {...}}.
+
+    Returns the stored row + ``created`` flag. Validation errors yield
+    HTTP 400 with the reason in ``error``."""
+    from fastapi.responses import JSONResponse
+    from . import directives as _d
+    body = await _safe_json(request)
+    d = body.get("directive") or {}
+    try:
+        stored, created = _d.upsert(d)
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)},
+                             status_code=400)
+    return {"ok": True, "directive": stored, "created": created}
+
+
+@router.post("/directives/{directive_id}/done")
+async def directives_done(directive_id: str, request: Request):
+    """Mark a directive done. Body: {"evidence": "<one-liner proof>"}.
+
+    The evidence is preserved on the row for the dashboard's audit view.
+    Returns 404 if no such id; otherwise the updated directive."""
+    from fastapi.responses import JSONResponse
+    from . import directives as _d
+    body = await _safe_json(request)
+    evidence = str(body.get("evidence") or "")
+    d = _d.close(directive_id, evidence=evidence,
+                  status=_d.STATUS_DONE)
+    if not d:
+        return JSONResponse({"error": "not_found",
+                              "id": directive_id}, status_code=404)
+    return d
+
+
+# ───────── halt: hard-stop authority (PLAN #6) ───────────────────────────
+
+@router.post("/halt")
+async def halt_research(request: Request):
+    """Hard-halt all research runs. Body: {"reason": "..."}.
+
+    Effects:
+      - Sets the ``research_halted`` setting (separate from
+        ``research_paused``).
+      - Blocks every subsequent /api/track/run including _probe/_smoke
+        names — the gate returns 423.
+      - Emits a red-banner Event so the dashboard shows the reason.
+
+    Idempotent: calling /halt while halted just updates the reason. Use
+    /halt/resume (admin-only via passcode) to lift the halt."""
+    body = await _safe_json(request)
+    reason = str(body.get("reason") or "no reason provided")[:500]
+    notify.set_research_halted(True, reason=reason)
+    return {"ok": True, "halted": True, "reason": reason}
+
+
+@router.post("/halt/resume")
+async def halt_resume(request: Request):
+    """Lift a hard halt (admin-only via passcode).
+
+    Body may include {"passcode": "..."} which must match the onboarding
+    passcode; the dashboard's resume button submits this. Returns 401 if
+    the passcode is wrong."""
+    from fastapi.responses import JSONResponse
+    body = await _safe_json(request)
+    submitted = str(body.get("passcode") or "")
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(Setting.key == "onboarding").first()
+        cfg = dict(row.value) if row and isinstance(row.value, dict) else {}
+    finally:
+        db.close()
+    real = str(cfg.get("passcode") or "")
+    # If no passcode is set, allow resume (single-user dev path).
+    if real and submitted != real:
+        return JSONResponse({"ok": False, "error": "bad_passcode"},
+                             status_code=401)
+    notify.set_research_halted(False)
+    return {"ok": True, "halted": False}
+
+
+@router.get("/halt/status")
+def halt_status():
+    """Current halt state: {"halted": bool, "reason": "..."}."""
+    halted, reason = notify.research_halted()
+    return {"halted": halted, "reason": reason}
 
 
 @router.get("/research_health")
