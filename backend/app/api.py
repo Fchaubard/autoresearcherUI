@@ -269,8 +269,14 @@ def get_project(db: Session = Depends(get_session)):
         db.commit()
     runs = db.query(Run).filter(Run.project_id == p.id).all()
     ideas = db.query(Idea).filter(Idea.project_id == p.id).all()
-    done = [r for r in runs if r.status in ("kept", "discarded", "crashed")]
-    kept = [r for r in done if r.status == "kept"]
+    # Status taxonomy (RESEARCH_IMPROVEMENT_PLAN #4) expanded the set:
+    # kept_novel/kept_replicate/success_smoke all count as "done", and
+    # we keep "kept" for back-compat with pre-migration rows.
+    _DONE_STATUSES = ("kept", "kept_novel", "kept_replicate",
+                       "success_smoke", "discarded", "crashed")
+    _KEPT_STATUSES = ("kept", "kept_novel", "kept_replicate")
+    done = [r for r in runs if r.status in _DONE_STATUSES]
+    kept = [r for r in done if r.status in _KEPT_STATUSES]
     best = None
     for r in done:
         if (r.status == "crashed" or r.headline_metric is None
@@ -615,16 +621,17 @@ async def preflight_bless(request: Request):
 async def track_run(request: Request):
     from fastapi.responses import JSONResponse
     from . import council as _c
+    from . import novelty
     body = await request.json()
     name = body.get("name", f"run-{_rng.randrange(16**6):06x}")
+    config = body.get("config", {}) or {}
     # CODE-BLESS GATE: the council must approve the codebase before the
     # first training run can register. The agent's prompt knows the dance
     # (POST /api/council/bless → poll /api/council/bless/status →
     # only proceed when status==approved). 423 = Locked. Whitelist:
     # any name starting with _probe / _smoke for the agent's pre-flight
     # smoke tests, which prove the code RUNS at all before bless.
-    if not (str(name).startswith("_probe")
-            or str(name).startswith("_smoke")):
+    if not novelty.is_probe_or_smoke(name):
         # RESEARCH-PAUSED GATE: the user can hit "Pause research" in
         # Settings (Task #1) to stop the loop without killing in-flight
         # runs. Same 423-Locked shape as the bless gate so the agent
@@ -650,6 +657,25 @@ async def track_run(request: Request):
                          "/api/council/bless/status — once status='approved' "
                          "training runs are unlocked."),
             }, status_code=423)
+    # DUPLICATE-KILLER GATE (RESEARCH_IMPROVEMENT_PLAN #3): a fresh
+    # config hash MUST be unique unless this is an explicit seed
+    # replicate or a probe/smoke. Without this gate the agent was
+    # re-launching the same 5-way ensemble 5×, the council noticed,
+    # the agent ignored it, and the dashboard rewarded every copy.
+    # See backend/app/novelty.py for the canonicalisation rules.
+    accepted, existing_run_id, h = novelty.register(config, name)
+    if not accepted:
+        return JSONResponse({
+            "ok": False,
+            "error": "duplicate",
+            "existing_run_id": existing_run_id,
+            "novelty_hash": h,
+            "hint": ("This config was already registered as run "
+                     f"{existing_run_id!r}. Tag the run with "
+                     "idea_class=REPRODUCE / seed_replicate=true / "
+                     "run_id startswith 'seed_' to request an explicit "
+                     "seed replicate."),
+        }, status_code=409)
     db = SessionLocal()
     project = db.query(Project).first()
     pid = project.id if project else "proj-default"
@@ -660,12 +686,12 @@ async def track_run(request: Request):
         db.add(idea)
         db.add(Run(id=name, project_id=pid, idea_id=idea.id, run_name=name,
                    status="running", is_baseline=_looks_baseline(name),
-                   config=body.get("config", {}),
+                   config=config,
                    started_at=_iso(), created_at=_iso()))
         db.commit()
         bus.publish("events", "runs_changed", {})
     db.close()
-    return {"run_id": name}
+    return {"run_id": name, "novelty_hash": h}
 
 
 _METRICS_CHANGED_DEBOUNCE: dict[str, float] = {}
@@ -725,6 +751,7 @@ async def track_artifact(request: Request):
 
 @router.post("/track/finish")
 async def track_finish(request: Request):
+    from . import novelty
     body = await request.json()
     run_id = body["run_id"]
     summary = body.get("summary", {})
@@ -739,7 +766,38 @@ async def track_finish(request: Request):
         run.headline_metric = headline
         run.ended_at = _iso()
         crashed = _is_crashed(headline, direction)
-        run.status = "crashed" if crashed else "kept"
+        # ─── status taxonomy (RESEARCH_IMPROVEMENT_PLAN #4) ──────────
+        # The legacy taxonomy was {kept, crashed, discarded}. That made
+        # "didn't crash" indistinguishable from "real progress on real
+        # eval", so the council and the dashboard rewarded a 100%-acc
+        # smoke task the same as a real GSM8K improvement.
+        #
+        # New taxonomy:
+        #   success_smoke   — _probe / _smoke runs (info only; never
+        #                     compared on the frontier).
+        #   kept_novel      — finite metric, finished, novel hash.
+        #   kept_replicate  — finite metric, finished, explicit
+        #                     replicate (idea_class=REPRODUCE / seed_
+        #                     replicate / run_id startswith 'seed_').
+        #   discarded       — duplicate config that the duplicate
+        #                     killer somehow let in (defensive — the
+        #                     /api/track/run gate normally rejects
+        #                     these with HTTP 409 before they ever
+        #                     reach /track/finish).
+        #   crashed         — non-finite metric / diverged. Unchanged.
+        cfg = run.config if isinstance(run.config, dict) else {}
+        if crashed:
+            new_status = "crashed"
+        elif novelty.is_probe_or_smoke(run_id):
+            new_status = "success_smoke"
+        elif novelty.is_seed_replicate(cfg, run_id):
+            new_status = "kept_replicate"
+        else:
+            # The /api/track/run gate already rejected duplicates;
+            # anything that reaches here with a finite metric is
+            # genuinely novel.
+            new_status = "kept_novel"
+        run.status = new_status
         idea = db.query(Idea).filter(Idea.id == run.idea_id).first()
         if idea:
             idea.status = "failed" if crashed else "success"
@@ -1004,6 +1062,31 @@ def research_status():
     correctly, and by anything else that wants to know whether the
     loop is asleep (e.g. status badges)."""
     return {"paused": notify.research_paused()}
+
+
+@router.get("/research_health")
+def research_health():
+    """Stuck-detector pill payload for the dashboard header.
+
+    Returns the current health state of the research loop:
+      {"state": "healthy|nagged|stalled|looping|dry",
+       "details": {top_directive, consecutive_unimplemented_reviews,
+                    collision_rate, kept_novel_in_window, ...},
+       "reason": "<one-line human summary>"}
+
+    Cheap to call — pure DB reads + one workspace file read. Used by
+    the dashboard's "Research Health" pill which polls every few
+    seconds and paints green / amber / red depending on the state.
+    See backend/app/stuck_detector.py for the trigger conditions
+    (RESEARCH_IMPROVEMENT_PLAN.md item #8)."""
+    try:
+        from . import stuck_detector
+        return stuck_detector.compute_state()
+    except Exception as e:                                  # noqa: BLE001
+        # Never 500 the header pill — degrade to healthy on error.
+        return {"state": "healthy",
+                "details": {"error": str(e)[:200]},
+                "reason": "health probe failed; defaulting to healthy"}
 
 
 @router.post("/research/pause")

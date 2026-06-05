@@ -99,12 +99,20 @@ const minimize = () => (S.project?.metric_direction || 'minimize') === 'minimize
 const better = (a, b) => minimize() ? a < b : a > b;
 
 function frontier(runs) {                  // mark running-best improvements
+  // RESEARCH_IMPROVEMENT_PLAN #4: the frontier only counts kept_novel
+  // runs. Success_smoke (probe / smoke tests) and kept_replicate
+  // (explicit seed replicates of an already-novel run) are NOT real
+  // progress — counting them was the root cause of "best=1.0 acc on
+  // a smoke task" beating the true GSM8K frontier on the hero chart.
+  // Legacy "kept" rows from before the migration are accepted so old
+  // DBs still render a continuous frontier line.
+  const FRONTIER_OK = new Set(['kept', 'kept_novel']);
   let best = null;
   for (const r of runs) {
     r._finite = r.status !== 'crashed' && r.headline_metric != null
       && isFinite(r.headline_metric) && r.headline_metric < 5e4;
     r._frontier = false;
-    if (r._finite) {
+    if (r._finite && FRONTIER_OK.has(r.status)) {
       if (best === null || better(r.headline_metric, best)) {
         best = r.headline_metric; r._frontier = true;
       }
@@ -472,6 +480,51 @@ function render() {
   paintRail();
   pollGpus();
   pollBlessStatus();
+  pollResearchHealth();
+}
+
+/* Research health pill in the header — PLAN item #8.
+ * Polls /api/research_health every 8s, repaints the pill colour and
+ * tooltip when the state changes. Default green; amber for nagged /
+ * looping / dry; red for stalled. Cache the last payload so the
+ * detail modal (opened by clicking the pill) can render without a
+ * second round trip. */
+let _LAST_HEALTH = null;
+async function pollResearchHealth() {
+  const tick = async () => {
+    let s;
+    try { s = await api('/research_health'); } catch (e) { return; }
+    if (!s) return;
+    _LAST_HEALTH = s;
+    const pill = document.getElementById('research-health');
+    if (!pill) return;
+    const state = s.state || 'healthy';
+    const labels = { healthy: 'Healthy', nagged: 'Nagged',
+                     stalled: 'Stalled', looping: 'Looping', dry: 'Dry' };
+    pill.className = 'pill rh-pill rh-' + state;
+    pill.innerHTML = '<span class="dot"></span>' + (labels[state] || 'Healthy');
+    pill.title = (s.reason || 'Research loop is healthy.')
+      + '  (click for details)';
+  };
+  tick();
+  addTimer(setInterval(tick, 8000));
+}
+
+function openResearchHealth() {
+  const s = _LAST_HEALTH || { state: 'healthy', details: {}, reason: '' };
+  const d = s.details || {};
+  const msg = [
+    'State: ' + (s.state || 'healthy'),
+    'Reason: ' + (s.reason || '—'),
+    'Top open directive: ' + (d.top_directive || '(none detected)'),
+    'Consecutive reviews on same directive: '
+      + (d.consecutive_unimplemented_reviews || 0),
+    'Collision rate (last ' + (d.collision_window || 20) + ' runs): '
+      + ((d.collision_rate ?? 0) * 100).toFixed(0) + '%',
+    'Novel kept runs (last ' + (d.kept_novel_window || 50) + ' runs): '
+      + (d.kept_novel_in_window ?? 0),
+  ].join('\n');
+  aruiAlert(msg, { title: 'Research health', okText: 'Close' });
 }
 
 /* Pre-flight code-bless banner. Top-of-page banner that shows whether
@@ -620,6 +673,16 @@ function header() {
   }
   const dir = (p.metric_direction === 'minimize') ? '↓' : '↑';
   h.append(el('div', 'proj', esc(p.name || 'project')));
+  // Research health pill (PLAN item #8): colour-coded indicator next to
+  // the project name. Empty placeholder is appended now so layout is
+  // stable; the polling fetch in pollResearchHealth() fills it in.
+  const hp = el('div', 'pill rh-pill rh-healthy',
+    `<span class="dot"></span>Healthy`);
+  hp.id = 'research-health';
+  hp.title = 'Research loop health — click for details';
+  hp.style.cursor = 'pointer';
+  hp.onclick = openResearchHealth;
+  h.append(hp);
   h.append(el('div', 'metric', `${esc(p.validation_metric || '')} ${dir}`));
   const running = (p.status === 'running' || p.status === 'bootstrapping');
   h.append(el('div', 'pill' + (running ? '' : ' done'),

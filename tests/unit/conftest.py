@@ -44,6 +44,8 @@ _RELOAD_MODULES = [
     "backend.app.agent_watcher",
     "backend.app.repo",
     "backend.app.authkeys",
+    "backend.app.novelty",
+    "backend.app.stuck_detector",
     "backend.app.api",
     "backend.app",
     "backend",

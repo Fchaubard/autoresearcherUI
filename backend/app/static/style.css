@@ -49,6 +49,20 @@ button{cursor:pointer}
 .pill{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;
   padding:4px 9px;border-radius:20px;background:#22c55e1f;color:var(--ok)}
 .pill.done{background:#6366f120;color:#a5b4fc}
+/* Research-health pill (PLAN item #8) — colour coded by state.
+   Default green for healthy; amber for nagged/looping/dry; red for stalled.
+   The pill polls /api/research_health every 8s and updates in place. */
+.rh-pill{transition:background .25s,color .25s}
+.rh-pill.rh-healthy{background:#22c55e1f;color:var(--ok)}
+.rh-pill.rh-nagged{background:#f59e0b22;color:#fbbf24}
+.rh-pill.rh-looping{background:#f59e0b22;color:#fbbf24}
+.rh-pill.rh-dry{background:#f59e0b22;color:#fbbf24}
+.rh-pill.rh-stalled{background:#f43f5e22;color:#f87171;
+  animation:rh-pulse 1.6s infinite}
+@keyframes rh-pulse{
+  0%,100%{box-shadow:0 0 0 0 #f43f5e55}
+  50%{box-shadow:0 0 0 6px #f43f5e00}
+}
 .dot{width:6px;height:6px;border-radius:50%;background:currentColor}
 .dot.live{animation:pulse 1.5s infinite}
 .hdr .spacer{flex:1}

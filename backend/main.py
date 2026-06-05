@@ -46,6 +46,17 @@ async def lifespan(app: FastAPI):
             _os.environ.get("ANTHROPIC_API_KEY", ""))
     except Exception as e:                              # noqa: BLE001
         print(f"[main] ensure_claude_settings failed: {e}", flush=True)
+    # RESEARCH_IMPROVEMENT_PLAN #3: rebuild the duplicate-killer
+    # registry from every kept run before any /api/track/run can
+    # arrive. We don't persist the registry; the DB is the source of
+    # truth and re-hashing is cheap.
+    try:
+        from .app import novelty as _novelty
+        loaded = _novelty.populate_registry_from_db()
+        print(f"[main] novelty registry seeded with {loaded} hashes",
+              flush=True)
+    except Exception as e:                              # noqa: BLE001
+        print(f"[main] novelty registry seed failed: {e}", flush=True)
     notify.start_scheduler()          # periodic email digests (cadence-driven)
     monitor.start()                   # gpu telemetry + run reconciliation
     pi.start()                        # hourly PI oversight cycle

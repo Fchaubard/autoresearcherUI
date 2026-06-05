@@ -27,7 +27,7 @@ from email.message import EmailMessage
 
 from .config import DATA_DIR
 from .db import SessionLocal
-from .models import Project, Run, Setting
+from .models import Event, Project, Run, Setting
 
 
 # ───────────────────────────── config helpers ──────────────────────────────
@@ -627,6 +627,145 @@ def _run_cards_html(runs, metric_name: str, baseline: float | None) -> str:
             f'{"".join(rows)}</table>')
 
 
+_COUNCIL_HEALTH_LABELS = {
+    "healthy":  ("HEALTHY",  "#34D399"),
+    "nagged":   ("NAGGED",   "#FBBF24"),
+    "looping":  ("LOOPING",  "#F59E0B"),
+    "dry":      ("DRY",      "#F59E0B"),
+    "stalled":  ("STALLED",  "#F43F5E"),
+}
+
+
+def _last_kept_age() -> str:
+    """Human duration since the most recent kept (or kept_novel) run.
+
+    Prefers the new ``kept_novel`` status (item #4 taxonomy) when any
+    run carries it — that's the spec's "real" signal. Falls back to
+    the older ``kept`` / ``success`` statuses for compatibility with
+    older databases. Returns 'never' if no kept run is on file."""
+    db = SessionLocal()
+    try:
+        kept = (db.query(Run)
+                .filter(Run.status == "kept_novel")
+                .filter(Run.ended_at != "")
+                .order_by(Run.ended_at.desc()).first())
+        if not kept:
+            kept = (db.query(Run)
+                    .filter(Run.status.in_(("kept", "success")))
+                    .filter(Run.ended_at != "")
+                    .order_by(Run.ended_at.desc()).first())
+    finally:
+        db.close()
+    if not kept or not kept.ended_at:
+        return "never"
+    ed = _parse_iso(kept.ended_at)
+    if not ed:
+        return "unknown"
+    delta = dt.datetime.now(dt.timezone.utc) - ed
+    secs = int(delta.total_seconds())
+    if secs < 0:
+        secs = 0
+    days, rem = divmod(secs, 86400)
+    hours, rem = divmod(rem, 3600)
+    mins = rem // 60
+    if days > 7:
+        weeks = days // 7
+        d = days % 7
+        return f"{weeks} weeks {d} days ago"
+    if days:
+        return f"{days}d {hours}h ago"
+    if hours:
+        return f"{hours}h {mins}m ago"
+    return f"{mins}m ago"
+
+
+def _council_health_payload() -> dict:
+    """Pull a compute_state() snapshot for the council-health section.
+    Never raises into the digest path."""
+    try:
+        from . import stuck_detector
+        snap = stuck_detector.compute_state()
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[notify] council_health probe failed: {e}", flush=True)
+        snap = {"state": "healthy", "details": {}, "reason": ""}
+    details = snap.get("details") or {}
+    # Count open HALT directives. Until the directives.jsonl subsystem
+    # ships (item #1), we proxy on "research_stuck Event rows" — each
+    # stalled escalation emits one such event, which is exactly what an
+    # open HALT directive maps to.
+    open_halt = 0
+    try:
+        db = SessionLocal()
+        try:
+            open_halt = (db.query(Event)
+                         .filter(Event.type == "research_stuck")
+                         .count())
+        finally:
+            db.close()
+    except Exception:                                      # noqa: BLE001
+        pass
+    return {
+        "state": snap.get("state") or "healthy",
+        "reason": snap.get("reason") or "",
+        "consecutive_reviews":
+            details.get("consecutive_unimplemented_reviews", 0),
+        "top_directive": details.get("top_directive") or "(none)",
+        "kept_age": _last_kept_age(),
+        "open_halt": open_halt,
+    }
+
+
+def _council_health_html(payload: dict) -> str:
+    """Render the council-health section as the FIRST block of every
+    research-mode digest (PLAN item #9)."""
+    label, colour = _COUNCIL_HEALTH_LABELS.get(
+        payload["state"], _COUNCIL_HEALTH_LABELS["healthy"])
+    rows = [
+        f"{payload['consecutive_reviews']} consecutive strategic "
+        f"review{'' if payload['consecutive_reviews'] == 1 else 's'} "
+        f"issued the same blocker.",
+        f"Last kept run: {payload['kept_age']}.",
+        f"Open HALT directives: {payload['open_halt']}.",
+    ]
+    body = "".join(
+        f'<li style="margin:3px 0;">{_esc(r)}</li>' for r in rows)
+    status_html = (
+        f'<div style="margin-top:8px;font-size:13px;color:{colour};'
+        f'font-weight:700;letter-spacing:.4px;">'
+        f'Status: <b>{_esc(label)}</b></div>')
+    if payload["reason"]:
+        status_html += (
+            f'<div style="margin-top:2px;font-size:11px;color:#9BA1A8;">'
+            f'{_esc(payload["reason"])}</div>')
+    return (
+        '<div style="font-size:11px;color:#6366F1;font-weight:700;'
+        'text-transform:uppercase;letter-spacing:.5px;margin:0 0 5px;">'
+        'Council health</div>'
+        f'<ul style="margin:0;padding-left:18px;color:#C7CAD0;'
+        f'font-size:12.5px;line-height:1.6;">{body}</ul>'
+        f'{status_html}'
+        '<hr style="border:none;border-top:1px solid #23272E;margin:14px 0;"/>')
+
+
+def _council_health_text(payload: dict) -> str:
+    """Plain-text version of the council-health section."""
+    label, _ = _COUNCIL_HEALTH_LABELS.get(
+        payload["state"], _COUNCIL_HEALTH_LABELS["healthy"])
+    L = [
+        "### Council health",
+        f"- {payload['consecutive_reviews']} consecutive strategic "
+        f"review{'' if payload['consecutive_reviews'] == 1 else 's'} "
+        f"issued the same blocker.",
+        f"- Last kept run: {payload['kept_age']}.",
+        f"- Open HALT directives: {payload['open_halt']}.",
+        f"- **Status: {label}**",
+    ]
+    if payload["reason"]:
+        L.append(f"  ({payload['reason']})")
+    L.append("")
+    return "\n".join(L)
+
+
 def digest_email(window_hours: float):
     """Build the full (subject, text, html, images) for a periodic digest.
 
@@ -634,7 +773,11 @@ def digest_email(window_hours: float):
     DIFFERENT digest (claims, decisions waiting, draft status) instead of
     the research-mode "what we tried" feed. Either way, the system-stats
     block (disk / RAM / GPU + warnings like low disk) is appended at the
-    bottom so the user sees infra issues without opening the UI."""
+    bottom so the user sees infra issues without opening the UI.
+
+    PLAN item #9: every research-mode digest opens with a "Council
+    health" section that surfaces consecutive ignored-directive count,
+    age of the last kept run, and a bold STALLED / HEALTHY status."""
     try:
         from . import paper as _paper
         if _paper.project_mode() == "paper":
@@ -674,6 +817,11 @@ def digest_email(window_hours: float):
              ("best", f"{best.headline_metric:.4f}" if best else "—"),
              ("done {}h".format(int(window_hours)), str(len(finished))),
              ("running", str(len(running)))]
+    # Council-health section (PLAN item #9) — built once, used in both
+    # the HTML body (rendered at the very top, before the headline cards)
+    # and the text/plain alternative (rendered as a "### Council health"
+    # block at the top of the email body).
+    health = _council_health_payload()
     images = {}
     # Generate chart pngs FRESH at send time (no caching) so the email reflects
     # what just happened, not an hour-old snapshot.
@@ -691,7 +839,8 @@ def digest_email(window_hours: float):
                 images["losses"] = lp
         except Exception as e:                          # noqa: BLE001
             print(f"[notify] losses chart error: {e}", flush=True)
-    body = (f'<p style="margin:0 0 10px;">How '
+    body = (_council_health_html(health)
+            + f'<p style="margin:0 0 10px;">How '
             f'<b style="color:#E6E8EB;">{_esc(pname)}</b> has progressed over '
             f'the last {window_hours:g}h:</p>' + _stat_cards(cards))
     if "progress" in images:
@@ -704,7 +853,10 @@ def digest_email(window_hours: float):
     if "losses" in images:
         body += _img("losses", "Recent training curves")
     body += _system_stats_block()
-    text += "\n\n" + _system_stats_text()
+    # text/plain: council-health section goes ABOVE the original summary
+    # text so the user sees the STALLED/HEALTHY status before the run
+    # tables (matches the HTML layout).
+    text = _council_health_text(health) + text + "\n\n" + _system_stats_text()
     html = _shell(f"{window_hours:g}h digest — {pname}", body,
                   _dashboard_url(_cfg()))
     return subject, text, html, images
@@ -1205,9 +1357,24 @@ def start_scheduler() -> None:
     print("[notify] digest scheduler started", flush=True)
 
 
+def _stalled_override_active() -> bool:
+    """When the stuck detector reports state == 'stalled', the digest
+    cadence is overridden — we send IMMEDIATELY regardless of user
+    setting (PLAN item #9: "send the digest at immediate cadence
+    regardless of user setting"). Best-effort; degrades to False on any
+    error so the scheduler never blocks on a probe."""
+    try:
+        from . import stuck_detector
+        snap = stuck_detector.compute_state()
+        return (snap.get("state") == "stalled")
+    except Exception:                                       # noqa: BLE001
+        return False
+
+
 def _loop() -> None:
     last_sent = time.time()        # anchor: never fire instantly on boot
     last_cad: str | None = None
+    last_stalled_send = 0.0        # debounce stalled override pings
     while True:
         time.sleep(60)
         try:
@@ -1217,6 +1384,22 @@ def _loop() -> None:
                 last_cad = cad
                 last_sent = time.time()              # restart the window
             hrs = _cadence_hours(cad)
+            # PLAN item #9 cadence override: when the council is stalled,
+            # ignore the user's cadence (even "off" or "immediate") and
+            # fire the digest right now — but no more than once an hour
+            # so a long-running stall doesn't spam the inbox.
+            if _stalled_override_active() and not emails_paused() \
+                    and time.time() - last_stalled_send > 3600:
+                try:
+                    use_hrs = hrs if hrs is not None else 1.0
+                    subject, text, html, images = digest_email(use_hrs)
+                    if subject:
+                        send(subject, text, html, images)
+                        last_stalled_send = time.time()
+                        last_sent = time.time()
+                except Exception as e:                  # noqa: BLE001
+                    print(f"[notify] stalled-override send failed: "
+                          f"{e}", flush=True)
             if hrs is None:                           # off / immediate
                 continue
             if time.time() - last_sent >= hrs * 3600:

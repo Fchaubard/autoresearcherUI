@@ -465,6 +465,15 @@ def cycle(force: bool = False) -> dict | None:
             return cycle_paper(force=force)
     except Exception:
         pass
+    # Stuck detector tick (PLAN item #8): runs every PI cycle, fires
+    # state-transition side-effects (chat bubble / event / escalation
+    # email) when the loop's health worsens. Cheap pure-DB read; never
+    # blocks the PI from doing its job below.
+    try:
+        from . import stuck_detector
+        stuck_detector.tick()
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[pi] stuck_detector tick failed: {e}", flush=True)
     cfg = _settings()
     if not cfg.get("pi_agent_enabled", True) and not force:
         return None
