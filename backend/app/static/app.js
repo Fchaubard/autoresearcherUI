@@ -539,16 +539,28 @@ async function pollResearchHealth() {
 function openResearchHealth() {
   const s = _LAST_HEALTH || { state: 'healthy', details: {}, reason: '' };
   const d = s.details || {};
+  // Modal layout — collision_rate was removed 2026-06-05 because it
+  // counted deliberate replication and HP sweeps as 'bad', confused
+  // operators, and never drove a state anyway. Show what actually
+  // matters: GPU work signal + recent novelty rejections.
+  const gw = d.gpus_working;
+  const gt = d.gpus_total;
+  const idle = d.idle_for_sec || 0;
   const msg = [
     'State: ' + (s.state || 'healthy'),
     'Reason: ' + (s.reason || '—'),
+    'GPUs working: ' + (gw != null && gt != null
+                        ? (gw + ' / ' + gt) : '?'),
+    (idle > 0
+      ? ('GPUs idle for: ' + Math.floor(idle / 60) + ' min')
+      : 'GPUs idle for: 0 min'),
     'Top open directive: ' + (d.top_directive || '(none detected)'),
     'Consecutive reviews on same directive: '
       + (d.consecutive_unimplemented_reviews || 0),
-    'Collision rate (last ' + (d.collision_window || 20) + ' runs): '
-      + ((d.collision_rate ?? 0) * 100).toFixed(0) + '%',
     'Novel kept runs (last ' + (d.kept_novel_window || 50) + ' runs): '
       + (d.kept_novel_in_window ?? 0),
+    'Novelty-gate rejections (last hour): '
+      + (d.recent_novelty_rejections ?? 0),
   ].join('\n');
   aruiAlert(msg, { title: 'Research health', okText: 'Close' });
 }
