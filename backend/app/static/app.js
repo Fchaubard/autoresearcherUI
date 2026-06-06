@@ -7271,6 +7271,25 @@ async function renderAnalysis(c) {
   renderAnaBaselineTag(c);
   renderAnaTable(c);
   renderAnaPanels(c);
+  // Belt-and-suspenders against the "squished panels / black right side on
+  // first open, fixed by a refresh" bug. On SPA navigation the viewpane is
+  // built (and its panels + canvases first measured) before the browser has
+  // performed layout, so the auto-fit panel grid can resolve to a single
+  // narrow column and each canvas can latch onto a 0/fallback width. A full
+  // page refresh hides it because load/font/resize events force a reflow that
+  // re-runs the reactive grid + redraws the canvases — but plain SPA nav
+  // fires none of those events, so the stale layout sticks. Force that reflow
+  // ourselves once layout has settled: read offsetWidth (synchronous reflow,
+  // so auto-fit recomputes its real column count) then redraw every panel so
+  // each canvas re-measures its now-correct clientWidth. Double rAF guarantees
+  // we run after attach + first paint. Cheap and idempotent.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    try {
+      const root = AnaState.container || c;
+      void root.offsetWidth;               // force synchronous layout
+      refreshAllPanels();                  // redraw every chart at true size
+    } catch (e) { /* view torn down before the frame fired */ }
+  }));
 }
 
 function renderAnaBaselineTag(c) {
