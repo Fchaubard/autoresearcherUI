@@ -162,6 +162,53 @@ button{cursor:pointer}
 .sb-blockers ul{margin:6px 0 0;padding-left:16px;max-width:640px;
   color:var(--text-2);line-height:1.5}
 .sb-blockers li{margin:2px 0}
+.sb-alert-link{cursor:pointer;text-decoration:underline;
+  text-decoration-style:dotted;text-underline-offset:2px}
+.sb-alert-link:hover{filter:brightness(1.25)}
+/* council code-review modal */
+.crv-modal{width:640px;max-width:94vw;max-height:86vh;overflow:auto;
+  padding:18px 20px}
+.crv-hd{display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:8px}
+.crv-hd h2{font-size:16px;margin:0;color:var(--text)}
+.crv-x{background:none;border:0;color:var(--muted);font-size:15px;cursor:pointer}
+.crv-x:hover{color:var(--text)}
+.crv-meta{display:flex;flex-wrap:wrap;gap:8px;font-size:11.5px;
+  color:var(--muted);margin-bottom:10px}
+.crv-status{font-weight:600;text-transform:uppercase;letter-spacing:.5px;
+  font-size:10.5px;padding:2px 8px;border-radius:5px;
+  background:var(--panel-3);color:var(--text-2)}
+.crv-status.crv-pending{background:#f59e0b22;color:#fbbf24}
+.crv-status.crv-approved{background:#22c55e1f;color:var(--ok)}
+.crv-status.crv-rejected,.crv-status.crv-blocked_on_preflight{
+  background:#f43f5e22;color:#f87171}
+.crv-summary{font-size:12.5px;color:var(--text-2);margin-bottom:12px;
+  line-height:1.5}
+.crv-revs{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+.crv-rev{border:1px solid var(--border);border-radius:8px;padding:9px 11px;
+  background:var(--panel)}
+.crv-rev-h{display:flex;align-items:center;justify-content:space-between;
+  font-size:12.5px;color:var(--text)}
+.crv-badge{font-size:10.5px;font-family:var(--mono);padding:2px 7px;
+  border-radius:5px}
+.crv-badge.crv-ok{background:#0d2a1b;color:#34D399}
+.crv-badge.crv-bad{background:#2a1416;color:#f87171}
+.crv-badge.crv-fail{background:#1f1a14;color:#fbbf24}
+.crv-badge.crv-wait{background:var(--panel-3);color:var(--muted)}
+.crv-rev-sum{font-size:11.5px;color:var(--text-2);margin-top:5px;line-height:1.5}
+.crv-bl{margin:6px 0 0;padding-left:16px;font-size:11px;color:var(--text-2);
+  line-height:1.5}
+.crv-wait{font-size:12px;color:var(--muted);padding:8px 2px}
+.crv-prompt{margin-top:8px;border-top:1px solid var(--border);padding-top:8px}
+.crv-prompt > summary{cursor:pointer;font-size:11.5px;color:var(--accent);
+  list-style:none}
+.crv-prompt > summary::-webkit-details-marker{display:none}
+.crv-prompt > summary::before{content:'▸ ';font-size:9px}
+.crv-prompt[open] > summary::before{content:'▾ '}
+.crv-prompt pre{margin:8px 0 0;max-height:280px;overflow:auto;font-size:10.5px;
+  line-height:1.45;color:var(--text-2);background:var(--bg);padding:10px;
+  border-radius:6px;white-space:pre-wrap;word-break:break-word;
+  font-family:var(--mono)}
 
 /* ── hero / progress ──────────────────────────────────────────────────── */
 .hero{padding:14px 18px 8px;display:flex;flex-direction:column;min-height:0}

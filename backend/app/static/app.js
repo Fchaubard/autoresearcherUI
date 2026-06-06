@@ -914,12 +914,119 @@ function renderBlessBanner(s) {
     (s.status === 'rejected'
       ? `<button class="btn xs" id="bless-clear">Clear &amp; await re-review` +
         `</button>` : '');
+  // Make the alert text clickable → opens a modal with the review prompt,
+  // who's reviewing, per-reviewer progress, and elapsed time. (Not for
+  // not_requested, which has nothing to show yet.)
+  const txEl = inline.querySelector('.sb-alert-tx');
+  if (txEl && s.status !== 'not_requested') {
+    txEl.classList.add('sb-alert-link');
+    txEl.title = 'Click to see the review prompt + live progress';
+    txEl.onclick = () => openCouncilReviewModal();
+  }
   const clr = document.getElementById('bless-clear');
   if (clr) clr.onclick = async () => {
     clr.disabled = true; clr.textContent = 'Clearing…';
     await post('/council/bless/reset', {});
     pollBlessStatus();
   };
+}
+
+/* Council code-review modal — opened by clicking the status-bar bless alert.
+   Shows what the council is reviewing (the reviewer criteria + a codebase
+   preview), WHO is reviewing, each reviewer's verdict as it lands, and how
+   long it has been running. Auto-refreshes every 3s while a review is in
+   flight (the backend writes incremental progress into the pending bless
+   state — see council._bless_worker). */
+let _councilModalTimer = null;
+function closeCouncilReviewModal() {
+  if (_councilModalTimer) { clearInterval(_councilModalTimer); _councilModalTimer = null; }
+  const s = document.getElementById('council-review-scrim');
+  if (s) s.remove();
+  document.removeEventListener('keydown', _councilModalKey);
+}
+function _councilModalKey(e) { if (e.key === 'Escape') closeCouncilReviewModal(); }
+async function openCouncilReviewModal() {
+  let scrim = document.getElementById('council-review-scrim');
+  if (!scrim) {
+    scrim = el('div', 'mscrim');
+    scrim.id = 'council-review-scrim';
+    scrim.onclick = (e) => { if (e.target === scrim) closeCouncilReviewModal(); };
+    scrim.append(el('div', 'modal crv-modal'));
+    document.body.append(scrim);
+    document.addEventListener('keydown', _councilModalKey);
+  }
+  await _paintCouncilReviewModal();
+  if (_councilModalTimer) clearInterval(_councilModalTimer);
+  _councilModalTimer = setInterval(_paintCouncilReviewModal, 3000);
+}
+async function _paintCouncilReviewModal() {
+  const scrim = document.getElementById('council-review-scrim');
+  if (!scrim) return;
+  const m = scrim.querySelector('.crv-modal');
+  let s;
+  try { s = await api('/council/bless/status'); } catch (e) { return; }
+  if (!s) return;
+  const rv = s.review || {};
+  const verdicts = s.verdicts || {};
+  const reviewers = (rv.reviewers && rv.reviewers.length)
+    ? rv.reviewers : Object.keys(verdicts);
+  let elapsed = '';
+  if (rv.started_at) {
+    const secs = Math.max(0,
+      Math.round((Date.now() - new Date(rv.started_at).getTime()) / 1000));
+    elapsed = secs < 60 ? secs + 's'
+      : Math.floor(secs / 60) + 'm ' + (secs % 60) + 's';
+  }
+  const statusLabel = ({
+    pending: 'In progress', approved: 'Approved', rejected: 'Changes requested',
+    blocked_on_preflight: 'Blocked on pre-flight', not_requested: 'Not requested',
+  })[s.status] || s.status;
+  const doneCount = reviewers.filter(r => verdicts[r]).length;
+  const revRow = (r) => {
+    const v = verdicts[r];
+    let badge = '⏳ reviewing…', cls = 'crv-wait';
+    if (v && v.approved === true) { badge = '✓ approve'; cls = 'crv-ok'; }
+    else if (v && v.approved === false) { badge = '✗ changes'; cls = 'crv-bad'; }
+    else if (v && v.approved === null) { badge = '— call failed'; cls = 'crv-fail'; }
+    const bl = (v && (v.blockers || []).length)
+      ? `<ul class="crv-bl">` +
+        v.blockers.slice(0, 8).map(b => `<li>${esc(b)}</li>`).join('') +
+        '</ul>' : '';
+    return `<div class="crv-rev"><div class="crv-rev-h"><b>${esc(r)}</b>` +
+      `<span class="crv-badge ${cls}">${badge}</span></div>` +
+      (v && v.summary ? `<div class="crv-rev-sum">${esc(v.summary)}</div>` : '') +
+      bl + '</div>';
+  };
+  m.innerHTML =
+    `<div class="crv-hd"><h2>Council code review</h2>` +
+    `<button class="crv-x" id="crv-x" title="Close">✕</button></div>` +
+    `<div class="crv-meta">` +
+      `<span class="crv-status crv-${esc(s.status)}">${esc(statusLabel)}</span>` +
+      (elapsed ? `<span>· elapsed ${esc(elapsed)}</span>` : '') +
+      (reviewers.length
+        ? `<span>· ${doneCount}/${reviewers.length} reviewers done</span>` : '') +
+      (rv.codebase_chars
+        ? `<span>· ${(rv.codebase_chars / 1000).toFixed(1)}k chars reviewed</span>` : '') +
+    '</div>' +
+    (s.summary ? `<div class="crv-summary">${esc(s.summary)}</div>` : '') +
+    `<div class="crv-revs">` +
+      (reviewers.length ? reviewers.map(revRow).join('')
+        : '<div class="crv-wait">Waiting for the review to start…</div>') +
+    '</div>' +
+    (rv.system_prompt
+      ? `<details class="crv-prompt"><summary>Review criteria (system prompt ` +
+        `sent to each reviewer)</summary><pre>${esc(rv.system_prompt)}</pre>` +
+        `</details>` : '') +
+    (rv.user_preview
+      ? `<details class="crv-prompt"><summary>Codebase being reviewed ` +
+        `(preview)</summary><pre>${esc(rv.user_preview)}</pre></details>` : '');
+  const x = m.querySelector('#crv-x');
+  if (x) x.onclick = closeCouncilReviewModal;
+  // Stop polling once the review reaches a terminal state (keep the final
+  // result on screen until the user closes it).
+  if (s.status !== 'pending' && _councilModalTimer) {
+    clearInterval(_councilModalTimer); _councilModalTimer = null;
+  }
 }
 
 function header() {

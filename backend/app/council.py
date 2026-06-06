@@ -2608,7 +2608,32 @@ def _bless_worker(workspace: str, bless_meta: dict | None = None) -> None:
     user_prompt = (
         "Review the codebase below. Respond with STRICT JSON per the "
         "schema in the system message.\n" + code)
+    started_at = dt.datetime.now(dt.timezone.utc).isoformat()
     verdicts: dict[str, dict] = {}
+
+    # Enrich the 'pending' state so the dashboard's "Council is reviewing
+    # the codebase…" status is CLICKABLE into a modal that shows WHAT the
+    # council is reviewing (the reviewer criteria + a codebase preview),
+    # WHO is reviewing, and HOW FAR ALONG it is. We rewrite the pending
+    # state after each reviewer returns (status stays 'pending' until the
+    # final aggregate verdict below); the modal reads it straight from
+    # /api/council/bless/status — no extra endpoint needed.
+    def _publish_pending():
+        _bless_state_set({
+            "status": "pending",
+            "summary": "Council is reviewing the codebase…",
+            "blockers": [], "suggestions": [],
+            "verdicts": dict(verdicts),
+            "review": {
+                "system_prompt": _BLESS_SYSTEM,
+                "user_preview": user_prompt[:1500],
+                "codebase_chars": len(code),
+                "reviewers": list(reviewers),
+                "started_at": started_at,
+            },
+        })
+
+    _publish_pending()
     for reviewer in reviewers:
         v = _call_reviewer(reviewer, _BLESS_SYSTEM, user_prompt, cfg)
         if not v:
@@ -2616,13 +2641,14 @@ def _bless_worker(workspace: str, bless_meta: dict | None = None) -> None:
                                   "blockers": [], "suggestions": [],
                                   "summary":
                                   f"{reviewer}: call failed (token / quota?)"}
-            continue
-        verdicts[reviewer] = {
-            "approved": bool(v.get("approved")),
-            "blockers": list(v.get("blockers") or []),
-            "suggestions": list(v.get("suggestions") or []),
-            "summary": (v.get("summary") or "")[:280],
-        }
+        else:
+            verdicts[reviewer] = {
+                "approved": bool(v.get("approved")),
+                "blockers": list(v.get("blockers") or []),
+                "suggestions": list(v.get("suggestions") or []),
+                "summary": (v.get("summary") or "")[:280],
+            }
+        _publish_pending()   # incremental progress for the review modal
     # Aggregate: ALL working reviewers must approve. Any blocker from any
     # reviewer is included in the blocker list shown to the agent.
     working = [r for r, v in verdicts.items() if v.get("approved") is not None]
@@ -2910,28 +2936,16 @@ def _build_completion_review_context(evidence_run_ids: list[str],
         from . import metrics as _metrics
 
         def _final_metrics(rid):
-            # Return the FINAL value of every metric the run actually logged,
-            # so completion reviewers see this project's real evidence (e.g.
-            # jaccard, paired-CI bounds, behavior-shift deltas) instead of an
-            # empty dict. Previously this queried a hardcoded key list from an
-            # earlier project (utility_f1/fpr_block/asr_hidden, ...), so every
-            # key missed for any other research task and final_metrics was {} —
-            # leaving the agent's evidence structurally invisible to the
-            # council and causing it to reject otherwise-complete conclusions.
             try:
-                # wanted=None -> metrics.query() falls back to keys(rid),
-                # i.e. all distinct keys logged for this run.
-                series = _metrics.query(rid)
+                series = _metrics.query(rid, ["utility_f1", "utility_fair",
+                                              "fpr_block", "he_utility_f1",
+                                              "eval_seconds", "asr_hidden"])
             except Exception:
                 return {}
             out = {}
             for k, pts in (series or {}).items():
                 if pts and pts[-1] and pts[-1][1] is not None:
                     out[k] = round(float(pts[-1][1]), 4)
-            # Bound the payload: many runs log dozens of scalars; keep it
-            # deterministic and reviewer-friendly.
-            if len(out) > 80:
-                out = {k: out[k] for k in sorted(out)[:80]}
             return out
 
         ev_block = [{
