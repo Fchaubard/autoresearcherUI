@@ -127,6 +127,42 @@ button{cursor:pointer}
 .counts b{color:var(--text);font-family:var(--mono);font-weight:600}
 .counts .c-run b{color:var(--warn)} .counts .c-fail b{color:var(--crash)}
 
+/* ── consolidated status bar (dashboard) ───────────────────────────────── */
+/* full-width row between the header and the content, added via .has-statusbar
+   so other views keep the original two-row grid. */
+.app.has-statusbar{grid-template-rows:54px auto 1fr}
+.app.has-statusbar .left{grid-row:3}
+.app.has-statusbar .rail{grid-row:3}
+.statusbar{grid-column:1/-1;grid-row:2;display:flex;align-items:center;
+  gap:16px;flex-wrap:wrap;padding:7px 18px;background:#0c0f13;
+  border-bottom:1px solid var(--border);min-height:40px;
+  box-shadow:inset 3px 0 0 transparent}
+.statusbar.sb-warn{box-shadow:inset 3px 0 0 var(--warn)}
+.statusbar.sb-bad{box-shadow:inset 3px 0 0 var(--crash)}
+.statusbar .rh-pill{margin:0}
+.sb-spacer{flex:1;min-width:8px}
+/* pre-flight SOP stepper */
+.sb-preflight{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.pf-title{font-size:10px;text-transform:uppercase;letter-spacing:.6px;
+  color:var(--muted)}
+.pf-arrow{color:#3a4150;font-size:11px}
+/* inline bless / alert area */
+.sb-alert{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  font-size:11.5px;color:var(--text-2)}
+.sb-alert:empty{display:none}
+.sb-alert-ic{font-size:12px}
+.sb-alert-tx{color:var(--text-2)}
+.statusbar.sb-bad .sb-alert-tx{color:var(--crash)}
+.statusbar.sb-warn .sb-alert-tx{color:var(--warn)}
+.sb-blockers{font-size:11px}
+.sb-blockers > summary{cursor:pointer;color:var(--muted);list-style:none}
+.sb-blockers > summary::-webkit-details-marker{display:none}
+.sb-blockers > summary::before{content:'▸ ';font-size:9px}
+.sb-blockers[open] > summary::before{content:'▾ '}
+.sb-blockers ul{margin:6px 0 0;padding-left:16px;max-width:640px;
+  color:var(--text-2);line-height:1.5}
+.sb-blockers li{margin:2px 0}
+
 /* ── hero / progress ──────────────────────────────────────────────────── */
 .hero{padding:14px 18px 8px;display:flex;flex-direction:column;min-height:0}
 .hero-top{display:flex;align-items:baseline;gap:10px;margin-bottom:6px}
@@ -855,15 +891,17 @@ body.resizing{user-select:none}
 .icard-rv-new{font-size:10.5px;color:var(--muted);margin-top:6px}
 .icard-rv-new code{background:var(--panel-3);padding:1px 5px;border-radius:4px;
   margin-right:4px;color:var(--text-2);font-size:10px}
-.feed-compact{margin:8px 13px 12px;background:var(--panel);
-  border:1px solid var(--border);border-radius:9px;overflow:hidden}
-.feed-compact > summary{cursor:pointer;padding:8px 11px;font-size:10px;
+/* Activity feed — de-condensed: a flush first-class section in the rail
+   (like "Conversation" / "Completed experiments"), not a boxed, capped,
+   double-scrolling widget. It flows inside the rail's own scroll. */
+.feed-compact{margin:2px 0 10px;border-top:1px solid var(--border)}
+.feed-compact > summary{cursor:pointer;padding:10px 13px 4px;font-size:10px;
   font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;
   list-style:none}
 .feed-compact > summary::-webkit-details-marker{display:none}
 .feed-compact > summary::before{content:'▸ ';color:var(--muted);font-size:9px}
 .feed-compact[open] > summary::before{content:'▾ '}
-.feed-compact > .feed{max-height:280px;padding:6px 10px 10px}
+.feed-compact > .feed{padding:2px 13px 10px}
 
 /* ── drawer ───────────────────────────────────────────────────────────── */
 .scrim{position:fixed;inset:0;background:#000a;opacity:0;pointer-events:none;
@@ -1405,6 +1443,8 @@ body.resizing{user-select:none}
 /* ── mobile ───────────────────────────────────────────────────────────── */
 @media(max-width:880px){
   .app{grid-template-columns:1fr;grid-template-rows:50px 1fr}
+  .app.has-statusbar{grid-template-rows:50px auto 1fr}
+  .app.has-statusbar .left,.app.has-statusbar .rail{grid-row:3}
   .left{grid-row:2;grid-template-rows:minmax(240px,40%) auto 1fr}
   .rail{display:none}
   .rail.show{display:grid;position:fixed;top:50px;left:0;right:0;bottom:0;z-index:30}

@@ -480,7 +480,10 @@ function render() {
     main.classList.add('paper-left');
     app.append(header(), main, rail(), el('button', 'fab', '✉'));
   } else {
-    app.append(header(), left(), rail(), el('button', 'fab', '✉'));
+    // Dashboard: header + consolidated status bar (full-width row under the
+    // header) + main column + rail. has-statusbar adds the grid row.
+    app.classList.add('has-statusbar');
+    app.append(header(), statusBar(), left(), rail(), el('button', 'fab', '✉'));
   }
   applyRailW();
   document.querySelector('.fab').onclick = () =>
@@ -844,99 +847,73 @@ async function pollBlessStatus() {
 }
 
 function renderPreflightPills(pf) {
-  // 3-pill SOP banner: [static_overfit] [uniform_init] [blessed].
-  // Lives ABOVE the bless-banner so the agent's progress through the
-  // 3-step SOP is always at-a-glance. Hidden once all three pass.
-  const existing = document.getElementById('preflight-pills');
-  if (existing) existing.remove();
-  if (!pf) return;
-  const allOk = pf.static_overfit_passed && pf.uniform_init_passed
-    && pf.blessed;
-  if (allOk) return;
-  const pill = (label, ok) =>
+  // 3-step pre-flight SOP stepper, rendered into the status bar
+  // (#preflight-pills container). Always visible (operator preference) so
+  // the gate state is explicit even when green:
+  //   static_overfit → uniform_init → council bless
+  const host = document.getElementById('preflight-pills');
+  if (!host) return;                       // not on the dashboard
+  if (!pf) { host.innerHTML = ''; return; }
+  const step = (label, ok) =>
     `<span class="pf-pill ${ok ? 'pf-pill-ok' : 'pf-pill-bad'}">` +
       `${ok ? '✓' : '·'} ${esc(label)}</span>`;
-  const banner = el('div', 'preflight-banner');
-  banner.id = 'preflight-pills';
-  banner.innerHTML =
-    `<div class="pf-row">` +
-      `<div class="pf-title">Pre-flight SOP</div>` +
-      pill('static_overfit', !!pf.static_overfit_passed) +
-      pill('uniform_init', !!pf.uniform_init_passed) +
-      pill('blessed', !!pf.blessed) +
-    '</div>';
-  const app = document.getElementById('app');
-  const hdr = app && app.querySelector('.hdr');
-  if (hdr) hdr.insertAdjacentElement('afterend', banner);
-  else if (app) app.insertBefore(banner, app.firstChild);
+  host.innerHTML =
+    `<span class="pf-title">pre-flight</span>` +
+    step('static_overfit', !!pf.static_overfit_passed) +
+    `<span class="pf-arrow">→</span>` +
+    step('uniform_init', !!pf.uniform_init_passed) +
+    `<span class="pf-arrow">→</span>` +
+    step('bless', !!pf.blessed);
 }
 
 function renderBlessBanner(s) {
-  const existing = document.getElementById('bless-banner');
-  if (existing) existing.remove();
-  // Always paint the 3-pill SOP banner first so it sits above any
-  // bless banner. Hidden when all three pass.
+  // Always paint the 3-step stepper first.
   renderPreflightPills(s && s.preflight);
-  // Approved state — small badge in the header instead of a full banner.
+  const sb = document.getElementById('statusbar');
+  const inline = document.getElementById('bless-inline');
+  if (!inline) return;                     // not on the dashboard
+  // Approved (or unknown) → no alert; the blessed step shows ✓ in the stepper.
   if (!s || s.status === 'approved') {
-    const hdr = document.querySelector('.hdr');
-    if (hdr && !hdr.querySelector('.bless-pill')) {
-      const pill = el('span', 'bless-pill bless-pill-ok',
-        '✓ code blessed');
-      pill.title = (s && s.summary) || 'Council approved the codebase';
-      hdr.appendChild(pill);
-    }
+    inline.innerHTML = '';
+    if (sb) sb.classList.remove('sb-warn', 'sb-bad');
     return;
   }
-  // not_requested / pending / rejected / blocked_on_preflight — full
-  // banner under the header.
-  const colorClass = ({
-    pending: 'bless-pending',
-    rejected: 'bless-rejected',
-    not_requested: 'bless-waiting',
-    blocked_on_preflight: 'bless-rejected',
-  })[s.status] || 'bless-waiting';
-  const icon = ({
-    pending: '⏳',
-    rejected: '✗',
-    not_requested: '·',
-    blocked_on_preflight: '⚠',
-  })[s.status] || '·';
-  const title = ({
-    pending: 'Council is reviewing the codebase…',
-    rejected: 'Council rejected the codebase — agent must fix before any '
-      + 'run can launch',
-    not_requested: 'Awaiting code review — the agent will request it after '
-      + 'scaffolding the baseline',
-    blocked_on_preflight: 'Bless blocked — pre-flight SOP (steps 1+2) '
-      + 'must pass before council review can start',
-  })[s.status] || s.summary || 'Code review';
-  const blockersHtml = (s.blockers || []).length
-    ? '<ul class="bless-blockers">' +
-      s.blockers.slice(0, 12).map(b => `<li>${esc(b)}</li>`).join('') +
-      (s.blockers.length > 12
-        ? `<li>… and ${s.blockers.length - 12} more</li>` : '') +
-      '</ul>'
+  // not_requested / pending / rejected / blocked_on_preflight → inline,
+  // color-coded alert INSIDE the status bar (no stray banner top or bottom).
+  const meta = ({
+    pending:              { cls: 'sb-warn', icon: '⏳',
+      title: 'Council is reviewing the codebase…' },
+    not_requested:        { cls: '', icon: '·',
+      title: 'Awaiting code review — the agent will request it after '
+        + 'scaffolding the baseline' },
+    rejected:             { cls: 'sb-bad', icon: '✗',
+      title: 'Council rejected the codebase — agent must fix before any '
+        + 'run launches' },
+    blocked_on_preflight: { cls: 'sb-bad', icon: '⚠',
+      title: 'Bless blocked — pre-flight steps 1+2 must pass before council '
+        + 'review can start' },
+  })[s.status] || { cls: '', icon: '·', title: s.summary || 'Code review' };
+  if (sb) {
+    sb.classList.remove('sb-warn', 'sb-bad');
+    if (meta.cls) sb.classList.add(meta.cls);
+  }
+  const blockers = s.blockers || [];
+  const blockersHtml = blockers.length
+    ? `<details class="sb-blockers"><summary>${blockers.length} blocker` +
+      `${blockers.length > 1 ? 's' : ''}</summary><ul>` +
+      blockers.slice(0, 12).map(b => `<li>${esc(b)}</li>`).join('') +
+      (blockers.length > 12
+        ? `<li>… and ${blockers.length - 12} more</li>` : '') +
+      '</ul></details>'
     : '';
-  const banner = el('div', `bless-banner ${colorClass}`);
-  banner.id = 'bless-banner';
-  banner.innerHTML =
-    `<div class="bless-banner-row">` +
-      `<div class="bless-icon">${icon}</div>` +
-      `<div class="bless-text"><b>${esc(title)}</b>` +
-      (s.summary && s.summary !== title
-        ? `<div class="bless-summary">${esc(s.summary)}</div>` : '') +
-      blockersHtml +
-      '</div>' +
-      (s.status === 'rejected'
-        ? '<button class="btn xs" id="bless-clear" title="Mark as ' +
-          'cleared — the agent will re-request review next">Clear &amp; ' +
-          'await re-review</button>' : '') +
-    '</div>';
-  const app = document.getElementById('app');
-  const hdr = app && app.querySelector('.hdr');
-  if (hdr) hdr.insertAdjacentElement('afterend', banner);
-  else if (app) app.insertBefore(banner, app.firstChild);
+  inline.innerHTML =
+    `<span class="sb-alert-ic">${meta.icon}</span>` +
+    `<span class="sb-alert-tx" title="${esc(s.summary || meta.title)}">` +
+      `${esc(meta.title)}</span>` +
+    blockersHtml +
+    (s.status === 'rejected'
+      ? `<button class="btn xs" id="bless-clear">Clear &amp; await re-review` +
+        `</button>` : '');
   const clr = document.getElementById('bless-clear');
   if (clr) clr.onclick = async () => {
     clr.disabled = true; clr.textContent = 'Clearing…';
@@ -960,17 +937,11 @@ function header() {
   }
   const dir = (p.metric_direction === 'minimize') ? '↓' : '↑';
   h.append(el('div', 'proj', esc(p.name || 'project')));
-  // Research health pill (PLAN item #8): colour-coded indicator next to
-  // the project name. Empty placeholder is appended now so layout is
-  // stable; the polling fetch in pollResearchHealth() fills it in.
-  const hp = el('div', 'pill rh-pill rh-healthy',
-    `<span class="dot"></span>Healthy`);
-  hp.id = 'research-health';
-  hp.title = 'Research loop health — click for details';
-  hp.style.cursor = 'pointer';
-  hp.onclick = openResearchHealth;
-  h.append(hp);
   h.append(el('div', 'metric', `${esc(p.validation_metric || '')} ${dir}`));
+  // The research-health pill, run counts, GPU strip and the preflight/bless
+  // state used to clutter the header (and float as separate banners). They
+  // are now consolidated into a single status bar directly below the header
+  // — see statusBar(). The header stays clean: brand · project · metric.
   // The project-status pill ('running' / 'awaiting agent' / 'done') used to
   // sit here next to the metric. It echoed Project.status (a coarse static
   // field set at onboarding) and didn't track anything dynamic — meanwhile
@@ -992,17 +963,48 @@ function header() {
       (days != null ? ` · ${esc(days.toFixed ? days.toFixed(1) : days)}d` : '')));
   }
   h.append(el('div', 'spacer'));
-  const strip = el('div', 'gpu-strip'); strip.id = 'gpus';
-  h.append(strip);
+  return h;
+}
+
+/* Consolidated research status bar — full-width row directly under the
+ * header (dashboard only). Single source of truth for "is the loop healthy
+ * and unblocked, and what is it doing": the research-health/phase pill, the
+ * 3-step pre-flight SOP stepper (static_overfit → uniform_init → council
+ * bless, always visible), an inline alert area that lights up when the
+ * council rejects / the loop stalls (so there is never a stray banner top
+ * or bottom), and the run counts + GPU strip. The polling fns fill these
+ * by id: pollResearchHealth() → #research-health, pollGpus() → #gpus,
+ * pollBlessStatus()/renderPreflightPills()/renderBlessBanner() →
+ * #preflight-pills + #bless-inline. */
+function statusBar() {
+  const sb = el('div', 'statusbar'); sb.id = 'statusbar';
+  // health / phase pill (filled by pollResearchHealth)
+  const hp = el('div', 'pill rh-pill rh-healthy', `<span class="dot"></span>Healthy`);
+  hp.id = 'research-health';
+  hp.title = 'Research loop health — click for details';
+  hp.style.cursor = 'pointer';
+  hp.onclick = openResearchHealth;
+  sb.append(hp);
+  // pre-flight SOP stepper (filled by renderPreflightPills; always visible)
+  const pf = el('div', 'sb-preflight'); pf.id = 'preflight-pills';
+  sb.append(pf);
+  // inline bless/alert area (filled by renderBlessBanner when not approved)
+  const alert = el('div', 'sb-alert'); alert.id = 'bless-inline';
+  sb.append(alert);
+  sb.append(el('div', 'sb-spacer'));
+  // run counts
   const runs = S.runs.filter(r => r.status === 'running').length;
   const q = S.ideas.filter(i => i.status === 'not_implemented').length;
   const done = S.runs.filter(r => ['kept', 'discarded'].includes(r.status)).length;
   const fail = S.runs.filter(r => r.status === 'crashed').length;
-  h.append(el('div', 'counts',
+  sb.append(el('div', 'counts',
     `<span class="c-run">running <b>${runs}</b></span>` +
     `<span>queued <b>${q}</b></span><span>done <b>${done}</b></span>` +
     `<span class="c-fail">failed <b>${fail}</b></span>`));
-  return h;
+  // GPU strip (filled by pollGpus)
+  const strip = el('div', 'gpu-strip'); strip.id = 'gpus';
+  sb.append(strip);
+  return sb;
 }
 
 /* ── styled dialog helpers (replace native confirm/alert/prompt) ────── */
