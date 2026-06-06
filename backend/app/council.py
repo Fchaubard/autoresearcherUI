@@ -2937,9 +2937,11 @@ def _build_completion_review_context(evidence_run_ids: list[str],
 
         def _final_metrics(rid):
             try:
-                series = _metrics.query(rid, ["utility_f1", "utility_fair",
-                                              "fpr_block", "he_utility_f1",
-                                              "eval_seconds", "asr_hidden"])
+                # Query ALL keys the run actually logged (wanted=None falls back
+                # to metrics.keys(rid)). A hardcoded key list from an earlier
+                # project surfaced {} for every other task, making real evidence
+                # invisible to the completion reviewers. Project-agnostic now.
+                series = _metrics.query(rid)
             except Exception:
                 return {}
             out = {}
