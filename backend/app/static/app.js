@@ -995,7 +995,8 @@ function statusBar() {
   // run counts
   const runs = S.runs.filter(r => r.status === 'running').length;
   const q = S.ideas.filter(i => i.status === 'not_implemented').length;
-  const done = S.runs.filter(r => ['kept', 'discarded'].includes(r.status)).length;
+  const done = S.runs.filter(r => (r.status || '').startsWith('kept')
+    || r.status === 'discarded').length;
   const fail = S.runs.filter(r => r.status === 'crashed').length;
   sb.append(el('div', 'counts',
     `<span class="c-run">running <b>${runs}</b></span>` +
@@ -1663,7 +1664,11 @@ function paintTable() {
   if (S.filter !== 'all') {
     const f = S.filter;
     rows = rows.filter(r => f === 'queued' ? r.status === 'queued'
-      : f === 'kept' ? r.status === 'kept'
+      // "Kept" must include the RealAgent taxonomy variants kept_novel /
+      // kept_replicate (not just the bare FakeAgent 'kept'), otherwise the
+      // tab reads "No experiments match this filter" even when there ARE
+      // kept improvements in the table.
+      : f === 'kept' ? (r.status || '').startsWith('kept')
       : f === 'discarded' ? r.status === 'discarded'
       : f === 'crashed' ? r.status === 'crashed'
       : f === 'running' ? r.status === 'running' : true);
