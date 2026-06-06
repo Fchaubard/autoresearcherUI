@@ -4,7 +4,7 @@
 const S = {
   project: null, runs: [], ideas: [], events: [], chat: [], gpus: [],
   metrics: {}, filter: 'all', search: '', sel: null, ylog: false,
-  railTab: 'summary', sessTab: null, view: 'dashboard', cmp: [], cmpMetric: '',
+  railTab: 'feed', sessTab: null, view: 'dashboard', cmp: [], cmpMetric: '',
   sortKey: 'time', sortAsc: false,   // main table sort — default DESC by time (newest first)
 };
 
@@ -1555,9 +1555,11 @@ function rail() {
   //   Write-the-paper view → Author agent only (no Research agent)
   // Other views (Analysis, Lessons, …) don't get a rail at all.
   const isPaperView = (S.view === 'latex');
+  // Activity feed is its own first-class tab now (was buried inside the
+  // Summary panel). Order: Activity feed · Summary · <agent> · Sessions.
   const TABS = isPaperView
-    ? [['summary','Summary'], ['author','Author agent'], ['sessions','Sessions']]
-    : [['summary','Summary'], ['live','Research agent'], ['sessions','Sessions']];
+    ? [['feed','Activity feed'], ['summary','Summary'], ['author','Author agent'], ['sessions','Sessions']]
+    : [['feed','Activity feed'], ['summary','Summary'], ['live','Research agent'], ['sessions','Sessions']];
   // Keep S.railTab valid for the current view (so a stale 'live' on the
   // paper view, or stale 'author' on the dashboard, falls back to summary).
   if (!TABS.some(([k]) => k === S.railTab)) S.railTab = TABS[0][0];
@@ -1861,7 +1863,12 @@ function paintRail() {
     b.classList.toggle('on', b.dataset.tab === S.railTab));
   const c = document.getElementById('railcontent');
   if (!c) return;
-  if (S.railTab === 'author') {
+  if (S.railTab === 'feed') {
+    stopTermPoll();
+    // live-update when already mounted: just append happens via SSE, so
+    // only rebuild if the feed isn't there yet.
+    if (!document.getElementById('feed')) renderFeed(c);
+  } else if (S.railTab === 'author') {
     if (!document.getElementById('authorterm-host')) { stopTermPoll(); renderAuthorLive(c); }
   } else if (S.railTab === 'live') {
     if (!document.getElementById('term-host')) { stopTermPoll(); renderLive(c); }
@@ -2706,28 +2713,9 @@ function renderSummary(c) {
   const wrap = el('div', 'icards'); wrap.id = 'icards';
   scroll.append(wrap);
 
-  const compact = el('details', 'feed-compact');
-  // EXPANDED by default — users want to see what's happening without
-  // having to click first. They can collapse it any time by clicking
-  // the "Activity feed" header; their choice persists in localStorage
-  // so the dashboard remembers it across reloads.
-  const _feedKey = 'arui.feed.collapsed';
-  const _wasCollapsed =
-    (() => { try { return localStorage.getItem(_feedKey) === '1'; }
-             catch (e) { return false; } })();
-  if (!_wasCollapsed) compact.setAttribute('open', '');
-  compact.innerHTML = '<summary>Activity feed</summary>';
-  const feed = el('div', 'feed'); feed.id = 'feed';
-  compact.append(feed);
-  // Persist collapse/expand choice. <details> fires 'toggle' on every
-  // open/close — write the new state to localStorage so a reload picks
-  // up the user's preference.
-  compact.addEventListener('toggle', () => {
-    try {
-      localStorage.setItem(_feedKey, compact.open ? '0' : '1');
-    } catch (e) { /* private mode — best-effort only */ }
-  });
-  scroll.append(compact);
+  // The Activity feed used to live here (a collapsible at the bottom of the
+  // Summary scroll). It is now its own first-class rail tab — see
+  // renderFeed(). Summary keeps the brief + conversation + completed cards.
 
   // floating 'jump to latest' button (only when user has scrolled up)
   const jump = el('button', 'jump-latest', '↓ Latest');
@@ -2740,14 +2728,6 @@ function renderSummary(c) {
   paintConvo();
   paintCompletedCards();
 
-  // activity feed (kept for chronological events + chat)
-  const items = [
-    ...S.events.map(e => ({ t: e.created_at, kind: 'event', d: e })),
-    ...S.chat.map(m => ({ t: m.created_at, kind: 'chat', d: m })),
-  ].sort((a, b) => (a.t || '').localeCompare(b.t || ''));
-  items.forEach(it => feed.append(feedItemEl(it)));
-  S._feedLoading = false;
-
   // Scroll-to-bottom on first paint; show jump button when away from bottom.
   const stickToBottom = () => {
     scroll.scrollTop = scroll.scrollHeight;
@@ -2759,7 +2739,42 @@ function renderSummary(c) {
     const fromBottom = scroll.scrollHeight - scroll.scrollTop
       - scroll.clientHeight;
     jump.style.display = fromBottom > 280 ? 'block' : 'none';
-    if (scroll.scrollTop < 60) loadOlderEvents();
+  };
+}
+
+/* Activity feed — its own first-class rail tab (was a collapsible buried in
+   the Summary panel). Chronological events + chat, newest at the bottom,
+   chat-feed style. Populated from S.events + S.chat (both kept up to date by
+   SSE regardless of which tab is active), then appended live by
+   appendFeedItem(). #feed is the scroll container so the auto-stick-to-bottom
+   in appendFeedItem works. */
+function renderFeed(c) {
+  c.innerHTML = '';
+  const feed = el('div', 'feed feed-full'); feed.id = 'feed';
+  c.append(feed);
+  const jump = el('button', 'jump-latest', '↓ Latest');
+  jump.style.display = 'none';
+  jump.onclick = () =>
+    feed.scrollTo({ top: feed.scrollHeight, behavior: 'smooth' });
+  c.append(jump);
+  const items = [
+    ...S.events.map(e => ({ t: e.created_at, kind: 'event', d: e })),
+    ...S.chat.map(m => ({ t: m.created_at, kind: 'chat', d: m })),
+  ].sort((a, b) => (a.t || '').localeCompare(b.t || ''));
+  if (!items.length) {
+    feed.innerHTML = '<div class="feed-empty">No activity yet — events and '
+      + 'agent messages will stream in here.</div>';
+  } else {
+    items.forEach(it => feed.append(feedItemEl(it)));
+  }
+  S._feedLoading = false;
+  const stickToBottom = () => { feed.scrollTop = feed.scrollHeight; };
+  requestAnimationFrame(stickToBottom);
+  setTimeout(stickToBottom, 50);
+  feed.onscroll = () => {
+    const fromBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight;
+    jump.style.display = fromBottom > 280 ? 'block' : 'none';
+    if (feed.scrollTop < 60) loadOlderEvents();
   };
 }
 
