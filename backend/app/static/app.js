@@ -1463,9 +1463,27 @@ function railMax() {
 }
 function setRailW(w) {
   const app = document.querySelector('.app');
-  if (app) app.style.gridTemplateColumns = '1fr ' + Math.round(w) + 'px';
+  if (!app) return;
+  // Solo views (Analysis, Lessons, System stats, authorized_keys) render
+  // NO rail — their app grid is a single 1fr column via `.app.solo`.
+  // Writing an inline `1fr <railW>px` here would override that CSS and
+  // leave a phantom empty right-hand column the width of the (absent)
+  // rail. That was the "Analysis tab: right side all black + panels
+  // squished into one narrow column, fixed by a refresh" bug: applyRailW
+  // ran on every render and stamped the saved rail width onto the
+  // rail-less Analysis layout. Only size the grid when a rail is actually
+  // present; otherwise clear any stale inline value so `.app.solo` wins.
+  if (app.classList.contains('solo')) { app.style.gridTemplateColumns = ''; return; }
+  app.style.gridTemplateColumns = '1fr ' + Math.round(w) + 'px';
 }
 function applyRailW() {
+  const app = document.querySelector('.app');
+  // Rail-less solo views must never carry a rail-width grid column — clear
+  // any inline value so the CSS single-column layout takes effect.
+  if (app && app.classList.contains('solo')) {
+    app.style.gridTemplateColumns = '';
+    return;
+  }
   if (window.innerWidth <= 880) return;          // mobile: rail is an overlay
   let w;
   try { w = parseInt(localStorage.getItem('arui.railW'), 10); } catch (e) {}
@@ -7271,25 +7289,6 @@ async function renderAnalysis(c) {
   renderAnaBaselineTag(c);
   renderAnaTable(c);
   renderAnaPanels(c);
-  // Belt-and-suspenders against the "squished panels / black right side on
-  // first open, fixed by a refresh" bug. On SPA navigation the viewpane is
-  // built (and its panels + canvases first measured) before the browser has
-  // performed layout, so the auto-fit panel grid can resolve to a single
-  // narrow column and each canvas can latch onto a 0/fallback width. A full
-  // page refresh hides it because load/font/resize events force a reflow that
-  // re-runs the reactive grid + redraws the canvases — but plain SPA nav
-  // fires none of those events, so the stale layout sticks. Force that reflow
-  // ourselves once layout has settled: read offsetWidth (synchronous reflow,
-  // so auto-fit recomputes its real column count) then redraw every panel so
-  // each canvas re-measures its now-correct clientWidth. Double rAF guarantees
-  // we run after attach + first paint. Cheap and idempotent.
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    try {
-      const root = AnaState.container || c;
-      void root.offsetWidth;               // force synchronous layout
-      refreshAllPanels();                  // redraw every chart at true size
-    } catch (e) { /* view torn down before the frame fired */ }
-  }));
 }
 
 function renderAnaBaselineTag(c) {
