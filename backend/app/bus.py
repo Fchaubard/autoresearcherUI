@@ -9,8 +9,40 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from collections import defaultdict
 from typing import AsyncIterator
+
+
+def _json_safe(obj):
+    """Recursively replace non-finite floats (NaN / +Inf / -Inf) with None.
+
+    ``json.dumps`` defaults to ``allow_nan=True``, which emits bare ``NaN`` /
+    ``Infinity`` tokens. Those are valid Python-flavoured JSON but are rejected
+    by the browser's ``JSON.parse`` (and the strict JSON spec), so an SSE frame
+    carrying a NaN metric value throws ``SyntaxError: Unexpected token 'N'`` in
+    the dashboard's EventSource handler — repeatedly, since every metric tick
+    re-sends it. Sanitising to ``null`` keeps the stream valid; the chart code
+    already treats missing points as gaps. Mirrors the NaN→None handling in
+    ``metrics.series`` so the SSE and REST paths agree.
+    """
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    return obj
+
+
+def _dumps(payload) -> str:
+    """JSON-encode an SSE payload, guaranteeing spec-valid output.
+
+    ``allow_nan=False`` is a belt-and-braces guard: if some non-float, non-dict,
+    non-list container still smuggles in a NaN, we raise here (caught by the
+    caller) rather than emit a frame the browser cannot parse.
+    """
+    return json.dumps(_json_safe(payload), allow_nan=False)
 
 
 class Bus:
@@ -50,7 +82,7 @@ class Bus:
                     msg = await asyncio.wait_for(q.get(), timeout=5)
                     yield (f"id: {msg['id']}\n"
                            f"event: {msg['type']}\n"
-                           f"data: {json.dumps(msg['payload'])}\n\n")
+                           f"data: {_dumps(msg['payload'])}\n\n")
                 except asyncio.TimeoutError:
                     yield ": keep-alive\n\n"   # prevent idle proxy timeouts
         finally:
