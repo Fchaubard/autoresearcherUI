@@ -1025,6 +1025,59 @@ body.resizing{user-select:none}
   display:block}
 .onb-restore-status{font-size:11.5px;color:var(--text-2);margin-top:9px}
 
+/* ── Operator approval modal (paper-mode gate) ───────────────────────── */
+.modal-approval-back{z-index:9000;background:rgba(8,10,14,0.78);
+  backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
+.modal-approval{max-width:840px;width:92%;max-height:88vh;
+  display:flex;flex-direction:column;
+  border:1px solid #6366F1;
+  box-shadow:0 24px 64px rgba(99,102,241,0.18),
+             0 8px 24px rgba(0,0,0,0.55)}
+.approval-head{display:flex;align-items:flex-start;gap:14px;
+  padding:18px 20px 14px;border-bottom:1px solid var(--border)}
+.approval-title{flex:1;min-width:0}
+.approval-title h2{margin:6px 0 6px;font-size:20px;font-weight:700;
+  color:#E6E8EB;letter-spacing:-0.2px}
+.approval-pill{display:inline-block;font-size:10.5px;font-weight:700;
+  letter-spacing:0.9px;color:#A5B4FC;background:#6366F126;
+  padding:3px 8px;border-radius:6px;text-transform:uppercase}
+.approval-sub{font-size:13px;color:#C7CAD0;line-height:1.5}
+.approval-sub b{color:#E6E8EB}
+.approval-close{appearance:none;background:transparent;border:0;
+  color:var(--muted);font-size:20px;cursor:pointer;line-height:1;
+  padding:4px 8px;border-radius:6px}
+.approval-close:hover{background:#1f232a;color:#E6E8EB}
+.approval-body{padding:14px 20px;overflow:auto;flex:1 1 auto}
+.approval-section{margin:0 0 18px}
+.approval-section:last-child{margin-bottom:0}
+.approval-section-label{font-size:11px;font-weight:700;letter-spacing:0.7px;
+  color:#9BA1A8;text-transform:uppercase;margin:0 0 8px}
+.approval-note{font-size:13px;color:#C7CAD0;line-height:1.55;
+  border-left:2px solid #6366F1;padding:2px 0 2px 12px}
+.approval-claims{margin:0;padding-left:18px;font-size:13px;color:#E6E8EB;
+  line-height:1.55}
+.approval-claims li{margin-bottom:6px}
+.approval-claim-sum{font-size:12px;color:#9BA1A8;margin-top:2px}
+.approval-table{width:100%;border-collapse:collapse;font-size:12.5px}
+.approval-table th{text-align:left;padding:6px 8px;
+  background:#13161b;color:#9BA1A8;font-weight:600;
+  border-bottom:1px solid var(--border);
+  text-transform:uppercase;letter-spacing:0.5px;font-size:10.5px}
+.approval-table td{padding:6px 8px;color:#E6E8EB;
+  border-bottom:1px solid #1c2027}
+.approval-table tr:last-child td{border-bottom:0}
+.approval-fallback{font-size:13px;color:#E6E8EB;line-height:1.8}
+.approval-fallback b{color:#A5B4FC}
+.approval-actions{display:flex;justify-content:flex-end;gap:8px;
+  padding:14px 20px;border-top:1px solid var(--border);
+  background:#0c0e12}
+.approval-actions .btn.primary{background:#22C55E;color:#0a0f06;
+  border-color:#16a34a;font-weight:700}
+.approval-actions .btn.primary:hover{background:#16A34A}
+.approval-actions .btn.ghost{background:transparent;color:#C7CAD0;
+  border:1px solid var(--border)}
+.approval-actions .btn.ghost:hover{background:#1f232a;color:#E6E8EB}
+
 /* ── side menu + views ────────────────────────────────────────────────── */
 .burger{appearance:none;-webkit-appearance:none;background:transparent;
   border:0;color:var(--text-2);font-size:18px;cursor:pointer;padding:0 4px;

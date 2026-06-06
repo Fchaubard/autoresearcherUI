@@ -1943,15 +1943,37 @@ async def agent_paste_oauth(request: Request):
 
 
 @router.post("/agent/restart")
-async def agent_restart():
-    """Re-launch the research agent.
+async def agent_restart(request: Request):
+    """Re-launch an agent's tmux session.
 
-    Used when the agent's tmux session died or got stuck on a Claude Code
-    consent prompt that the user manually dismissed. Pulls the live
-    onboarding config and re-spawns via :func:`realrun.start_real`. The
-    relaunched session immediately re-runs the auto-accept (Down+Enter)
-    sequence — so a hung session can be recovered from the dashboard
-    without SSH'ing into the pod."""
+    Now dispatches on body.name (default 'research' for backward compat):
+      - "research" / "agent"   → research agent (legacy default)
+      - "author"               → paper-mode Author Agent
+      - "both"                 → both, in parallel
+
+    Previously this endpoint silently ignored `name` and always restarted
+    the research agent. That made the frontend's "restart author"
+    button restart the wrong session — Francois hit this on 2026-06-06
+    after the paper-mode rebuild. /api/paper/author/restart remains as
+    a compat alias for any callers that still hit it.
+    """
+    try:
+        body = await request.json() if request.headers.get(
+            "content-type", "").startswith("application/json") else {}
+    except Exception:
+        body = {}
+    name = (body.get("name") or "research").strip().lower()
+    if name in ("agent", "research", "researcher"):
+        targets = ["research"]
+    elif name == "author":
+        targets = ["author"]
+    elif name == "both":
+        targets = ["research", "author"]
+    else:
+        return {"ok": False,
+                "error": f"unknown agent name '{name}'; "
+                          "expected one of: research, author, both"}
+    results: dict = {}
     db = SessionLocal()
     try:
         row = db.query(Setting).filter(
@@ -1959,15 +1981,30 @@ async def agent_restart():
         cfg = dict(row.value) if row and isinstance(row.value, dict) else {}
     finally:
         db.close()
-    if not (cfg.get("claude_token")
-            or os.environ.get("ARUI_CLAUDE_BIN")):
-        return {"ok": False,
-                "error": "no Claude token configured — onboarding not complete"}
-    # Kill any zombie session first so the launcher gets a clean slot.
-    subprocess.run(["tmux", "kill-session", "-t", "agent"],
-                   capture_output=True, timeout=5)
-    info = realrun.start_real(cfg)
-    return {"ok": True, "info": info}
+    if "research" in targets:
+        if not (cfg.get("claude_token")
+                or os.environ.get("ARUI_CLAUDE_BIN")):
+            results["research"] = {"ok": False,
+                                    "error": "no Claude token configured — "
+                                             "onboarding not complete"}
+        else:
+            subprocess.run(["tmux", "kill-session", "-t", "agent"],
+                           capture_output=True, timeout=5)
+            try:
+                results["research"] = {"ok": True,
+                                        "info": realrun.start_real(cfg)}
+            except Exception as e:                              # noqa: BLE001
+                results["research"] = {"ok": False, "error": str(e)}
+    if "author" in targets:
+        try:
+            from . import author_agent
+            subprocess.run(["tmux", "kill-session", "-t", "author"],
+                           capture_output=True, timeout=5)
+            results["author"] = {"ok": True, "info": author_agent.start()}
+        except Exception as e:                                  # noqa: BLE001
+            results["author"] = {"ok": False, "error": str(e)}
+    ok = all(v.get("ok") for v in results.values())
+    return {"ok": ok, "targets": targets, "results": results}
 
 
 @router.post("/paper/author/restart")

@@ -4746,8 +4746,187 @@ function startPaperStatusPolling(c) {
     try {
       PaperState.status = await api('/paper/status');
       paintPaperStatusBar(c);
+      maybeOpenApprovalModal(c);
     } catch (e) { /* keep last */ }
   }, 5000);
+  // Trigger on initial mount too, not just every 5s.
+  maybeOpenApprovalModal(c);
+}
+
+// ─── Operator approval modal ────────────────────────────────────────────
+// When the Author Agent reports phase=paper.operator_review AND the gate
+// is pending, the user has to approve the ablation plan before runs
+// burn GPU. Previously this surfaced as a tiny "WARN" line under the
+// progress bar, buried below the fold — Francois (2026-06-06) called
+// that out as bad UX. We now auto-open a full-screen modal with the
+// ablation matrix, ETA, claims being supported, and Approve / Request
+// changes buttons. Once the user acts (or this becomes irrelevant),
+// _approvalModalSeenFor remembers the gate timestamp so we don't keep
+// re-popping the modal on every 5s poll.
+let _approvalModalSeenFor = null;
+function _gateNeedsApproval(s) {
+  if (!s) return false;
+  const phase = (s.phase && s.phase.phase) || '';
+  const plan = (s.gate && s.gate.plan) || {};
+  const status = String(plan.status || '').toLowerCase();
+  return phase === 'paper.operator_review' && status === 'pending';
+}
+function maybeOpenApprovalModal(c) {
+  const s = PaperState.status || {};
+  if (!_gateNeedsApproval(s)) {
+    _approvalModalSeenFor = null;
+    return;
+  }
+  const stamp = (s.gate && s.gate.plan && s.gate.plan.requested_at) || '';
+  if (stamp && _approvalModalSeenFor === stamp) return;
+  _approvalModalSeenFor = stamp;
+  // Already open? bail.
+  if (document.getElementById('approval-modal')) return;
+  openApprovalModal(c);
+}
+function openApprovalModal(c) {
+  const s = PaperState.status || {};
+  const pg = s.progress || {};
+  const abl = pg.ablations || {};
+  const claims = pg.claims || {};
+  const gantt = pg.gantt || {};
+  const plan = (s.gate && s.gate.plan) || {};
+  const note = plan.note || '';
+  const proposedN = abl.proposed || 0;
+  const eta = (gantt.eta_hours != null) ? gantt.eta_hours : (abl.est_hours || 0);
+  const meta = s.meta || {};
+  const claimList = Array.isArray(meta.claims) ? meta.claims : [];
+  const datasets = Array.isArray(meta.datasets) ? meta.datasets : [];
+  const ablations = Array.isArray(meta.ablations) ? meta.ablations : [];
+  // Build the modal markup.
+  const wrap = document.createElement('div');
+  wrap.id = 'approval-modal';
+  wrap.className = 'arui-modal-back modal-approval-back';
+  let html =
+    '<div class="arui-modal modal-approval">'
+    + '<div class="approval-head">'
+    +   '<div class="approval-title">'
+    +     '<span class="approval-pill">OPERATOR DECISION</span>'
+    +     '<h2>Approve the ablation plan?</h2>'
+    +     '<div class="approval-sub">The Author Agent finished planning. '
+    +       'It is waiting on you before launching <b>'
+    +       proposedN + ' ablation run' + (proposedN === 1 ? '' : 's')
+    +       '</b> (~<b>' + (Math.round(eta * 10) / 10) + 'h</b> of GPU time).</div>'
+    +   '</div>'
+    +   '<button class="approval-close" title="Close — gate remains pending">✕</button>'
+    + '</div>'
+    + '<div class="approval-body">';
+  // Note from the author agent.
+  if (note) {
+    html += '<div class="approval-section">'
+      +   '<div class="approval-section-label">Why this plan</div>'
+      +   '<div class="approval-note">' + esc(note) + '</div>'
+      + '</div>';
+  }
+  // Claims being supported.
+  if (claimList.length) {
+    html += '<div class="approval-section">'
+      + '<div class="approval-section-label">Claims to support ('
+      + claimList.length + ')</div>'
+      + '<ul class="approval-claims">';
+    for (const cl of claimList) {
+      html += '<li><b>' + esc(cl.title || cl.id || '?') + '</b>'
+        + (cl.summary ? '<div class="approval-claim-sum">'
+            + esc(cl.summary) + '</div>' : '')
+        + '</li>';
+    }
+    html += '</ul></div>';
+  }
+  // Ablation matrix.
+  if (ablations.length) {
+    html += '<div class="approval-section">'
+      + '<div class="approval-section-label">Ablation matrix ('
+      + ablations.length + ' runs)</div>'
+      + '<table class="approval-table"><thead><tr>'
+      + '<th>Run</th><th>Dataset</th><th>Variant</th>'
+      + '<th>Seeds</th><th>Est.</th></tr></thead><tbody>';
+    for (const a of ablations.slice(0, 60)) {
+      html += '<tr>'
+        + '<td>' + esc(a.id || a.name || '?') + '</td>'
+        + '<td>' + esc(a.dataset || '—') + '</td>'
+        + '<td>' + esc(a.variant || a.config_summary || '—') + '</td>'
+        + '<td>' + esc(String(a.seeds || 1)) + '</td>'
+        + '<td>' + esc((a.est_hours != null
+              ? (Math.round(a.est_hours * 10) / 10 + 'h')
+              : '—')) + '</td>'
+        + '</tr>';
+    }
+    if (ablations.length > 60) {
+      html += '<tr><td colspan="5" style="opacity:.6">'
+        + '+ ' + (ablations.length - 60) + ' more …</td></tr>';
+    }
+    html += '</tbody></table></div>';
+  } else {
+    // Fall back to the counters-only summary so the modal is never empty.
+    html += '<div class="approval-section">'
+      + '<div class="approval-section-label">Plan summary</div>'
+      + '<div class="approval-fallback">'
+      +   '<div>· <b>' + proposedN + '</b> ablation run'
+      +     (proposedN === 1 ? '' : 's') + ' to launch</div>'
+      +   '<div>· <b>' + (claims.active || 0) + '</b> active claims '
+      +     'to back</div>'
+      +   (datasets.length
+          ? '<div>· Datasets: <b>'
+            + datasets.map(esc).join(', ')
+            + '</b></div>' : '')
+      +   '<div>· Expected GPU-hours: <b>'
+      +     (Math.round(eta * 10) / 10) + 'h</b></div>'
+      + '</div></div>';
+  }
+  // Actions.
+  html += '</div>'
+    + '<div class="approval-actions">'
+    +   '<button class="btn ghost" data-approval="changes">'
+    +     'Request changes…</button>'
+    +   '<button class="btn ghost" data-approval="defer">'
+    +     'Decide later</button>'
+    +   '<button class="btn primary" data-approval="approve">'
+    +     '✓ Approve &amp; launch</button>'
+    + '</div>'
+    + '</div>';
+  wrap.innerHTML = html;
+  document.body.appendChild(wrap);
+  const close = () => { try { wrap.remove(); } catch (_e) {} };
+  wrap.querySelector('.approval-close').onclick = close;
+  wrap.querySelector('[data-approval="defer"]').onclick = close;
+  wrap.querySelector('[data-approval="approve"]').onclick = async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true; const orig = btn.textContent;
+    btn.textContent = 'Approving…';
+    try {
+      await post('/paper/plan/approve', {});
+      await loadPaperState();
+      paintPaperStatusBar(c);
+      paintPaperTab(c);
+      close();
+    } catch (err) {
+      btn.disabled = false; btn.textContent = orig;
+      aruiAlert('Approve failed: ' + esc(String(err)),
+        { title: 'Error', okText: 'Close' });
+    }
+  };
+  wrap.querySelector('[data-approval="changes"]').onclick = async () => {
+    const reason = (typeof prompt === 'function')
+      ? (prompt('What needs to change? (sent to the Author Agent)', '')
+          || '').trim()
+      : '';
+    if (!reason) return;
+    try {
+      await post('/paper/plan/request_changes', { note: reason });
+      await loadPaperState();
+      paintPaperStatusBar(c);
+      paintPaperTab(c);
+      close();
+    } catch (err) {
+      aruiAlert('Request changes failed: ' + esc(String(err)),
+        { title: 'Error', okText: 'Close' });
+    }
+  };
 }
 
 async function paintBuildStatus(c) {

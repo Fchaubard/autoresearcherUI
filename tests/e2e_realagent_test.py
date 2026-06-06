@@ -84,20 +84,33 @@ def main():
         check(r.get("status") == "started",
               "onboarding launches the RealAgent", str(r))
 
+        # Terminal statuses under the post-RESEARCH_IMPROVEMENT_PLAN #4
+        # taxonomy: a run is terminal once /api/track/finish has fired,
+        # which writes one of {kept_novel, kept_replicate, success_smoke,
+        # crashed, discarded}. The legacy plain "kept" is kept here so
+        # the FakeAgent orchestrator path (which still uses the old
+        # labels) is also satisfied — both tests share this helper-ish
+        # logic via copy/paste, so update it in both places when the
+        # taxonomy grows again.
+        TERMINAL = ("kept", "kept_novel", "kept_replicate", "success_smoke",
+                    "crashed", "discarded")
         runs = []
         for _ in range(180):
             runs = get(base + "/api/runs")
-            done = [x for x in runs
-                    if x["status"] in ("kept", "crashed", "discarded")]
+            done = [x for x in runs if x["status"] in TERMINAL]
             if len(runs) >= 10 and len(done) == len(runs):
                 break
             time.sleep(1)
         check(len(runs) >= 10,
               "the autonomous agent ran the full experiment sequence",
               f"{len(runs)} runs")
-        check(runs and all(x["status"] in ("kept", "crashed", "discarded")
-                           for x in runs),
-              "all runs reached a terminal state")
+        non_terminal = [(x["id"], x["status"]) for x in runs
+                        if x["status"] not in TERMINAL]
+        check(runs and not non_terminal,
+              "all runs reached a terminal state",
+              ("non-terminal: " + ", ".join(f"{rid}={st}"
+                                             for rid, st in non_terminal)
+               if non_terminal else ""))
 
         by = {x["id"]: x for x in runs}
         brun = by.get("baseline")
