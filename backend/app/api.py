@@ -1252,10 +1252,16 @@ async def agent_resize(request: Request):
     if not _tmux_alive(sess):
         return {"ok": False, "error": f"no tmux session: {sess}"}
     # resize-window works on the whole window (the right level for our
-    # single-pane sessions). -A makes the constraint absolute.
+    # single-pane sessions). NB: do NOT pass -A here — `-A` tells tmux to
+    # size the window to the LARGEST attached client and ignore the
+    # explicit -x/-y, so the window stayed pinned at the 120x40 spawn
+    # default and never shrank to the rail's ~76 cols. That was the
+    # "Research agent terminal renders garbled / lines wrap mid-character"
+    # bug: tmux at 120 cols, xterm at 76. Plain -x/-y with window-size
+    # manual applies the exact dimensions.
     r = subprocess.run(
         ["tmux", "resize-window", "-t", sess, "-x", str(cols),
-         "-y", str(rows), "-A"],
+         "-y", str(rows)],
         capture_output=True, text=True, timeout=4)
     if r.returncode != 0:
         # Older tmux without resize-window: fall back to resize-pane.

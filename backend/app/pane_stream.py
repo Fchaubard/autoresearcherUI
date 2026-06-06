@@ -224,8 +224,10 @@ def apply_remembered_size(session: str) -> bool:
     if not cur:
         return False
     cols, rows = cur
+    # No -A: it would size to the largest client and ignore -x/-y, leaving
+    # the window at the 120x40 spawn default (garbled wrapping in the rail).
     subprocess.run(
         ["tmux", "resize-window", "-t", session, "-x", str(cols),
-         "-y", str(rows), "-A"],
+         "-y", str(rows)],
         capture_output=True)
     return True
