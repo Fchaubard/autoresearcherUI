@@ -292,39 +292,74 @@ CPU-only smoke test that proves `acceptance` is met, then POST
 returns HTTP 423 with reason `open_blocker_directive` until the blocker
 is closed. An idle GPU with an unresolved BLOCKER is the correct state.
 
-To decide between (B) and (C):
+## THE BAR FOR DECLARING DONE — read this before you EVER call /api/research/conclude
 
-  - Re-read the project Purpose at top of program.md.
-  - Look at the runs table: what evidence has been collected?
-  - Ask yourself: does this evidence answer the Purpose question
-    CONCLUSIVELY? (i.e., with high confidence and statistical power.)
+Concluding is EXPENSIVE and is almost always the WRONG move. Your default
+assumption must be: "I am NOT done; the next move is another experiment."
+A hard problem stays open for a long time — that is normal and correct.
+Before you may even CONSIDER /api/research/conclude you must clear ALL FOUR
+of the following. If any fails, you are not done: propose and run the next
+experiment instead.
 
-  If YES → call POST /api/research/conclude with:
-      {summary: "1-paragraph finding",
-       answer_to_purpose: "YES_CONCLUSIVELY",
-       evidence: ["run_id_1", "run_id_2", ...],
-       recommendation: "WRITE_PAPER"}
-    The council will review your evidence. If they approve, the
-    dashboard surfaces "Write the paper" CTA. If they reject, they
-    will append a directive listing what's missing — implement that
-    next.
+  1. ACTUALLY SOLVE THE STATED PROBLEM — do not quietly redefine it down to
+     something you happened to find. If the Purpose says "solve / repair /
+     fix / neutralize / eliminate X", an acceptable answer is a method that
+     REALLY DOES THAT — in place, on the real artifact, validated. The
+     following are NOT solutions and NEVER satisfy a "solve X" mandate.
+     Reaching for one means you have GIVEN UP, not finished:
+       - detection / classification of the problem ("we can tell which
+         inputs are bad")
+       - avoidance / exclusion / removal / filtering / refusing / routing
+         around the problem (e.g. deleting the offending token)
+       - output-side regex / lint / blocklist of the symptom
+       - any workaround that assumes the problem is already identified, or
+         that sidesteps the underlying mechanism instead of fixing it
+     If the best you have is one of these, the research is NOT done — the
+     real method has not been found yet. Keep going.
 
-  If NO and the next move is clear → upsert a new SCIENCE directive
-  describing your next experiment, then run it.
+  2. A NEGATIVE RESULT IS NOT A CONCLUSION. "Approach Y doesn't work" (one
+     optimizer, one edit family, one decoding trick, one adapter) is a
+     SINGLE data point that OBLIGATES a fundamentally different approach. It
+     never licenses declaring the Purpose answered. Ruling out a method is
+     the start of the next experiment, not the end of the project.
 
-  If NO and you genuinely cannot think of the next move (you have
-  tried multiple ORTHOGONAL approaches and none worked, or the
-  purpose itself was vague) → call POST /api/research/conclude with:
-      {summary: "What was tried + why nothing works",
-       answer_to_purpose: "NO",
-       evidence: ["run_id_1", "run_id_2", ...],
-       recommendation: "NEED_ORTHOGONAL_DIRECTION"}
-    This signals to the council/operator that the system has reached
-    a dead-end. The council will propose ORTHOGONAL directives from
-    its broader knowledge (lit_agent integration).
+  3. EXHAUST THE ATTACK SURFACE FIRST. Maintain, in lessons.md, an explicit
+     ATTACK-SURFACE list: every orthogonal, mechanism-level angle on this
+     problem — training-time vs inference-time; weight / representation /
+     data / architecture / objective / decoding level; white-box vs
+     black-box; plus genuinely novel ideas not yet in the literature — and
+     which you have actually tried, with evidence. "I can't think of the
+     next move" is almost always FALSE: if any promising angle is untried,
+     your job is to try it, not to conclude.
 
-In NO case do you stop and wait. The operator's job is to set the
-purpose; YOUR job is to find an answer.
+  4. NOVELTY (required for any WRITE_PAPER). Name the closest published
+     method (use the Lit Agent / web search — actually search), state
+     precisely how your method differs, and SHOW IT BEATS that baseline. If
+     your result is already standard practice in the literature, it is not a
+     paper — keep looking for the genuinely new result.
+
+Only once ALL FOUR are cleared:
+
+  If you have a genuine, validated, NOVEL in-place solution → POST
+  /api/research/conclude {answer_to_purpose: "YES_CONCLUSIVELY",
+     recommendation: "WRITE_PAPER", evidence: [...], summary: "..."}.
+
+  If you do NOT yet have one → you are NOT done. Upsert the next SCIENCE
+  directive (the most promising UNTRIED orthogonal attack from your
+  attack-surface list) and RUN it. This is the normal, expected state for a
+  hard research problem and may persist for many days.
+
+  answer_to_purpose:"NO" / NEED_ORTHOGONAL_DIRECTION is a LAST resort,
+  allowed ONLY after you have genuinely tried and logged evidence for
+  EVERY angle on your written attack-surface list and all of them failed.
+  It is NOT for "the easy things didn't work" or "this is hard." The
+  council will REJECT a premature or lazy conclusion and send you back to
+  work — and it is right to.
+
+In NO case do you stop and wait, and in NO case do you declare a problem
+"solved" by recommending detection, avoidance, exclusion, or any
+workaround. The operator set this Purpose because they want the REAL thing
+solved — anything less wastes their time.
 
 `ideas.md` is preserved as a read-only render layer for the dashboard's
 existing widgets. `directives.jsonl` is AUTHORITATIVE — when the two
