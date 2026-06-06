@@ -203,6 +203,38 @@ if [ "$NO_TUNNEL" -eq 0 ] && command -v cloudflared >/dev/null 2>&1; then
     || warn "tunnel didn't print a URL — check tmux attach -t arui-cf"
 fi
 
+# ── 6b. cron watchdog (resurrects the backend if its tmux session dies) ──
+# PR 10's in-session supervisor only survives a process crash *inside* the
+# tmux session. If the whole session/server dies (tmux-server crash, an
+# operator `tmux kill-server`, the session getting unlinked, or — the case
+# that stranded the pod on 2026-06-06 — it simply vanishing), nothing brings
+# it back. These pods are containers with docker-init as PID 1 (no systemd),
+# so cron is the right resurrection layer: it's a separate subsystem that
+# survives a tmux-server death. bin/arui_watchdog.sh is idempotent and only
+# (re)creates the infra sessions; it never touches the agent/author REPLs.
+step "installing the backend watchdog (cron → bin/arui_watchdog.sh)…"
+chmod +x "$ROOT/bin/arui_watchdog.sh" 2>/dev/null || true
+if command -v apt-get >/dev/null 2>&1 && ! command -v crontab >/dev/null 2>&1; then
+  $SUDO apt-get install -y -qq cron >/dev/null 2>&1 || warn "cron install failed"
+fi
+if command -v crontab >/dev/null 2>&1; then
+  # Start cron without systemd (containers): service script, then the
+  # bare binary as a fallback. Harmless if already running.
+  $SUDO service cron start >/dev/null 2>&1 || $SUDO cron >/dev/null 2>&1 || true
+  CRON_LINE="* * * * * ARUI_ROOT=$ROOT ARUI_PORT=$PORT $ROOT/bin/arui_watchdog.sh >/dev/null 2>&1"
+  # Idempotent install: drop any prior arui_watchdog line, re-add one.
+  ( crontab -l 2>/dev/null | grep -v 'arui_watchdog.sh' ; echo "$CRON_LINE" ) \
+    | crontab - 2>/dev/null \
+    && ok "watchdog registered (runs every minute)" \
+    || warn "could not register watchdog crontab — backend won't self-resurrect"
+else
+  warn "cron unavailable — backend won't auto-resurrect if its tmux session dies"
+fi
+# NOTE: cron itself does not auto-start on a *container* restart. For full
+# resilience across pod restarts, set the pod's On-Start / entrypoint to:
+#     cd $ROOT && ./setup.sh --yes
+echo "    Tip: set the pod's On-Start command to: cd $ROOT && ./setup.sh --yes"
+
 # ── 7. done ─────────────────────────────────────────────────────────────
 echo
 bold "✅  autoresearcherUI is running."

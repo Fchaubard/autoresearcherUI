@@ -2032,8 +2032,20 @@ async def reset_all():
 
 @router.get("/onboarding")
 def get_onboarding(db: Session = Depends(get_session)):
+    """Return the saved onboarding config with secret fields masked.
+
+    SECURITY: this endpoint is served over the public cloudflared tunnel,
+    so it must NEVER return raw API keys. Internal callers (council, PI,
+    lit-agent, agent restart) read the secrets straight from the DB
+    Setting row via SessionLocal — they do not depend on this HTTP
+    response — so masking here has no functional cost. Masking uses the
+    same SECRET_FIELDS set as GET /settings (defined just below); the
+    name resolves at call time, by which point the module is imported.
+    """
     row = db.query(Setting).filter(Setting.key == "onboarding").first()
-    return row.value if row else {}
+    cfg = dict(row.value) if row and isinstance(row.value, dict) else {}
+    return {k: ("••••••••" if (k in SECRET_FIELDS and v) else v)
+            for k, v in cfg.items()}
 
 
 @router.get("/onboarding/defaults")

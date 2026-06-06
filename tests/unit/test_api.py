@@ -37,6 +37,30 @@ def test_settings_get_returns_masked_secrets(client, setting_setter):
     assert body["email"] == "me@x.com"
 
 
+def test_onboarding_get_masks_secrets(client, setting_setter):
+    """GET /api/onboarding is a PUBLIC route served over the cloudflared
+    tunnel. It must never leak raw API keys. Regression guard for the
+    plaintext-key leak found 2026-06-06 on the live pod."""
+    setting_setter("onboarding", {
+        "claude_token": "sk-ant-secret",
+        "openai_token": "sk-openai-secret",
+        "gemini_token": "AIza-secret",
+        "github_token": "ghp_secret",
+        "passcode": "p4ss",
+        "email": "me@x.com",
+        "repo_name": "myproj",
+    })
+    r = client.get("/api/onboarding")
+    assert r.status_code == 200
+    body = r.json()
+    for fld in ("claude_token", "openai_token", "gemini_token",
+                "github_token", "passcode"):
+        assert body[fld] == "••••••••", f"{fld} leaked in plaintext"
+    # non-secret fields survive unchanged
+    assert body["email"] == "me@x.com"
+    assert body["repo_name"] == "myproj"
+
+
 def test_settings_put_does_not_clobber_blank_secrets(client, setting_setter):
     setting_setter("onboarding", {"claude_token": "keepme",
                                     "email": "old@x.com"})
