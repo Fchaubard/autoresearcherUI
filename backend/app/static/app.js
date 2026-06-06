@@ -454,6 +454,15 @@ function render() {
     && S.mode && S.mode.mode === 'paper');
   if (S.view !== 'dashboard' && !isPaperView) {
     app.className = 'app solo';
+    // Clear any inline grid-template-columns left over from a previous
+    // (dashboard/paper) render. `app.innerHTML=''` + changing the class
+    // does NOT reset inline styles, so the saved rail width would persist
+    // as a phantom empty right column on these rail-less solo views —
+    // the "Analysis tab: black right strip + panels squished into one
+    // column, fixed by a refresh" bug. A fresh page load never hit it
+    // because the rail sizing hadn't run yet; SPA nav from the dashboard
+    // did. Resetting here makes `.app.solo{grid-template-columns:1fr}` win.
+    app.style.gridTemplateColumns = '';
     app.append(header(), viewPane());
     return;
   }
