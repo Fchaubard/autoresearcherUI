@@ -1246,8 +1246,14 @@ function _fmtTimeShort(iso) {
 // Renders / refreshes the "Past paper proposals" history table inside
 // the Write-the-paper view. The container has id="paper-proposals-history".
 // Safe to call when the container isn't mounted — it just no-ops.
-async function _renderPaperProposalsHistory() {
-  const host = document.getElementById('paper-proposals-history');
+async function _renderPaperProposalsHistory(hostEl) {
+  // hostEl lets the caller pass the container element directly. On first
+  // mount the Write-the-paper view is built while still detached from the
+  // document, so a document.getElementById lookup misses it and the loader
+  // silently no-ops — leaving "Loading saved council reviews…" stuck
+  // forever. Passing c.querySelector(...) avoids the document dependency
+  // (writing into a detached node is fine; it shows once attached).
+  const host = hostEl || document.getElementById('paper-proposals-history');
   if (!host) return;
   let data;
   try { data = await api('/paper/proposals'); }
@@ -4588,7 +4594,11 @@ async function renderLatex(c) {
         openPaperProposal();
       };
     });
-    _renderPaperProposalsHistory();
+    // Pass the host element directly (the view is still detached here, so a
+    // document.getElementById lookup would miss it and leave the loader
+    // stuck). Writing into the detached node is fine — it shows once `c`
+    // is attached by render().
+    _renderPaperProposalsHistory(c.querySelector('#paper-proposals-history'));
     return;
   }
   c.innerHTML =
