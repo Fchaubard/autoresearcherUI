@@ -50,11 +50,27 @@ else
 fi
 
 # ── 2. system packages ──────────────────────────────────────────────────
-step "installing system packages (python3, tmux, curl)…"
+step "installing system packages (python3, tmux, curl, TeX Live)…"
 if command -v apt-get >/dev/null 2>&1; then
   $SUDO apt-get update -qq >/dev/null 2>&1 || true
   $SUDO apt-get install -y -qq python3 python3-venv python3-pip tmux curl \
     ca-certificates >/dev/null 2>&1 || warn "some apt packages may have failed"
+  # TeX Live for Paper Mode's pdflatex build. Without this, every paper
+  # render shows "TeX Live not installed" and the PDF iframe stays
+  # empty — Francois hit this on the live pod 2026-06-06. The
+  # -recommended bundles are ~700 MB instead of 4 GB for texlive-full;
+  # they cover everything our LaTeX template uses (article + amsmath +
+  # graphicx + hyperref + booktabs + geometry). We swallow failures
+  # because TeX Live isn't required for research-mode — the warning
+  # surfaces in the UI instead.
+  if ! command -v pdflatex >/dev/null 2>&1; then
+    step "installing TeX Live (pdflatex — needed by Paper Mode)…"
+    $SUDO apt-get install -y -qq --no-install-recommends \
+      texlive-latex-recommended texlive-fonts-recommended \
+      texlive-latex-extra >/dev/null 2>&1 \
+      && ok "pdflatex installed" \
+      || warn "TeX Live install failed — Paper Mode PDF builds will warn"
+  fi
 fi
 
 # ── 3. python deps via uv (fast) with pip fallback ──────────────────────
@@ -130,17 +146,28 @@ if [ "$NO_TUNNEL" -eq 0 ] && ! command -v cloudflared >/dev/null 2>&1; then
   fi
 fi
 
-# ── 5. start backend in tmux 'arui' ─────────────────────────────────────
+# ── 5. start backend in tmux 'arui' (with supervisor loop) ──────────────
 step "starting backend in tmux session 'arui'…"
+PORT="${PORT:-8000}"
 tmux kill-session -t arui 2>/dev/null || true
 LOG="$ROOT/data/arui.log"
 mkdir -p "$ROOT/data"
 : > "$LOG"
+# SUPERVISE the backend the same way we supervise cloudflared. Without
+# this, if a user (or operator, hi Francois) ever sends Ctrl-C into
+# the 'arui' pane, the backend stays dead until someone SSHes back in
+# and relaunches it manually. The while-loop respawns on any exit
+# (including OOM, Python tracebacks, accidental Ctrl-C in the pane),
+# and ARUI_PORT is pinned so a respawn can't accidentally land on
+# a different port and orphan cloudflared.
 tmux new-session -d -s arui \
-  "cd $ROOT && .venv/bin/python -m backend.main 2>&1 | tee -a $LOG"
+  "cd $ROOT && while true; do \
+     ARUI_PORT=$PORT .venv/bin/python -m backend.main 2>&1 | tee -a $LOG; \
+     echo \"[arui] backend exited at \$(date -u +%FT%TZ); respawning in 2s\" >>$LOG; \
+     sleep 2; \
+   done"
 
 # wait for /healthz
-PORT="${PORT:-8000}"
 for i in $(seq 1 40); do
   if curl -fsS "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; then
     ok "backend is up on http://127.0.0.1:$PORT"

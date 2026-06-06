@@ -170,7 +170,44 @@ def spa_catchall(path: str):
     return JSONResponse({"detail": "Not Found"}, status_code=404)
 
 
+def _check_port_or_die(port: int) -> None:
+    """Refuse to start if the configured port is already taken.
+
+    Why: cloudflared, the email digest links, and the agents' ARUI_INGEST_URL
+    all assume 8000 (or whatever ARUI_PORT is set to). If a previous
+    backend.main is still bound when this one starts, uvicorn used to
+    silently re-bind to the *next* free port and the operator would
+    spend an hour wondering why https://…trycloudflare.com returns 502
+    and `curl localhost:8000` works. Fail fast with a loud message
+    instead — the supervisor loop in setup.sh will then retry in 2s,
+    which is enough time for the old process to release the socket.
+    """
+    import socket as _s
+    s = _s.socket(_s.AF_INET, _s.SOCK_STREAM)
+    try:
+        s.setsockopt(_s.SOL_SOCKET, _s.SO_REUSEADDR, 1)
+        s.bind(("0.0.0.0", port))
+    except OSError as e:
+        # Print a giant, hard-to-miss banner. setup.sh's supervisor will
+        # respawn us in 2 seconds; usually the old process has released
+        # the port by then.
+        msg = (f"[backend] FATAL: port {port} is already in use ({e}). "
+               f"Refusing to silently rebind to a different port — "
+               f"cloudflared and the agents are configured for {port}. "
+               f"Will exit so the supervisor can retry.")
+        print("\n" + "=" * 72, flush=True)
+        print(msg, flush=True)
+        print("=" * 72 + "\n", flush=True)
+        raise SystemExit(2) from e
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+
 def run() -> None:
+    _check_port_or_die(PORT)
     print(f"\n  autoresearcherUI  ->  http://localhost:{PORT}\n")
     uvicorn.run("backend.main:app", host=HOST, port=PORT, reload=False)
 

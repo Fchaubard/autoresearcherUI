@@ -140,3 +140,118 @@ def test_council_approved_distinct_from_rejected(watcher_env):
     phases = [k for (k, _, _) in captured]
     assert "council_approved" in phases
     assert "council_rejected" not in phases
+
+
+def test_auth_zombie_triggers_restart(watcher_env, monkeypatch):
+    """When the author pane shows 'Not logged in · Please run /login'
+    AND a Claude API key is present in env, the watchdog must
+    automatically kill+respawn the author session, then emit a recovery
+    Event so the user sees what happened. This is the 2026-06-06 case
+    where /clear corrupted the REPL session state."""
+    import backend.app.agent_watcher as aw_mod
+    aw, captured = watcher_env
+    # Mock subprocess.run (used by tmux capture-pane).
+    class _R:
+        def __init__(self, stdout=b""):
+            self.stdout = stdout
+            self.returncode = 0
+    def fake_run(cmd, *a, **k):
+        if isinstance(cmd, list) and cmd[:2] == ["tmux", "capture-pane"]:
+            return _R(b"Welcome back!\n"
+                     b"\xe2\x9d\xaf  test prompt\n"
+                     b"Not logged in \xc2\xb7 Please run /login\n")
+        return _R()
+    monkeypatch.setattr(aw_mod.__dict__["subprocess"]
+                        if "subprocess" in aw_mod.__dict__
+                        else __import__("subprocess"),
+                        "run", fake_run)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    restarted: list = []
+    monkeypatch.setattr(aw, "_restart_session",
+                        lambda s: (restarted.append(s), True)[1])
+    aw._last_restart.clear()
+    aw._last_auth_check.clear()
+    aw._check_auth_zombie("author")
+    assert restarted == ["author"]
+    assert any(k == "auth_zombie_recovered"
+               for (k, _, _) in captured)
+
+
+def test_auth_zombie_rate_limited(watcher_env, monkeypatch):
+    """Two zombie detections within the cooldown window must only
+    trigger ONE restart — otherwise a genuine auth outage (expired
+    key) would melt into a restart loop."""
+    import subprocess as _sp
+    aw, _ = watcher_env
+    def fake_run(cmd, *a, **k):
+        class R: pass
+        R.stdout = b"Not logged in \xc2\xb7 Please run /login\n"
+        R.returncode = 0
+        return R
+    monkeypatch.setattr(_sp, "run", fake_run)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    calls: list = []
+    monkeypatch.setattr(aw, "_restart_session",
+                        lambda s: (calls.append(s), True)[1])
+    aw._last_restart.clear()
+    aw._last_auth_check.clear()
+    aw._check_auth_zombie("author")
+    aw._last_auth_check.clear()  # bypass per-session check interval
+    aw._check_auth_zombie("author")
+    assert calls == ["author"]
+
+
+def test_auth_zombie_skipped_if_no_api_key(watcher_env, monkeypatch):
+    """If no Claude key is in env, don't restart — respawn would just
+    hit the same wall, and we'd emit noise every cycle."""
+    import subprocess as _sp
+    aw, captured = watcher_env
+    def fake_run(cmd, *a, **k):
+        class R: pass
+        R.stdout = b"Not logged in \xc2\xb7 Please run /login\n"
+        R.returncode = 0
+        return R
+    monkeypatch.setattr(_sp, "run", fake_run)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ARUI_CLAUDE_BIN", raising=False)
+    calls: list = []
+    monkeypatch.setattr(aw, "_restart_session",
+                        lambda s: (calls.append(s), True)[1])
+    aw._last_restart.clear()
+    aw._last_auth_check.clear()
+    aw._check_auth_zombie("author")
+    assert calls == []
+    assert not any(k == "auth_zombie_recovered"
+                   for (k, _, _) in captured)
+
+
+def test_port_pin_refuses_taken_port(monkeypatch):
+    """backend.main._check_port_or_die must SystemExit if 8000 is
+    already bound, instead of silently re-binding to a random port and
+    leaving cloudflared pointing at a dead origin."""
+    from backend import main as _main
+    import socket as _s
+    # Bind a sentinel socket on a port, then verify the check raises.
+    sock = _s.socket(_s.AF_INET, _s.SOCK_STREAM)
+    sock.setsockopt(_s.SOL_SOCKET, _s.SO_REUSEADDR, 1)
+    sock.bind(("0.0.0.0", 0))
+    port = sock.getsockname()[1]
+    sock.listen(1)
+    try:
+        with pytest.raises(SystemExit) as exc:
+            _main._check_port_or_die(port)
+        assert exc.value.code == 2
+    finally:
+        sock.close()
+
+
+def test_port_pin_passes_when_free():
+    """When the port is free, _check_port_or_die returns silently."""
+    from backend import main as _main
+    import socket as _s
+    s = _s.socket(_s.AF_INET, _s.SOCK_STREAM)
+    s.bind(("0.0.0.0", 0))
+    port = s.getsockname()[1]
+    s.close()
+    # No SystemExit expected — function returns None.
+    assert _main._check_port_or_die(port) is None
