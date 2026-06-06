@@ -2910,16 +2910,28 @@ def _build_completion_review_context(evidence_run_ids: list[str],
         from . import metrics as _metrics
 
         def _final_metrics(rid):
+            # Return the FINAL value of every metric the run actually logged,
+            # so completion reviewers see this project's real evidence (e.g.
+            # jaccard, paired-CI bounds, behavior-shift deltas) instead of an
+            # empty dict. Previously this queried a hardcoded key list from an
+            # earlier project (utility_f1/fpr_block/asr_hidden, ...), so every
+            # key missed for any other research task and final_metrics was {} —
+            # leaving the agent's evidence structurally invisible to the
+            # council and causing it to reject otherwise-complete conclusions.
             try:
-                series = _metrics.query(rid, ["utility_f1", "utility_fair",
-                                              "fpr_block", "he_utility_f1",
-                                              "eval_seconds", "asr_hidden"])
+                # wanted=None -> metrics.query() falls back to keys(rid),
+                # i.e. all distinct keys logged for this run.
+                series = _metrics.query(rid)
             except Exception:
                 return {}
             out = {}
             for k, pts in (series or {}).items():
                 if pts and pts[-1] and pts[-1][1] is not None:
                     out[k] = round(float(pts[-1][1]), 4)
+            # Bound the payload: many runs log dozens of scalars; keep it
+            # deterministic and reviewer-friendly.
+            if len(out) > 80:
+                out = {k: out[k] for k in sorted(out)[:80]}
             return out
 
         ev_block = [{
