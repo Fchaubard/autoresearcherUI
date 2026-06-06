@@ -122,6 +122,19 @@ function frontier(runs) {                  // mark running-best improvements
   return runs;
 }
 
+/* A probe / smoke run is a throwaway check (preflight overfit probes, mech
+   localization probes, smoke tests), NOT a real research result. They bypass
+   the bless gate and frequently log out-of-scale quantities on the headline
+   metric key (e.g. a residual-vector norm ~24 instead of a 0–1 behaviour
+   metric), so they must be excluded from the research-progress chart or they
+   blow up the y-axis and squash the real frontier. */
+function _isProbeRun(r) {
+  const n = (r.run_name || r.name || '').toLowerCase();
+  return r.status === 'success_smoke'
+      || n.startsWith('_probe') || n.startsWith('_smoke')
+      || n.startsWith('probe') || n.startsWith('smoke');
+}
+
 /* ════════════════════════ PROGRESS CHART (hero) ═══════════════════════════ */
 class ProgressChart {
   constructor(host) {
@@ -135,7 +148,13 @@ class ProgressChart {
       if (this.hit) openDrawer(this.hit.id); });
     new ResizeObserver(() => this.draw()).observe(host);
   }
-  setData(runs) { this.runs = frontier(runs); this.draw(); }
+  setData(runs) {
+    // Drop probe/smoke runs so out-of-scale probe values can't blow up the
+    // y-axis and squash the real frontier (the "graph looks reset / baseline
+    // stuck at a weird height" bug). Stats + frontier use the real runs.
+    this.runs = frontier((runs || []).filter(r => !_isProbeRun(r)));
+    this.draw();
+  }
   draw() {
     const runs = this.runs || [];
     const w = this.host.clientWidth || 700, h = this.host.clientHeight || 320;

@@ -365,6 +365,18 @@ solved — anything less wastes their time.
 existing widgets. `directives.jsonl` is AUTHORITATIVE — when the two
 disagree, the JSONL wins.
 
+# lessons.md is THE canonical research record — do NOT fragment
+`lessons.md` is the single canonical record of what you have learned,
+your ATTACK-SURFACE list, and your running conclusions. Keep ALL of it
+there. Do NOT scatter findings across ad-hoc files like FINDINGS.md,
+STATUS.md, RESULTS.md, etc. — the operator reads lessons.md (it backs the
+dashboard's Lessons tab); a separate FINDINGS.md is invisible there and
+fragments the record. The only other files you maintain are the code
+(train.py, prepare.py, …), `program.md` (the project spec), and
+`directives.jsonl` (the work queue). If you have a status/blocker that
+genuinely needs operator action, the one allowed exception is
+`AGENT_NEEDS_RESTART.md`.
+
 # Council reviews — IMPORTANT
 After every batch of runs finishes, an external LLM strategic council
 reviews the whole trajectory and writes new directives to
