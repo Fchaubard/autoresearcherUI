@@ -3863,12 +3863,21 @@ PASSCODE=`;
       }
     }
     start.textContent = 'Starting…';
+    let resp;
     try {
-      await post('/onboarding', cfg);
+      resp = await post('/onboarding', cfg);
     } catch (e) {
       aruiAlert('Onboarding save failed: ' + e,
         { title: 'Could not save config' });
       start.disabled = false; start.textContent = 'Start research →';
+      return;
+    }
+    // Scoping gate (Phase 0): the backend runs a literature review + a
+    // direction-confirmation pass BEFORE spawning the research agent. When it
+    // returns status:"scoping" we open the scoping modal; the agent boots only
+    // after the user confirms (or skips) there.
+    if (resp && resp.status === 'scoping') {
+      showScopingModal();
       return;
     }
     // Don't slam-reload — the Claude Code agent takes 20–40 s to come up
@@ -3952,6 +3961,215 @@ function showTokenCheckResults(results) {
  * latest tmux tail + a status line that advances as we observe progress,
  * and redirects to the dashboard once the agent looks responsive.
  * A "Skip & open dashboard" button lets impatient users bail out. */
+/* ── Scoping modal (Phase 0: lit review + direction confirmation) ──────────
+ * Full-screen gate shown after onboarding submit when the backend returns
+ * status:"scoping". Polls /api/scope/status while the Lit Agent + Council
+ * work, then renders the synthesis (problem, SOTA, per-idea assessment with
+ * closest prior work + cheap kill tests), a back-and-forth chat, and the
+ * Confirm / Skip controls. The research agent boots only after Confirm/Skip. */
+function showScopingModal() {
+  const app = document.getElementById('app');
+  app.className = 'onb';
+  app.innerHTML =
+    '<div class="scope-wrap">' +
+      '<div class="scope-head">' +
+        '<div class="boot-brand">autoresearcher<span>UI</span></div>' +
+        '<div class="scope-phase" id="scope-phase">Starting scoping…</div>' +
+      '</div>' +
+      '<div class="scope-body">' +
+        '<div class="scope-side">' +
+          '<div class="scope-sec-h">Literature review</div>' +
+          '<div class="scope-lit" id="scope-lit">searching…</div>' +
+          '<div class="scope-sec-h">Environment preflight</div>' +
+          '<div class="scope-pf" id="scope-pf">—</div>' +
+          '<div class="scope-sec-h">Papers found</div>' +
+          '<div class="scope-papers" id="scope-papers">—</div>' +
+        '</div>' +
+        '<div class="scope-main" id="scope-main">' +
+          '<div class="scope-loading" id="scope-loading">' +
+            '<div class="boot-spinner"></div>' +
+            '<div id="scope-loadmsg">Reviewing the literature and ' +
+            'pressure-testing your direction…</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  const ScopeUI = { polling: true, rendered: false, kept: {} };
+
+  function pill(ok) {
+    return '<span class="scope-dot ' + (ok ? 'ok' : 'bad') + '"></span>';
+  }
+  function renderSide(d) {
+    const prog = d.progress || {};
+    const lit = document.getElementById('scope-lit');
+    if (lit) lit.textContent = (prog.phase || d.status || '') +
+      ' · ' + (prog.papers_found || 0) + ' papers';
+    const pf = document.getElementById('scope-pf');
+    const checks = (d.preflight || {}).checks || [];
+    if (pf) pf.innerHTML = checks.length
+      ? checks.map(c => '<div>' + pill(c.ok) + esc(c.name) +
+          (c.detail ? ' <span class="scope-muted">' + esc(c.detail) + '</span>' : '') +
+          '</div>').join('')
+      : '<span class="scope-muted">running…</span>';
+    const pap = document.getElementById('scope-papers');
+    const papers = d.papers || [];
+    if (pap) pap.innerHTML = papers.length
+      ? papers.map(p => '<div class="scope-paper" title="' + esc(p.relevance || '') +
+          '"><b>[' + esc(p.key || '') + ']</b> ' + esc((p.title || '').slice(0, 90)) +
+          ' <span class="scope-muted">(' + esc(p.year || '') + ')</span></div>').join('')
+      : '<span class="scope-muted">—</span>';
+  }
+  function ideaCard(it, idx, kind) {
+    const cpw = (it.closest_prior_work || []).map(k => '[' + esc(k) + ']').join(' ')
+      || '<span class="scope-muted">no close prior work retrieved</span>';
+    const badge = kind === 'user'
+      ? '<span class="scope-badge v-' + esc(it.verdict || '') + '">' +
+        esc(it.verdict || '') + '</span>'
+      : '<span class="scope-badge cls">' + esc(it.idea_class || '') + '</span>';
+    const cid = kind + '-' + idx;
+    ScopeUI.kept[cid] = true;
+    return '<div class="scope-idea">' +
+      '<label class="scope-idea-h"><input type="checkbox" data-keep="' + cid +
+        '" checked/> ' + badge + ' <b>' + esc(it.idea || '') + '</b></label>' +
+      (it.why ? '<div class="scope-idea-why">' + esc(it.why) + '</div>' : '') +
+      '<div class="scope-idea-meta"><b>Closest prior work:</b> ' + cpw + '</div>' +
+      (it.novel_delta ? '<div class="scope-idea-meta"><b>Novel delta:</b> ' +
+        esc(it.novel_delta) + '</div>' : '') +
+      '<div class="scope-idea-meta kill"><b>Cheap kill test:</b> ' +
+        esc(it.cheap_kill_test || '—') + '</div>' +
+    '</div>';
+  }
+  function renderSynth(d) {
+    const s = d.synthesis || {};
+    const ua = s.user_ideas_assessment || [];
+    const na = s.new_ideas || [];
+    const oq = s.open_questions || [];
+    const main = document.getElementById('scope-main');
+    main.innerHTML =
+      '<div class="scope-scroll">' +
+        '<div class="scope-block"><h3>The problem</h3><p>' +
+          esc(s.problem_restated || '') + '</p></div>' +
+        '<div class="scope-block"><h3>State of the art</h3><p>' +
+          esc(s.sota_summary || '') + '</p></div>' +
+        (ua.length ? '<div class="scope-block"><h3>Your seed ideas — honest read</h3>' +
+          ua.map((it, i) => ideaCard(it, i, 'user')).join('') + '</div>' : '') +
+        (na.length ? '<div class="scope-block"><h3>New directions to beat SOTA</h3>' +
+          na.map((it, i) => ideaCard(it, i, 'new')).join('') + '</div>' : '') +
+        (s.recommended_direction ? '<div class="scope-block"><h3>Recommended ' +
+          'direction</h3><p>' + esc(s.recommended_direction) + '</p></div>' : '') +
+        (oq.length ? '<div class="scope-block"><h3>Open questions</h3><ul>' +
+          oq.map(q => '<li>' + esc(q) + '</li>').join('') + '</ul></div>' : '') +
+        '<div class="scope-block"><h3>Discuss &amp; push back</h3>' +
+          '<div class="scope-chat" id="scope-chat"></div>' +
+          '<div class="scope-chatbar">' +
+            '<textarea id="scope-chatin" rows="2" placeholder="Challenge a ' +
+            'direction, ask for alternatives, demand novelty…"></textarea>' +
+            '<button class="btn" id="scope-send">Send</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="scope-block"><h3>Confirm the plan</h3>' +
+          '<textarea id="scope-final" rows="3" placeholder="The final research ' +
+          'direction to commit to…">' + esc(s.recommended_direction || '') +
+          '</textarea>' +
+          '<div class="scope-actions">' +
+            '<button class="btn pri" id="scope-confirm">Confirm &amp; start ' +
+            'research</button>' +
+            '<button class="btn ghost" id="scope-skip">Skip &amp; run now</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    renderChat(d.messages || []);
+    document.getElementById('scope-send').onclick = sendChat;
+    document.getElementById('scope-chatin').onkeydown = (e) => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) sendChat();
+    };
+    main.querySelectorAll('[data-keep]').forEach(cb => {
+      cb.onchange = () => { ScopeUI.kept[cb.dataset.keep] = cb.checked; };
+    });
+    document.getElementById('scope-confirm').onclick = doConfirm;
+    document.getElementById('scope-skip').onclick = doSkip;
+  }
+  function renderChat(msgs) {
+    const c = document.getElementById('scope-chat');
+    if (!c) return;
+    c.innerHTML = msgs.map(m => '<div class="scope-msg ' + esc(m.role) + '">' +
+      esc(m.text) + '</div>').join('');
+    c.scrollTop = c.scrollHeight;
+  }
+  async function sendChat() {
+    const inp = document.getElementById('scope-chatin');
+    const text = (inp.value || '').trim();
+    if (!text) return;
+    inp.value = ''; inp.disabled = true;
+    const c = document.getElementById('scope-chat');
+    if (c) { c.innerHTML += '<div class="scope-msg user">' + esc(text) + '</div>' +
+      '<div class="scope-msg agent scope-thinking">thinking…</div>';
+      c.scrollTop = c.scrollHeight; }
+    let d;
+    try { d = await post('/scope/chat', { text }); }
+    catch (e) { d = null; }
+    inp.disabled = false; inp.focus();
+    if (d && d.messages) renderChat(d.messages);
+  }
+  function keptIdx(kind, n) {
+    const out = [];
+    for (let i = 0; i < n; i++) if (ScopeUI.kept[kind + '-' + i]) out.push(i);
+    return out;
+  }
+  async function doConfirm() {
+    const s = (ScopeUI.last && ScopeUI.last.synthesis) || {};
+    const final = (document.getElementById('scope-final').value || '').trim();
+    const btn = document.getElementById('scope-confirm');
+    btn.disabled = true; btn.textContent = 'Starting research…';
+    try {
+      await post('/scope/confirm', {
+        final_direction: final,
+        keep_user: keptIdx('user', (s.user_ideas_assessment || []).length),
+        keep_new: keptIdx('new', (s.new_ideas || []).length) });
+    } catch (e) {
+      btn.disabled = false; btn.textContent = 'Confirm & start research';
+      aruiAlert('Could not start: ' + e, { title: 'Scoping' }); return;
+    }
+    showAgentBootOverlay();
+  }
+  async function doSkip() {
+    const ok = await aruiConfirm(
+      'Skip scoping and start the research now? You\'ll lose the ' +
+      'literature-grounded plan and the agent will work straight from your ' +
+      'onboarding brief.', { title: 'Skip scoping', okText: 'Skip & run' });
+    if (!ok) return;
+    try { await post('/scope/skip', { reason: 'user skipped' }); }
+    catch (e) { aruiAlert('Could not start: ' + e, { title: 'Scoping' }); return; }
+    showAgentBootOverlay();
+  }
+  async function tick() {
+    let d;
+    try { d = await api('/scope/status'); } catch (e) { return; }
+    ScopeUI.last = d;
+    const ph = document.getElementById('scope-phase');
+    if (ph) ph.textContent = ({
+      searching: 'Reviewing the literature…',
+      synthesizing: 'Synthesizing the state of the art…',
+      awaiting_user: 'Confirm your research direction',
+      confirmed: 'Confirmed — starting research',
+      error: 'Scoping error' }[d.status] || d.status || '');
+    renderSide(d);
+    if (d.status === 'error') {
+      ScopeUI.polling = false;
+      document.getElementById('scope-main').innerHTML =
+        '<div class="scope-loading"><div>⚠ ' + esc(d.error || 'scoping failed') +
+        '</div><button class="btn" onclick="location.reload()">Reload</button></div>';
+      return;
+    }
+    if (d.status === 'awaiting_user' && !ScopeUI.rendered) {
+      ScopeUI.rendered = true; ScopeUI.polling = false;
+      renderSynth(d);
+    }
+    if (ScopeUI.polling) setTimeout(tick, 2500);
+  }
+  tick();
+}
+
 function showAgentBootOverlay() {
   const app = document.getElementById('app');
   app.className = 'onb';

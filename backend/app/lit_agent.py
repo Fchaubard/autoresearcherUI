@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -64,7 +65,10 @@ def _arxiv_search(query: str, limit: int = 20,
     kws = _extract_keywords(query, k=6)
     if not kws:
         return []
-    kw_clause = "+AND+".join(f"all:{k}" for k in kws[:5])
+    # AND only the 3 strongest keywords — ANDing 5+ with the category filter
+    # is so strict it routinely returns 0 rows, defeating the fallback that
+    # exists precisely for when Semantic Scholar is rate-limited.
+    kw_clause = "+AND+".join(f"all:{k}" for k in kws[:3])
     if ml_only:
         cat_clause = "+OR+".join(f"cat:{c}" for c in _ARXIV_ML_CATEGORIES)
         sq = f"({kw_clause})+AND+({cat_clause})"
@@ -114,18 +118,33 @@ def _arxiv_search(query: str, limit: int = 20,
 
 
 def _semantic_search(query: str, limit: int = 20) -> list[dict]:
-    """Use Semantic Scholar; free tier, no key needed."""
+    """Use Semantic Scholar; free tier, no key needed. The free tier is
+    aggressively rate-limited (HTTP 429), so we retry a couple of times with
+    backoff before giving up — otherwise the scoping sweep returns 1 paper
+    instead of a dozen purely because of a transient 429."""
+    import time as _t
     params = {
         "query": query, "limit": str(limit),
         "fields": "title,authors,year,abstract,externalIds,citationCount",
     }
     url = _SEMANTIC_API + "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers={"User-Agent": "autoresearcherUI/1"})
-    try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            data = json.loads(resp.read().decode("utf-8", errors="ignore"))
-    except Exception as e:                              # noqa: BLE001
-        print(f"[lit] semantic scholar failed: {e}", flush=True)
+    data = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            break
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < 2:
+                _t.sleep(2.0 * (attempt + 1))          # 2s, 4s backoff
+                continue
+            print(f"[lit] semantic scholar HTTP {e.code}", flush=True)
+            return []
+        except Exception as e:                          # noqa: BLE001
+            print(f"[lit] semantic scholar failed: {e}", flush=True)
+            return []
+    if data is None:
         return []
     out = []
     for p in data.get("data", []):
@@ -177,13 +196,23 @@ def _bibtex_for(p: dict) -> str:
 
 
 def search(query: str, limit: int = 20) -> list[dict]:
-    """Semantic Scholar has much better natural-language relevance ranking
-    than arxiv's keyword-index search, so we try it first now. arxiv is
-    the fallback (cs.* category-filtered)."""
+    """Semantic Scholar has much better natural-language relevance ranking,
+    so it leads; arxiv (cs.* category-filtered) is merged in to backfill
+    coverage and to survive Semantic-Scholar rate-limits. Dedupe by a
+    normalised title so the same paper from both sources collapses to one."""
     rows = _semantic_search(query, limit=limit)
-    if not rows:
-        rows = _arxiv_search(query, limit=limit)
-    return rows
+    if len(rows) < limit:
+        rows = rows + _arxiv_search(query, limit=limit)
+    # dedupe by normalised title, preserving first (semantic-ranked) order
+    seen, out = set(), []
+    for r in rows:
+        t = "".join(c for c in (r.get("title", "") or "").lower()
+                    if c.isalnum())[:60]
+        if not t or t in seen:
+            continue
+        seen.add(t)
+        out.append(r)
+    return out[:max(limit, len(out))]
 
 
 def _build_relevance(claim_title: str, claim_summary: str,
@@ -269,10 +298,13 @@ def discover_for_purpose(purpose: str, seed_ideas: str = "",
         kq = q.lower()
         if kq not in seen_q:
             seen_q.add(kq); uniq_q.append(q)
-    per_q = max(4, max_papers // max(1, len(uniq_q)))
+    per_q = max(6, max_papers // max(1, len(uniq_q)))
     out: list[dict] = []
     seen_keys: set[str] = set()
-    for q in uniq_q:
+    import time as _t
+    for qi, q in enumerate(uniq_q):
+        if qi:
+            _t.sleep(0.5)            # space requests → fewer burst-429s
         try:
             results = search(q, limit=per_q)
         except Exception as e:                              # noqa: BLE001
