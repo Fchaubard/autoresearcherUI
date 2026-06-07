@@ -1928,3 +1928,6 @@ textarea.onb-in{resize:vertical;line-height:1.5}
   font-size:13px;font-family:inherit;resize:vertical}
 .scope-actions{display:flex;gap:10px;margin-top:12px}
 .btn.ghost{background:transparent;border:1px solid var(--border);color:var(--muted)}
+.scope-head-r{display:flex;align-items:center;gap:14px}
+.scope-head-r .scope-phase{margin:0}
+.scope-head .btn.ghost{font-size:12px;padding:5px 11px}

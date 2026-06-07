@@ -3974,7 +3974,11 @@ function showScopingModal() {
     '<div class="scope-wrap">' +
       '<div class="scope-head">' +
         '<div class="boot-brand">autoresearcher<span>UI</span></div>' +
-        '<div class="scope-phase" id="scope-phase">Starting scoping…</div>' +
+        '<div class="scope-head-r">' +
+          '<div class="scope-phase" id="scope-phase">Starting scoping…</div>' +
+          '<button class="btn ghost" id="scope-back" type="button">' +
+          '← Back to onboarding</button>' +
+        '</div>' +
       '</div>' +
       '<div class="scope-body">' +
         '<div class="scope-side">' +
@@ -3994,7 +3998,18 @@ function showScopingModal() {
         '</div>' +
       '</div>' +
     '</div>';
-  const ScopeUI = { polling: true, rendered: false, kept: {} };
+  const ScopeUI = { polling: true, rendered: false, kept: {}, exited: false };
+
+  // Escape hatch: bail out of scoping back to the onboarding form (pre-filled
+  // with the saved config) so the user can edit and re-submit. Available at
+  // any phase — even mid-search — so the modal never traps them.
+  async function backToOnboarding() {
+    ScopeUI.exited = true; ScopeUI.polling = false;
+    let saved = null;
+    try { saved = await api('/onboarding'); } catch (e) {}
+    onboarding(saved || {});
+  }
+  document.getElementById('scope-back').onclick = backToOnboarding;
 
   function pill(ok) {
     return '<span class="scope-dot ' + (ok ? 'ok' : 'bad') + '"></span>';
@@ -4143,8 +4158,10 @@ function showScopingModal() {
     showAgentBootOverlay();
   }
   async function tick() {
+    if (ScopeUI.exited) return;        // user left for onboarding — stop
     let d;
     try { d = await api('/scope/status'); } catch (e) { return; }
+    if (ScopeUI.exited) return;
     ScopeUI.last = d;
     const ph = document.getElementById('scope-phase');
     if (ph) ph.textContent = ({
