@@ -7246,26 +7246,23 @@ class BucketChart {
       c.lineWidth = isActive ? 2.8 : (s.dashed ? 1.4 : 1.8);
       if (s.dashed) c.setLineDash([4, 3]); else c.setLineDash([]);
       let pen = false;
-      let gapLen = 0;     // consecutive nulls since last drawn point
       let lastX = null, lastY = null;
       c.beginPath();
       for (let i = 0; i < s.x.length; i++) {
         const xi = s.x[i], yi = ys[i];
-        if (xi == null || yi == null || isNaN(yi)) {
-          gapLen++;
-          continue;
-        }
+        if (xi == null || yi == null || isNaN(yi)) continue;  // skip empty bucket
         const px = X(xi), py = Y(yi);
-        if (!pen) {
-          c.moveTo(px, py); pen = true;
-        } else if (gapLen > MAX_GAP) {
-          // long gap — drop the pen, start a new segment so the gap is honest
-          c.moveTo(px, py);
-        } else {
-          // short or zero-length gap — connect through to keep the line smooth
-          c.lineTo(px, py);
-        }
-        gapLen = 0; lastX = px; lastY = py;
+        // Connect through empty buckets: a sparsely-logged metric (e.g. a run
+        // that logs every 20 steps but is bucketed into 500 buckets) is still
+        // ONE continuous curve, exactly like wandb/tensorboard. The old
+        // MAX_GAP break shattered such runs into disconnected sticks because
+        // consecutive points were >8 empty buckets apart — that "honest
+        // dropout" heuristic did far more harm than good. An explicit NaN
+        // (skipped above) is still a hole; we just don't invent dropouts from
+        // the bucket grid being finer than the logging cadence.
+        if (!pen) { c.moveTo(px, py); pen = true; }
+        else { c.lineTo(px, py); }
+        lastX = px; lastY = py;
       }
       c.stroke(); c.setLineDash([]);
     };
