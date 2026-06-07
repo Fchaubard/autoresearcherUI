@@ -4692,6 +4692,35 @@ function _fmtBytes(n) {
   if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
   return (n / 1048576).toFixed(1) + ' MB';
 }
+// Persist the set of open files (+ which is active) so a full page reload
+// re-opens them, JupyterLab-style. We store only paths — contents are
+// re-fetched fresh on restore so we never show stale bytes.
+const _FILES_LS_KEY = 'arui.files.openTabs';
+function _saveOpenTabs() {
+  try {
+    localStorage.setItem(_FILES_LS_KEY, JSON.stringify({
+      paths: FilesState.tabs.map(t => t.path), active: FilesState.file }));
+  } catch (e) {}
+}
+async function _restoreOpenTabs() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(_FILES_LS_KEY) || 'null'); }
+  catch (e) {}
+  if (!saved || !Array.isArray(saved.paths) || !saved.paths.length) return;
+  FilesState._restoring = true;
+  for (const p of saved.paths) {
+    if (S.view !== 'files') break;          // user navigated away mid-restore
+    await openFileInEditor(p, { quiet: true });   // skips files that vanished
+  }
+  FilesState._restoring = false;
+  // Attach the editor exactly once, to the previously-active tab (or the last
+  // one that survived if the saved active is gone).
+  const act = (saved.active && FilesState.tabs.some(t => t.path === saved.active))
+    ? saved.active
+    : (FilesState.tabs.length ? FilesState.tabs[FilesState.tabs.length - 1].path : null);
+  if (act) activateTab(act);
+  _saveOpenTabs();                          // prune any paths that failed to open
+}
 
 function renderFiles(c) {
   c.classList.add('full-bleed');
@@ -4753,6 +4782,9 @@ function renderFiles(c) {
         || FilesState.tabs[0];
       FilesState.file = null;      // force activateTab to attach the model
       activateTab(act.path);
+    } else if (!FilesState.tabs.length) {
+      // Fresh page load: re-open whatever was open before the reload.
+      _restoreOpenTabs();
     }
   }, 0);
 }
@@ -4809,6 +4841,7 @@ function activateTab(path) {
   FilesState.editor.focus();
   FilesState.file = tab.path; FilesState.dirty = tab.dirty;
   _updateSaveBar(); _paintTabs();
+  if (!FilesState._restoring) _saveOpenTabs();
 }
 async function closeTab(path) {
   const idx = FilesState.tabs.findIndex(t => t.path === path);
@@ -4835,6 +4868,7 @@ async function closeTab(path) {
   }
   try { tab.model.dispose(); } catch (e) {}   // safe now: model is detached
   _paintTabs();
+  _saveOpenTabs();
 }
 
 let _filesEntries = [];
@@ -4905,22 +4939,24 @@ function _paintFilesList() {
     };
   });
 }
-async function openFileInEditor(path) {
+async function openFileInEditor(path, opts) {
+  opts = opts || {};
+  const quiet = !!opts.quiet;     // restore path: skip alerts, just drop failures
   // Already open? Just switch to that tab — no reload, preserves edits.
   if (FilesState.tabs.some(t => t.path === path)) { activateTab(path); return; }
   const edpath = document.getElementById('files-edpath');
-  if (edpath) edpath.textContent = 'loading ' + path + '…';
+  if (edpath && !quiet) edpath.textContent = 'loading ' + path + '…';
   let d;
   try { d = await api('/files/read?path=' + encodeURIComponent(path)); }
-  catch (e) { aruiAlert('Could not open: ' + String(e), { title: 'Open file' });
+  catch (e) { if (!quiet) aruiAlert('Could not open: ' + String(e), { title: 'Open file' });
     _updateSaveBar(); return; }
   if (!d || !d.ok) {
-    aruiAlert('Could not open: ' + ((d && d.error) || 'unknown'), { title: 'Open file' });
+    if (!quiet) aruiAlert('Could not open: ' + ((d && d.error) || 'unknown'), { title: 'Open file' });
     _updateSaveBar(); return;
   }
   let monaco;
   try { monaco = await loadMonaco(); }
-  catch (e) { aruiAlert('Editor failed to load: ' + String(e), { title: 'Open file' });
+  catch (e) { if (!quiet) aruiAlert('Editor failed to load: ' + String(e), { title: 'Open file' });
     _updateSaveBar(); return; }
   const lang = _langFor(path.split('/').pop());
   const model = monaco.editor.createModel(d.content, lang);
@@ -4933,7 +4969,11 @@ async function openFileInEditor(path) {
     }
   });
   FilesState.tabs.push(tab);
-  activateTab(d.path);
+  // During a bulk restore we only paint the tab; the editor is attached once
+  // at the end (for the active tab) to avoid rapid setModel churn that makes
+  // Monaco log benign "Canceled" tokenization rejections.
+  if (FilesState._restoring) _paintTabs();
+  else activateTab(d.path);
 }
 function _updateSaveBar() {
   const edpath = document.getElementById('files-edpath');
