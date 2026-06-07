@@ -2195,8 +2195,8 @@ def _collect_codebase(workspace: str | os.PathLike) -> str:
     SKIP_DIRS = {"__pycache__", ".git", ".venv", "venv", "data", "ckpts",
                  "checkpoints", "runs", "wandb", "node_modules"}
     EXT = {".py", ".md", ".yaml", ".yml", ".json", ".toml", ".cfg", ".sh"}
-    MAX_BYTES_PER_FILE = 24_000
-    MAX_TOTAL = 220_000
+    MAX_BYTES_PER_FILE = 64_000
+    MAX_TOTAL = 320_000
     chunks: list[str] = []
     total = 0
     for p in sorted(ws.rglob("*")):
@@ -2225,7 +2225,18 @@ def _collect_codebase(workspace: str | os.PathLike) -> str:
             continue
         if not text.strip():
             continue
-        text = text[:MAX_BYTES_PER_FILE]
+        orig_len = len(text)
+        if orig_len > MAX_BYTES_PER_FILE:
+            # IMPORTANT: never let a budget-truncation masquerade as a code
+            # defect. Without this marker the reviewer sees a file that stops
+            # mid-function and hallucinates "truncated / SyntaxError / missing
+            # finalize" — the recurring false code-bless rejection Francois hit.
+            text = (text[:MAX_BYTES_PER_FILE]
+                    + f"\n\n[... FILE TRUNCATED: showing {MAX_BYTES_PER_FILE} "
+                      f"of {orig_len} bytes to fit the review context budget. "
+                      f"The cutoff is a DISPLAY LIMIT, NOT a code defect — do "
+                      f"not treat the missing tail as a syntax error, an "
+                      f"unfinished function, or absent finalization ...]\n")
         rel = p.relative_to(ws).as_posix()
         block = f"\n\n===== FILE: {rel} =====\n{text}\n"
         if total + len(block) > MAX_TOTAL:

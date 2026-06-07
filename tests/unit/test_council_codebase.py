@@ -100,3 +100,47 @@ def test_collect_codebase_handles_nested_skip_dir_INSIDE_workspace(tmp_path):
     assert "wandb/run-1/config.yaml" not in blob
     assert "config.yaml" not in blob, (
         "wandb is in SKIP_DIRS; its contents must NOT be collected.")
+
+
+# ---------------------------------------------------------------------------
+# Regression: per-file truncation must be MARKED, not silent.
+#
+# Francois 2026-06-07: the code-bless reviewer kept REJECTING a correct
+# train.py with "truncated mid-line / SyntaxError / missing arui.finish".
+# Root cause: train.py was 28.5 KB but MAX_BYTES_PER_FILE was 24_000, so
+# its tail (end of main(), arui.finish(), __main__) was silently cut. The
+# reviewer saw a file ending mid-function and hallucinated a code defect,
+# 423-locking every real (non-probe) run. Fix: raise the cap so a normal
+# train.py fits whole, AND append an explicit marker whenever a file IS
+# truncated so a budget cut can never be mistaken for broken code.
+# ---------------------------------------------------------------------------
+
+def test_train_py_sized_file_is_not_truncated(tmp_path):
+    """A ~28 KB train.py (the real size that triggered the bug) must be
+    collected WHOLE — no truncation marker, tail present."""
+    from backend.app.council import _collect_codebase
+    ws = tmp_path / "data" / "workspace" / "p"
+    ws.mkdir(parents=True)
+    body = ("# header\n" + "x = 1  # pad\n" * 2400
+            + "\ndef main():\n    pass\n\n\nif __name__ == \"__main__\":\n"
+              "    main()  # UNIQUE_TAIL_MARKER\n")
+    assert 24_000 < len(body) < 64_000
+    (ws / "train.py").write_text(body)
+    blob = _collect_codebase(ws)
+    assert "UNIQUE_TAIL_MARKER" in blob, (
+        "train.py tail was cut — MAX_BYTES_PER_FILE regressed below a "
+        "normal trainer size; the bless reviewer will see a file ending "
+        "mid-function and falsely reject it.")
+    assert "FILE TRUNCATED" not in blob
+
+
+def test_oversize_file_gets_explicit_truncation_marker(tmp_path):
+    """A genuinely oversize file (> cap) must carry the marker so the
+    reviewer never reads a budget cut as a syntax error."""
+    from backend.app.council import _collect_codebase
+    ws = tmp_path / "data" / "workspace" / "p"
+    ws.mkdir(parents=True)
+    (ws / "huge.py").write_text("a = 1\n" * 30_000)  # ~180 KB
+    blob = _collect_codebase(ws)
+    assert "FILE TRUNCATED" in blob
+    assert "NOT a code defect" in blob
