@@ -212,6 +212,14 @@ fi
 # so cron is the right resurrection layer: it's a separate subsystem that
 # survives a tmux-server death. bin/arui_watchdog.sh is idempotent and only
 # (re)creates the infra sessions; it never touches the agent/author REPLs.
+# Install the `arun` run-launcher onto PATH so the research agent can stream
+# every run live to the Sessions tab (instead of redirecting to a log file,
+# which leaves the Sessions terminal blank).
+step "installing the arun run-launcher onto PATH…"
+chmod +x "$ROOT/bin/arun" 2>/dev/null || true
+$SUDO ln -sf "$ROOT/bin/arun" /usr/local/bin/arun 2>/dev/null \
+  || cp -f "$ROOT/bin/arun" /usr/local/bin/arun 2>/dev/null || true
+
 step "installing the backend watchdog (cron → bin/arui_watchdog.sh)…"
 chmod +x "$ROOT/bin/arui_watchdog.sh" 2>/dev/null || true
 if command -v apt-get >/dev/null 2>&1 && ! command -v crontab >/dev/null 2>&1; then

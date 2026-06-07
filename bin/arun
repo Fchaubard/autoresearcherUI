@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# arun — launch a research run so its LIVE output streams to the dashboard's
+# Sessions tab AND is saved to a log file.
+#
+#   arun <run_id> <command...>
+#   e.g.  arun adr-m7b-s1 python -u train.py --model mistral-7b --seed 1
+#
+# WHY THIS EXISTS
+#   The research agent kept launching runs with `... > run.log 2>&1`, which
+#   sends ALL output to a file and leaves the dashboard Sessions tab BLANK
+#   (the operator complained about this repeatedly). arun makes the correct
+#   pattern a one-liner: it runs the command in a detached tmux session named
+#   after the run (so it shows in the Sessions tab) and TEEs the output to the
+#   pane AND to data/logs/<run_id>.log. PYTHONUNBUFFERED + stdbuf keep the
+#   output line-buffered so it appears LIVE instead of block-buffering behind
+#   the tee pipe. Use this for EVERY run; never redirect run stdout to a file.
+set -u
+if [ "$#" -lt 2 ]; then
+  echo "usage: arun <run_id> <command...>   (NOT  arun <run_id> ... > file)" >&2
+  exit 2
+fi
+SESS="$1"; shift
+[ "${1:-}" = "--" ] && shift
+WS="$(pwd)"
+LOGDIR="$WS/data/logs"
+mkdir -p "$LOGDIR"
+LOG="$LOGDIR/$SESS.log"
+CMD="$*"
+# Refuse a command that itself redirects stdout to a file — that would defeat
+# the whole point (Sessions tab stays blank).
+case "$CMD" in
+  *">"*|*"&>"*) echo "arun: do NOT put a '>' file redirect in the command — arun already logs to $LOG and streams to the pane." >&2; exit 2;;
+esac
+tmux kill-session -t "$SESS" 2>/dev/null || true
+tmux new-session -d -s "$SESS" \
+  "cd '$WS' && PYTHONUNBUFFERED=1 stdbuf -oL -eL $CMD 2>&1 | tee '$LOG'"
+echo "arun: launched '$SESS' — live in the Sessions tab; log at $LOG"

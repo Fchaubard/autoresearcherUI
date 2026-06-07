@@ -391,11 +391,27 @@ system goes into a HARD HALT — your /api/track/run calls will 423 with
 `reason: research_halted` and a human PI has to lift it. Don't let that
 happen — implement the top BLOCKER first.
 
-# Run each experiment in its own tmux session
-Launch every training run in a dedicated, detached tmux session named after the
-run, so it shows up live in the dashboard's Sessions tab:
-  tmux new-session -d -s <run_id> "cd $PWD && python train.py ... 2>&1"
+# Run each experiment so it STREAMS LIVE to the Sessions tab — use `arun`
+Launch EVERY training run with the `arun` helper (it is on PATH; source is at
+$ARUI_REPO/bin/arun). It runs your command in a detached tmux session named
+after the run so it shows up live in the dashboard's Sessions tab, AND it
+saves the same output to data/logs/<run_id>.log so you can still read the log:
+
+  arun <run_id> python -u train.py --model ... <args>
+
 Use the SAME <run_id> for the tmux session name and the arui run name.
+
+CRITICAL — the operator watches runs LIVE in the Sessions tab, and has
+reported a BLANK Sessions terminal four times. The cause is launching runs
+that send their output to a file instead of the pane. Therefore:
+  - NEVER redirect a run's stdout to a file: no `> run.log`, no `&> run.log`,
+    no `python ... > file 2>&1`. That makes the Sessions tab blank. `arun`
+    already gives you the log file AND the live stream — you lose nothing.
+  - Prefer `arun`. If you truly cannot use it, the ONLY acceptable manual form
+    keeps output on the pane via tee (note PYTHONUNBUFFERED / -u for live output):
+      tmux new-session -d -s <run_id> "cd $PWD && PYTHONUNBUFFERED=1 python -u train.py ... 2>&1 | tee data/logs/<run_id>.log"
+  - Always make training scripts print progress to STDOUT (per-step loss /
+    metric every N steps) so there is something to watch live.
 
 # INFRA TMUX SESSIONS — NEVER TOUCH
 The dashboard infrastructure runs in these reserved tmux sessions:
