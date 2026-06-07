@@ -478,6 +478,12 @@ def _setup_prompt(cfg: dict) -> str:
     instructions = (cfg.get('agent_instructions')
                     or DEFAULT_AGENT_INSTRUCTIONS).replace("__METRIC__", metric)
     kill_policy = (cfg.get('kill_criteria') or '1 hour').strip() or '1 hour'
+    # When the scoping gate confirmed a direction, it leaves a literature-
+    # grounded brief in cfg['scope_brief'] (SOTA summary + the agreed plan +
+    # key prior work). Inject it so the agent starts grounded instead of
+    # guessing from the raw purpose.
+    scope_brief = (cfg.get('scope_brief') or '').strip()
+    scope_brief = ("\n" + scope_brief + "\n") if scope_brief else ""
     return f"""You are the Principal Researcher for an autonomous ML research project.
 
 # Purpose
@@ -502,7 +508,7 @@ and marks it `crashed`, so plan every experiment to fit within it —
 e.g. a `1 hour` policy means a 10-hour training schedule will be killed
 early, so prefer short, decisive experiments. Read `$ARUI_KILL_CRITERIA`
 when designing each new run so you respect the researcher's budget.
-
+{scope_brief}
 {instructions}"""
 
 
