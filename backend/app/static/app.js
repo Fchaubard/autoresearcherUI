@@ -4631,8 +4631,14 @@ function viewPane() {
 }
 
 /* ── Files: JupyterLab-style browser + Monaco (VS Code) editor ───────────── */
+// Multi-file editor state. `tabs` holds one entry per open file:
+//   { path, model (Monaco model), dirty, viewState }.
+// `file`/`dirty` mirror the ACTIVE tab so the save bar + global Ctrl-S
+// handler keep working unchanged. Models live independently of the
+// editor/DOM, so they survive a view remount; only the editor instance
+// is recreated.
 const FilesState = { cwd: null, _parent: null, file: null, dirty: false,
-                     editor: null };
+                     editor: null, tabs: [] };
 const _MONACO_VS = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs';
 const _MONACO_BASE = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/';
 function loadMonaco() {
@@ -4689,9 +4695,11 @@ function _fmtBytes(n) {
 
 function renderFiles(c) {
   c.classList.add('full-bleed');
-  // Dispose any editor from a prior mount (its host node is gone now).
+  // Dispose the editor instance from a prior mount (its host node is gone),
+  // but KEEP the open tabs + their models — they're DOM-independent and we
+  // re-attach them below so open files survive switching views.
   if (FilesState.editor) { try { FilesState.editor.dispose(); } catch (e) {} }
-  FilesState.editor = null; FilesState.file = null; FilesState.dirty = false;
+  FilesState.editor = null;
   c.innerHTML =
     '<div class="files">' +
       '<div class="files-side">' +
@@ -4704,6 +4712,7 @@ function renderFiles(c) {
         '<div class="files-list" id="files-list"></div>' +
       '</div>' +
       '<div class="files-main">' +
+        '<div class="files-tabs" id="files-tabs"></div>' +
         '<div class="files-edbar">' +
           '<span class="files-edpath" id="files-edpath">No file open</span>' +
           '<span class="files-edspacer"></span>' +
@@ -4733,6 +4742,99 @@ function renderFiles(c) {
     });
   }
   loadFilesDir(FilesState.cwd || '/root/autoresearcherUI');
+  // Re-attach any tabs that were open before this remount. Deferred a tick so
+  // the freshly-built container is in the document — renderFiles may run before
+  // viewPane swaps `c` into the DOM, and activateTab needs the editor host node.
+  setTimeout(() => {
+    if (S.view !== 'files') return;
+    _paintTabs();
+    if (FilesState.tabs.length && window.monaco) {
+      const act = FilesState.tabs.find(t => t.path === FilesState.file)
+        || FilesState.tabs[0];
+      FilesState.file = null;      // force activateTab to attach the model
+      activateTab(act.path);
+    }
+  }, 0);
+}
+function _paintTabs() {
+  const strip = document.getElementById('files-tabs');
+  if (!strip) return;
+  if (!FilesState.tabs.length) { strip.innerHTML = ''; strip.style.display = 'none'; return; }
+  strip.style.display = '';
+  strip.innerHTML = FilesState.tabs.map(t => {
+    const name = t.path.split('/').pop();
+    const act = t.path === FilesState.file ? ' active' : '';
+    return '<div class="files-tab' + act + '" data-path="' + esc(t.path) +
+      '" title="' + esc(t.path) + '">' +
+      '<span class="files-tab-nm">' + esc(name) + '</span>' +
+      (t.dirty ? '<span class="files-tab-dot">•</span>' : '') +
+      '<span class="files-tab-x" data-x="' + esc(t.path) + '" title="Close">✕</span>' +
+      '</div>';
+  }).join('');
+  strip.querySelectorAll('.files-tab').forEach(el => {
+    el.onclick = (ev) => {
+      if (ev.target.classList.contains('files-tab-x')) return;
+      activateTab(el.dataset.path);
+    };
+  });
+  strip.querySelectorAll('.files-tab-x').forEach(el => {
+    el.onclick = (ev) => { ev.stopPropagation(); closeTab(el.dataset.x); };
+  });
+}
+function activateTab(path) {
+  const tab = FilesState.tabs.find(t => t.path === path);
+  if (!tab || !window.monaco) return;
+  const monaco = window.monaco;
+  // Stash the outgoing tab's cursor/scroll so switching back feels natural.
+  if (FilesState.editor && FilesState.file) {
+    const cur = FilesState.tabs.find(t => t.path === FilesState.file);
+    if (cur && FilesState.editor.getModel() === cur.model)
+      cur.viewState = FilesState.editor.saveViewState();
+  }
+  const host = document.getElementById('files-editor');
+  if (!host) return;             // container not attached yet — bail safely
+  if (!FilesState.editor) {
+    host.innerHTML = '';
+    FilesState.editor = monaco.editor.create(host, {
+      model: tab.model, theme: 'vs-dark', automaticLayout: true,
+      fontSize: 13, minimap: { enabled: true },
+      scrollBeyondLastLine: false, tabSize: 4,
+    });
+    FilesState.editor.addCommand(
+      monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, saveCurrentFile);
+  } else {
+    FilesState.editor.setModel(tab.model);
+  }
+  if (tab.viewState) FilesState.editor.restoreViewState(tab.viewState);
+  FilesState.editor.focus();
+  FilesState.file = tab.path; FilesState.dirty = tab.dirty;
+  _updateSaveBar(); _paintTabs();
+}
+async function closeTab(path) {
+  const idx = FilesState.tabs.findIndex(t => t.path === path);
+  if (idx < 0) return;
+  const tab = FilesState.tabs[idx];
+  if (tab.dirty && !(await aruiConfirm(
+      'Discard unsaved changes to ' + path.split('/').pop() + '?',
+      { title: 'Unsaved changes', okText: 'Discard' }))) return;
+  const wasActive = FilesState.file === path;
+  FilesState.tabs.splice(idx, 1);
+  if (wasActive) {
+    const next = FilesState.tabs[idx] || FilesState.tabs[idx - 1] || null;
+    if (next) {
+      FilesState.file = null;       // don't save view state into the closed tab
+      activateTab(next.path);       // detaches the old model from the editor
+    } else {
+      if (FilesState.editor) { try { FilesState.editor.dispose(); } catch (e) {} }
+      FilesState.editor = null; FilesState.file = null; FilesState.dirty = false;
+      const host = document.getElementById('files-editor');
+      if (host) host.innerHTML =
+        '<div class="files-edempty">Select a file on the left to view and edit it.</div>';
+      _updateSaveBar();
+    }
+  }
+  try { tab.model.dispose(); } catch (e) {}   // safe now: model is detached
+  _paintTabs();
 }
 
 let _filesEntries = [];
@@ -4803,52 +4905,35 @@ function _paintFilesList() {
     };
   });
 }
-// Show a message in the editor pane (binary / too-large / read error). MUST
-// dispose the Monaco editor first: setting host.innerHTML wipes the editor's
-// DOM, and if we leave FilesState.editor pointing at the now-orphaned instance
-// the next file open would setValue() into an invisible editor and the pane
-// would keep showing this message. Disposing + nulling makes the next open
-// recreate the editor.
-function _filesEditorMsg(msg) {
-  if (FilesState.editor) { try { FilesState.editor.dispose(); } catch (e) {} }
-  FilesState.editor = null; FilesState.file = null; FilesState.dirty = false;
-  const host = document.getElementById('files-editor');
-  if (host) host.innerHTML = '<div class="files-edempty">' + esc(msg) + '</div>';
-  _updateSaveBar();
-}
 async function openFileInEditor(path) {
-  if (FilesState.dirty && !(await aruiConfirm(
-      'Discard unsaved changes to the current file?',
-      { title: 'Unsaved changes', okText: 'Discard' }))) return;
+  // Already open? Just switch to that tab — no reload, preserves edits.
+  if (FilesState.tabs.some(t => t.path === path)) { activateTab(path); return; }
   const edpath = document.getElementById('files-edpath');
-  const host = document.getElementById('files-editor');
   if (edpath) edpath.textContent = 'loading ' + path + '…';
   let d;
   try { d = await api('/files/read?path=' + encodeURIComponent(path)); }
-  catch (e) { _filesEditorMsg(String(e)); return; }
-  if (!d || !d.ok) { _filesEditorMsg((d && d.error) || 'could not read file'); return; }
+  catch (e) { aruiAlert('Could not open: ' + String(e), { title: 'Open file' });
+    _updateSaveBar(); return; }
+  if (!d || !d.ok) {
+    aruiAlert('Could not open: ' + ((d && d.error) || 'unknown'), { title: 'Open file' });
+    _updateSaveBar(); return;
+  }
   let monaco;
   try { monaco = await loadMonaco(); }
-  catch (e) { _filesEditorMsg('editor failed to load: ' + String(e)); return; }
+  catch (e) { aruiAlert('Editor failed to load: ' + String(e), { title: 'Open file' });
+    _updateSaveBar(); return; }
   const lang = _langFor(path.split('/').pop());
-  if (!FilesState.editor) {
-    host.innerHTML = '';
-    FilesState.editor = monaco.editor.create(host, {
-      value: d.content, language: lang, theme: 'vs-dark',
-      automaticLayout: true, fontSize: 13, minimap: { enabled: true },
-      scrollBeyondLastLine: false, tabSize: 4,
-    });
-    FilesState.editor.onDidChangeModelContent(() => {
-      if (!FilesState.dirty) { FilesState.dirty = true; _updateSaveBar(); }
-    });
-    FilesState.editor.addCommand(
-      monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, saveCurrentFile);
-  } else {
-    monaco.editor.setModelLanguage(FilesState.editor.getModel(), lang);
-    FilesState.editor.setValue(d.content);
-  }
-  FilesState.file = d.path; FilesState.dirty = false;
-  _updateSaveBar();
+  const model = monaco.editor.createModel(d.content, lang);
+  const tab = { path: d.path, model, dirty: false, viewState: null };
+  model.onDidChangeContent(() => {
+    if (!tab.dirty) {
+      tab.dirty = true;
+      if (FilesState.file === tab.path) FilesState.dirty = true;
+      _updateSaveBar(); _paintTabs();
+    }
+  });
+  FilesState.tabs.push(tab);
+  activateTab(d.path);
 }
 function _updateSaveBar() {
   const edpath = document.getElementById('files-edpath');
@@ -4897,6 +4982,9 @@ async function saveCurrentFile() {
     const d = await r.json();
     if (d && d.ok) {
       FilesState.dirty = false;
+      const tab = FilesState.tabs.find(t => t.path === FilesState.file);
+      if (tab) tab.dirty = false;
+      _paintTabs();
       if (save) save.textContent = 'Saved ✓';
       setTimeout(() => { const s = document.getElementById('files-save');
         if (s) s.textContent = 'Save'; _updateSaveBar(); }, 1200);
