@@ -3829,6 +3829,10 @@ PASSCODE=`;
     const cfg = {};
     Object.entries(inp).forEach(([k, x]) =>
       cfg[k] = x.type === 'checkbox' ? x.checked : x.value);
+    // Stash the EXACT values just entered (real keys included, unmasked) so
+    // "← Back to onboarding" from the scoping modal restores the form exactly
+    // as the user left it — not the masked/persisted version from the server.
+    window.__lastOnboardingCfg = cfg;
     // Cheap client-side sanity check — catches obvious mistakes (empty,
     // wrong-format, placeholder) before we waste 30 s of boot time only to
     // discover the token can't authenticate.
@@ -4005,8 +4009,10 @@ function showScopingModal() {
   // any phase — even mid-search — so the modal never traps them.
   async function backToOnboarding() {
     ScopeUI.exited = true; ScopeUI.polling = false;
-    let saved = null;
-    try { saved = await api('/onboarding'); } catch (e) {}
+    // Prefer the exact values submitted this session (unmasked keys); fall
+    // back to the server's saved config (e.g. after a page reload).
+    let saved = window.__lastOnboardingCfg || null;
+    if (!saved) { try { saved = await api('/onboarding'); } catch (e) {} }
     onboarding(saved || {});
   }
   document.getElementById('scope-back').onclick = backToOnboarding;
