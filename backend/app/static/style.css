@@ -1931,3 +1931,6 @@ textarea.onb-in{resize:vertical;line-height:1.5}
 .scope-head-r{display:flex;align-items:center;gap:14px}
 .scope-head-r .scope-phase{margin:0}
 .scope-head .btn.ghost{font-size:12px;padding:5px 11px}
+.scope-finalize-row{display:flex;align-items:center;gap:10px;margin-bottom:10px;
+  flex-wrap:wrap}
+.scope-finalize-row .scope-muted{font-size:11.5px}

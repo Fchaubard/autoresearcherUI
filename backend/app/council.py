@@ -3369,6 +3369,45 @@ def scope_review(purpose: str, metric: str, seed_ideas: str,
     return None
 
 
+def scope_finalize(purpose: str, metric: str, seed_ideas: str,
+                   papers: list[dict], synthesis: dict,
+                   history: list[dict]) -> dict | None:
+    """Re-synthesize the plan AFTER a back-and-forth so the structured
+    assessment + recommended direction reflect what was actually decided in
+    the conversation (the chat changes the advisor's mind, so the idea cards
+    and the plan must move with it). Same STRICT JSON schema as scope_review,
+    citation-validated. Returns the updated synthesis or None."""
+    cfg = _settings()
+    convo = "\n\n".join(f"{m.get('role','user').upper()}: {m.get('text','')}"
+                        for m in (history or []))
+    user = (f"# Purpose\n{purpose}\n\n# Validation metric\n{metric}\n\n"
+            f"# User's seed ideas\n{seed_ideas or '(none provided)'}\n\n"
+            f"# Retrieved papers (cite these keys ONLY)\n"
+            f"{_scope_papers_block(papers)}\n\n"
+            f"# Your PREVIOUS synthesis\n{json.dumps(synthesis, indent=2)[:6000]}\n\n"
+            f"# The conversation with the researcher since then\n{convo}\n\n"
+            f"# TASK\nProduce a REVISED synthesis in the SAME STRICT JSON schema "
+            f"that reflects everything decided in the conversation above. Update "
+            f"`recommended_direction`, `new_ideas`, and `user_ideas_assessment` so "
+            f"they match the plan you and the researcher converged on — drop ideas "
+            f"you agreed to abandon, add ones you agreed to pursue, and make "
+            f"`recommended_direction` the plan you would actually launch now. Keep "
+            f"every citation rule (closest_prior_work keys from the provided papers "
+            f"only) and a cheap_kill_test on every idea.")
+    order = []
+    if _claude_available(cfg):
+        order.append("claude")
+    order += _available_reviewers(cfg)
+    for reviewer in order:
+        out = _call_reviewer(reviewer, _SCOPE_SYSTEM, user, cfg)
+        if out:
+            out.pop("reviewer", None)
+            out.pop("reviewed_at", None)
+            valid = {p.get("key") for p in papers if p.get("key")}
+            return _validate_scope_keys(out, valid)
+    return None
+
+
 def scope_chat(history: list[dict], synthesis: dict, papers: list[dict],
                purpose: str, metric: str, seed_ideas: str) -> str:
     """One conversational turn for the scoping modal — FREE TEXT (not JSON).

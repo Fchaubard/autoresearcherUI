@@ -4002,7 +4002,8 @@ function showScopingModal() {
         '</div>' +
       '</div>' +
     '</div>';
-  const ScopeUI = { polling: true, rendered: false, kept: {}, exited: false };
+  const ScopeUI = { polling: true, rendered: false, kept: {}, exited: false,
+                    dirtySinceFinalize: false };
 
   // Escape hatch: bail out of scoping back to the onboarding form (pre-filled
   // with the saved config) so the user can edit and re-submit. Available at
@@ -4089,6 +4090,12 @@ function showScopingModal() {
           '</div>' +
         '</div>' +
         '<div class="scope-block"><h3>Confirm the plan</h3>' +
+          '<div class="scope-finalize-row">' +
+            '<button class="btn" id="scope-update" type="button">⟳ Update plan ' +
+            'from our discussion</button>' +
+            '<span class="scope-muted">Re-synthesizes the direction + ideas above ' +
+            'to reflect your back-and-forth.</span>' +
+          '</div>' +
           '<textarea id="scope-final" rows="3" placeholder="The final research ' +
           'direction to commit to…">' + esc(s.recommended_direction || '') +
           '</textarea>' +
@@ -4107,8 +4114,25 @@ function showScopingModal() {
     main.querySelectorAll('[data-keep]').forEach(cb => {
       cb.onchange = () => { ScopeUI.kept[cb.dataset.keep] = cb.checked; };
     });
+    document.getElementById('scope-update').onclick = updatePlan;
     document.getElementById('scope-confirm').onclick = doConfirm;
     document.getElementById('scope-skip').onclick = doSkip;
+  }
+  async function updatePlan() {
+    const btn = document.getElementById('scope-update');
+    if (btn) { btn.disabled = true;
+      btn.textContent = '⟳ Updating plan from our discussion…'; }
+    let d;
+    try { d = await post('/scope/finalize', {}); } catch (e) { d = null; }
+    if (d && d.synthesis) {
+      ScopeUI.last = d; ScopeUI.kept = {};
+      ScopeUI.dirtySinceFinalize = false;
+      renderSynth(d);              // re-renders idea cards + plan textarea + chat
+    } else if (btn) {
+      btn.disabled = false; btn.textContent = '⟳ Update plan from our discussion';
+      aruiAlert('Could not update the plan — please try again.',
+        { title: 'Scoping' });
+    }
   }
   function renderChat(msgs) {
     const c = document.getElementById('scope-chat');
@@ -4130,7 +4154,9 @@ function showScopingModal() {
     try { d = await post('/scope/chat', { text }); }
     catch (e) { d = null; }
     inp.disabled = false; inp.focus();
-    if (d && d.messages) renderChat(d.messages);
+    if (d && d.messages) { renderChat(d.messages);
+      ScopeUI.dirtySinceFinalize = true;   // plan no longer matches discussion
+    }
   }
   function keptIdx(kind, n) {
     const out = [];
@@ -4138,6 +4164,17 @@ function showScopingModal() {
     return out;
   }
   async function doConfirm() {
+    // Never launch a plan that ignores the discussion: if the user chatted
+    // since the last refresh, re-synthesize first and make them review the
+    // updated plan before a second Confirm actually starts the research.
+    if (ScopeUI.dirtySinceFinalize) {
+      await updatePlan();
+      aruiAlert('I updated the plan to reflect your discussion — the direction '
+        + 'and ideas above now match what we agreed. Review them and click '
+        + '"Confirm & start research" again to launch.',
+        { title: 'Plan updated from your discussion' });
+      return;
+    }
     const s = (ScopeUI.last && ScopeUI.last.synthesis) || {};
     const final = (document.getElementById('scope-final').value || '').trim();
     const btn = document.getElementById('scope-confirm');
@@ -8997,6 +9034,15 @@ async function boot() {
     const pc = await fetch('/api/passcode/check').then(r => r.json());
     if (pc && pc.enabled && !pc.authed) { renderLogin(); return; }
   } catch (e) { /* gate down → fall through */ }
+  // Resume an in-progress scoping session across reloads (real sessions only,
+  // not leftover preview/test states) so the modal + conversation aren't lost.
+  try {
+    const sc = await api('/scope/status');
+    if (sc && !sc.preview &&
+        ['searching', 'synthesizing', 'awaiting_user'].includes(sc.status)) {
+      showScopingModal(); return;
+    }
+  } catch (e) { /* no scope → fall through */ }
   const project = await api('/project');
   if (!project || !project.name) { onboarding(); return; }
   const [runs, ideas, events, chat, gpus, mode] = await Promise.all([

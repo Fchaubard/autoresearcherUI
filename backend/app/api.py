@@ -2416,6 +2416,12 @@ async def scope_chat_ep(request: Request):
     return scoping.chat(body.get("text", ""))
 
 
+@router.post("/scope/finalize")
+async def scope_finalize_ep(request: Request):
+    from . import scoping
+    return scoping.finalize()
+
+
 @router.post("/scope/confirm")
 async def scope_confirm_ep(request: Request):
     from . import scoping

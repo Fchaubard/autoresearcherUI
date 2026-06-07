@@ -256,6 +256,28 @@ def chat(text: str) -> dict:
     return _patch(messages=history, thinking=False)
 
 
+def finalize() -> dict:
+    """Re-synthesize the plan from the conversation so the idea cards +
+    recommended direction reflect what was actually discussed. Called by the
+    'Update plan from our discussion' button before the user confirms."""
+    from . import council
+    st = state_get()
+    synth = st.get("synthesis") or {}
+    if not synth:
+        return st
+    _patch(finalizing=True)
+    try:
+        updated = council.scope_finalize(
+            st.get("purpose", ""), st.get("metric", ""),
+            st.get("seed_ideas", ""), st.get("papers") or [],
+            synth, st.get("messages") or [])
+    except Exception as e:                                  # noqa: BLE001
+        return _patch(finalizing=False, error=f"finalize failed: {e}")
+    if updated:
+        return _patch(synthesis=updated, finalizing=False)
+    return _patch(finalizing=False)
+
+
 def _approved_ideas(st: dict, keep_user, keep_new) -> list[dict]:
     """Collect the ideas the user kept, normalised into directive payloads."""
     synth = st.get("synthesis") or {}
