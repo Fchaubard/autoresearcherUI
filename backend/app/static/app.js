@@ -405,6 +405,7 @@ function clearViewTimers() {
 
 const VIEWS = [
   ['dashboard', 'Dashboard', '▦'], ['analysis', 'Analysis', '◫'],
+  ['files', 'Files', '🗂'],
   ['lessons', 'Lessons', '📖'],
   ['latex', 'Write the paper', '📝'],
   ['system', 'System stats', '▤'],
@@ -419,6 +420,7 @@ const VIEW_TITLE = Object.fromEntries(VIEWS.map(v => [v[0], v[1]]));
 const VIEW_TO_PATH = {
   dashboard: '/dashboard',
   analysis: '/analysis',
+  files: '/files',
   lessons: '/lessons',
   latex: '/write-paper',
   system: '/system-stats',          // "System stats" — NOT "Settings"
@@ -4620,11 +4622,249 @@ function fmtUptime(s) {
 function viewPane() {
   const c = el('div', 'viewpane');
   if (S.view === 'analysis') renderAnalysis(c);
+  else if (S.view === 'files') renderFiles(c);
   else if (S.view === 'system') renderSystem(c);
   else if (S.view === 'authkeys') renderAuthkeys(c);
   else if (S.view === 'lessons') renderLessons(c);
   else renderLatex(c);
   return c;
+}
+
+/* ── Files: JupyterLab-style browser + Monaco (VS Code) editor ───────────── */
+const FilesState = { cwd: null, _parent: null, file: null, dirty: false,
+                     editor: null };
+const _MONACO_VS = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs';
+const _MONACO_BASE = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/';
+function loadMonaco() {
+  if (window.monaco && window.monaco.editor) return Promise.resolve(window.monaco);
+  if (window.__monacoLoading) return window.__monacoLoading;
+  window.__monacoLoading = new Promise((resolve, reject) => {
+    // Cross-origin worker proxy (the CDN gotcha): a data: URL that
+    // importScripts the CDN workerMain. Without it Monaco's language workers
+    // throw cross-origin errors (it still edits + highlights, just no
+    // IntelliSense/validation). baseUrl is the dir CONTAINING vs/.
+    window.MonacoEnvironment = {
+      getWorkerUrl: function () {
+        return 'data:text/javascript;charset=utf-8,' + encodeURIComponent(
+          "self.MonacoEnvironment={baseUrl:'" + _MONACO_BASE + "'};" +
+          "importScripts('" + _MONACO_VS + "/base/worker/workerMain.js');");
+      },
+    };
+    const s = document.createElement('script');
+    s.src = _MONACO_VS + '/loader.js';
+    s.onload = () => {
+      try {
+        window.require.config({ paths: { vs: _MONACO_VS } });
+        window.require(['vs/editor/editor.main'],
+          () => resolve(window.monaco), (e) => reject(e));
+      } catch (e) { reject(e); }
+    };
+    s.onerror = () => reject(new Error('failed to load Monaco loader.js'));
+    document.head.appendChild(s);
+  });
+  return window.__monacoLoading;
+}
+const _EXT_LANG = {
+  py: 'python', js: 'javascript', jsx: 'javascript', ts: 'typescript',
+  tsx: 'typescript', json: 'json', md: 'markdown', sh: 'shell', bash: 'shell',
+  yml: 'yaml', yaml: 'yaml', css: 'css', html: 'html', htm: 'html',
+  xml: 'xml', toml: 'ini', ini: 'ini', cfg: 'ini', conf: 'ini',
+  txt: 'plaintext', log: 'plaintext', c: 'c', cc: 'cpp', cpp: 'cpp',
+  h: 'cpp', hpp: 'cpp', java: 'java', go: 'go', rs: 'rust', sql: 'sql',
+  jsonl: 'plaintext', csv: 'plaintext', tsv: 'plaintext',
+};
+function _langFor(name) {
+  const n = (name || '').toLowerCase();
+  if (n === 'dockerfile') return 'dockerfile';
+  if (n === 'makefile' || n.endsWith('.mk')) return 'makefile';
+  const ext = n.includes('.') ? n.split('.').pop() : '';
+  return _EXT_LANG[ext] || 'plaintext';
+}
+function _fmtBytes(n) {
+  if (n == null) return '';
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1048576).toFixed(1) + ' MB';
+}
+
+function renderFiles(c) {
+  c.classList.add('full-bleed');
+  // Dispose any editor from a prior mount (its host node is gone now).
+  if (FilesState.editor) { try { FilesState.editor.dispose(); } catch (e) {} }
+  FilesState.editor = null; FilesState.file = null; FilesState.dirty = false;
+  c.innerHTML =
+    '<div class="files">' +
+      '<div class="files-side">' +
+        '<div class="files-bc" id="files-bc"></div>' +
+        '<div class="files-filter">' +
+          '<input id="files-filter" placeholder="Filter by name…" autocomplete="off"/>' +
+          '<button class="files-refresh" id="files-refresh" title="Refresh">⟳</button>' +
+        '</div>' +
+        '<div class="files-list" id="files-list"></div>' +
+      '</div>' +
+      '<div class="files-main">' +
+        '<div class="files-edbar">' +
+          '<span class="files-edpath" id="files-edpath">No file open</span>' +
+          '<span class="files-edspacer"></span>' +
+          '<button class="btn pri" id="files-save" disabled>Save</button>' +
+        '</div>' +
+        '<div class="files-editor" id="files-editor">' +
+          '<div class="files-edempty">Select a file on the left to view and edit it.</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  c.querySelector('#files-filter').oninput = () => _paintFilesList();
+  c.querySelector('#files-refresh').onclick = () => loadFilesDir(FilesState.cwd);
+  c.querySelector('#files-save').onclick = saveCurrentFile;
+  loadFilesDir(FilesState.cwd || '/root/autoresearcherUI');
+}
+
+let _filesEntries = [];
+async function loadFilesDir(path) {
+  const list = document.getElementById('files-list');
+  if (list) list.innerHTML = '<div class="files-loading">loading…</div>';
+  let d;
+  try { d = await api('/files/list?path=' + encodeURIComponent(path)); }
+  catch (e) {
+    const l = document.getElementById('files-list');
+    if (l) l.innerHTML = '<div class="files-err">' + esc(String(e)) + '</div>';
+    return;
+  }
+  if (!d || !d.ok) {
+    const l = document.getElementById('files-list');
+    if (l) l.innerHTML = '<div class="files-err">' +
+      esc((d && d.error) || 'could not list directory') + '</div>';
+    return;
+  }
+  FilesState.cwd = d.path; FilesState._parent = d.parent;
+  _filesEntries = d.entries || [];
+  _paintBreadcrumbs(d.path);
+  _paintFilesList();
+}
+function _paintBreadcrumbs(p) {
+  const bc = document.getElementById('files-bc');
+  if (!bc) return;
+  const parts = p.split('/').filter(Boolean);
+  let acc = '';
+  const segs = ['<span class="files-bc-seg" data-path="/">/</span>'];
+  for (const part of parts) {
+    acc += '/' + part;
+    segs.push('<span class="files-bc-sep">›</span>');
+    segs.push('<span class="files-bc-seg" data-path="' + esc(acc) + '">' +
+      esc(part) + '</span>');
+  }
+  bc.innerHTML = segs.join('');
+  bc.querySelectorAll('.files-bc-seg').forEach(s =>
+    { s.onclick = () => loadFilesDir(s.dataset.path); });
+}
+function _paintFilesList() {
+  const list = document.getElementById('files-list');
+  if (!list) return;
+  const ql = ((document.getElementById('files-filter') || {}).value || '')
+    .toLowerCase();
+  const rows = [];
+  if (FilesState.cwd && FilesState.cwd !== '/')
+    rows.push('<div class="files-row files-up" data-up="1">' +
+      '<span class="files-ic">↩</span><span class="files-nm">..</span></div>');
+  for (const e of _filesEntries) {
+    if (ql && !e.name.toLowerCase().includes(ql)) continue;
+    rows.push('<div class="files-row' + (e.is_dir ? ' isdir' : '') +
+      '" data-name="' + esc(e.name) + '" data-dir="' + (e.is_dir ? 1 : 0) + '">' +
+      '<span class="files-ic">' + (e.is_dir ? '📁' : '📄') + '</span>' +
+      '<span class="files-nm">' + esc(e.name) + '</span>' +
+      '<span class="files-sz">' + (e.is_dir ? '' : esc(_fmtBytes(e.size))) +
+      '</span></div>');
+  }
+  list.innerHTML = rows.join('') || '<div class="files-empty">empty</div>';
+  list.querySelectorAll('.files-row').forEach(r => {
+    r.onclick = () => {
+      if (r.dataset.up) return loadFilesDir(FilesState._parent);
+      const full = FilesState.cwd.replace(/\/$/, '') + '/' + r.dataset.name;
+      if (r.dataset.dir === '1') loadFilesDir(full);
+      else openFileInEditor(full);
+    };
+  });
+}
+// Show a message in the editor pane (binary / too-large / read error). MUST
+// dispose the Monaco editor first: setting host.innerHTML wipes the editor's
+// DOM, and if we leave FilesState.editor pointing at the now-orphaned instance
+// the next file open would setValue() into an invisible editor and the pane
+// would keep showing this message. Disposing + nulling makes the next open
+// recreate the editor.
+function _filesEditorMsg(msg) {
+  if (FilesState.editor) { try { FilesState.editor.dispose(); } catch (e) {} }
+  FilesState.editor = null; FilesState.file = null; FilesState.dirty = false;
+  const host = document.getElementById('files-editor');
+  if (host) host.innerHTML = '<div class="files-edempty">' + esc(msg) + '</div>';
+  _updateSaveBar();
+}
+async function openFileInEditor(path) {
+  if (FilesState.dirty && !(await aruiConfirm(
+      'Discard unsaved changes to the current file?',
+      { title: 'Unsaved changes', okText: 'Discard' }))) return;
+  const edpath = document.getElementById('files-edpath');
+  const host = document.getElementById('files-editor');
+  if (edpath) edpath.textContent = 'loading ' + path + '…';
+  let d;
+  try { d = await api('/files/read?path=' + encodeURIComponent(path)); }
+  catch (e) { _filesEditorMsg(String(e)); return; }
+  if (!d || !d.ok) { _filesEditorMsg((d && d.error) || 'could not read file'); return; }
+  let monaco;
+  try { monaco = await loadMonaco(); }
+  catch (e) { _filesEditorMsg('editor failed to load: ' + String(e)); return; }
+  const lang = _langFor(path.split('/').pop());
+  if (!FilesState.editor) {
+    host.innerHTML = '';
+    FilesState.editor = monaco.editor.create(host, {
+      value: d.content, language: lang, theme: 'vs-dark',
+      automaticLayout: true, fontSize: 13, minimap: { enabled: true },
+      scrollBeyondLastLine: false, tabSize: 4,
+    });
+    FilesState.editor.onDidChangeModelContent(() => {
+      if (!FilesState.dirty) { FilesState.dirty = true; _updateSaveBar(); }
+    });
+    FilesState.editor.addCommand(
+      monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, saveCurrentFile);
+  } else {
+    monaco.editor.setModelLanguage(FilesState.editor.getModel(), lang);
+    FilesState.editor.setValue(d.content);
+  }
+  FilesState.file = d.path; FilesState.dirty = false;
+  _updateSaveBar();
+}
+function _updateSaveBar() {
+  const edpath = document.getElementById('files-edpath');
+  const save = document.getElementById('files-save');
+  if (edpath) edpath.textContent =
+    (FilesState.file || 'No file open') + (FilesState.dirty ? '  •' : '');
+  if (save) save.disabled = !FilesState.file || !FilesState.dirty;
+}
+async function saveCurrentFile() {
+  if (!FilesState.file || !FilesState.editor) return;
+  const save = document.getElementById('files-save');
+  if (save) { save.disabled = true; save.textContent = 'Saving…'; }
+  try {
+    const r = await fetch('/api/files/write', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: FilesState.file,
+                             content: FilesState.editor.getValue() }),
+    });
+    const d = await r.json();
+    if (d && d.ok) {
+      FilesState.dirty = false;
+      if (save) save.textContent = 'Saved ✓';
+      setTimeout(() => { const s = document.getElementById('files-save');
+        if (s) s.textContent = 'Save'; _updateSaveBar(); }, 1200);
+    } else {
+      if (save) save.textContent = 'Save';
+      aruiAlert('Save failed: ' + ((d && d.error) || 'unknown'),
+        { title: 'Save failed' });
+    }
+  } catch (e) {
+    if (save) save.textContent = 'Save';
+    aruiAlert('Save failed: ' + String(e), { title: 'Save failed' });
+  }
+  _updateSaveBar();
 }
 
 /* ── Lessons (the council's running notebook, parsed from lessons.md) ─── */

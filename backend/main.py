@@ -145,7 +145,7 @@ def healthz() -> dict:
 # should serve index.html so the frontend can read window.location.pathname
 # and pick the right view (Dashboard / Write the paper / Analysis / …).
 _SPA_PATHS = {
-    "dashboard", "analysis", "lessons",
+    "dashboard", "analysis", "files", "lessons",
     "write-paper", "writepaper", "write_paper", "paper", "latex",
     "system", "system-stats", "systemstats",
     "authkeys", "authorized-keys", "authorized_keys",

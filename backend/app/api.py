@@ -2381,6 +2381,99 @@ async def post_onboarding(request: Request):
     return _maybe_set_cookie(JSONResponse({"status": "configured"}))
 
 
+# ──────────── file browser + editor (the Files tab) ─────────────────────────
+# Backs the Files tab: a JupyterLab-style tree browser + Monaco editor. These
+# routes are NOT in auth._PUBLIC_PREFIXES, so they require the passcode when one
+# is set. They expose the server filesystem (read/write) by absolute path, the
+# same trust level as the existing agent-terminal / sessions endpoints.
+
+_FILE_MAX_READ = 2_000_000   # 2 MB cap — anything bigger, open it in a terminal
+
+
+@router.get("/files/list")
+def files_list(path: str = str(ROOT)):
+    """List a directory for the file browser. Dirs first, then name."""
+    try:
+        p = os.path.abspath(os.path.expanduser(path or "/"))
+        if not os.path.isdir(p):
+            return {"ok": False, "error": "not a directory", "path": p}
+        entries = []
+        with os.scandir(p) as it:
+            for e in it:
+                try:
+                    st = e.stat(follow_symlinks=False)
+                    is_dir = e.is_dir(follow_symlinks=False)
+                    entries.append({
+                        "name": e.name, "is_dir": is_dir,
+                        "size": (None if is_dir else st.st_size),
+                        "mtime": dt.datetime.utcfromtimestamp(
+                            st.st_mtime).isoformat() + "Z",
+                    })
+                except Exception:                               # noqa: BLE001
+                    entries.append({"name": e.name, "is_dir": False,
+                                    "size": None, "mtime": None})
+        entries.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
+        parent = os.path.dirname(p.rstrip("/")) or "/"
+        return {"ok": True, "path": p, "parent": parent, "entries": entries}
+    except PermissionError:
+        return {"ok": False, "error": "permission denied", "path": path}
+    except Exception as e:                                      # noqa: BLE001
+        return {"ok": False, "error": str(e), "path": path}
+
+
+@router.get("/files/read")
+def files_read(path: str):
+    """Read a text file for the editor (size + binary guarded)."""
+    try:
+        p = os.path.abspath(os.path.expanduser(path))
+        if not os.path.isfile(p):
+            return {"ok": False, "error": "not a file", "path": p}
+        sz = os.path.getsize(p)
+        if sz > _FILE_MAX_READ:
+            return {"ok": False, "path": p, "size": sz,
+                    "error": f"file is {sz} bytes (> {_FILE_MAX_READ} cap) — "
+                             "open it in a terminal instead"}
+        with open(p, "rb") as f:
+            raw = f.read()
+        if b"\x00" in raw[:8192]:
+            return {"ok": False, "path": p, "binary": True,
+                    "error": "binary file — cannot edit as text"}
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            text = raw.decode("latin-1")
+        return {"ok": True, "path": p, "size": sz, "content": text}
+    except PermissionError:
+        return {"ok": False, "error": "permission denied", "path": path}
+    except Exception as e:                                      # noqa: BLE001
+        return {"ok": False, "error": str(e), "path": path}
+
+
+@router.put("/files/write")
+async def files_write(request: Request):
+    """Write a text file from the editor. Body: {path, content}."""
+    body = await _safe_json(request)
+    path = (body.get("path") or "").strip()
+    content = body.get("content")
+    if not path or content is None:
+        return {"ok": False, "error": "path and content are required"}
+    try:
+        p = os.path.abspath(os.path.expanduser(path))
+        if os.path.isdir(p):
+            return {"ok": False, "error": "path is a directory", "path": p}
+        d = os.path.dirname(p)
+        if d and not os.path.isdir(d):
+            return {"ok": False, "error": "parent directory does not exist",
+                    "path": p}
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(content)
+        return {"ok": True, "path": p, "bytes": len(content.encode("utf-8"))}
+    except PermissionError:
+        return {"ok": False, "error": "permission denied", "path": path}
+    except Exception as e:                                      # noqa: BLE001
+        return {"ok": False, "error": str(e), "path": path}
+
+
 # ──────────── tmux run sessions (the Sessions tab) ───────────────────────────
 
 _INFRA_SESSIONS = {"arui", "arui-cf", "cf", "agent", "author"}
