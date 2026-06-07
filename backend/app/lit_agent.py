@@ -236,6 +236,79 @@ def upsert_citation(p: dict, source: str, relevance_md: str = "") -> str:
     return key
 
 
+def discover_for_purpose(purpose: str, seed_ideas: str = "",
+                          max_papers: int = 24,
+                          on_progress=None) -> list[dict]:
+    """Front-of-project literature sweep, keyed off the research *purpose*
+    (and the user's seed ideas) rather than paper-mode claims.
+
+    Used by the scoping gate BEFORE any GPU is spent. Builds several
+    queries — the purpose as a whole plus each seed-idea line — searches
+    arxiv/Semantic Scholar, dedupes, upserts a PaperCitation row per hit
+    (``source='scope'``) so the result is ALREADY cached for paper-mode
+    lit_review + the author agent, and returns a compact list for the
+    council to synthesize from.
+
+    ``on_progress(found_so_far:int, query:str)`` is called after each query
+    so the scoping modal can show live progress.
+    """
+    queries: list[str] = []
+    p = (purpose or "").strip()
+    if p:
+        queries.append(p[:240])
+        kws = _extract_keywords(p, k=6)
+        if kws:
+            queries.append(" ".join(kws))
+    for line in (seed_ideas or "").splitlines():
+        line = line.strip().lstrip("-*0123456789. ").strip()
+        if len(line) >= 8:
+            queries.append(line[:200])
+    # de-dup queries while preserving order
+    seen_q, uniq_q = set(), []
+    for q in queries:
+        kq = q.lower()
+        if kq not in seen_q:
+            seen_q.add(kq); uniq_q.append(q)
+    per_q = max(4, max_papers // max(1, len(uniq_q)))
+    out: list[dict] = []
+    seen_keys: set[str] = set()
+    for q in uniq_q:
+        try:
+            results = search(q, limit=per_q)
+        except Exception as e:                              # noqa: BLE001
+            print(f"[lit] scope query failed: {e}", flush=True)
+            results = []
+        for pp in results:
+            key = _bibtex_key(pp.get("title", ""), pp.get("year", ""),
+                              pp.get("authors", "") or "anon")
+            if not key or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            relevance = _build_relevance(purpose, seed_ideas, pp)
+            try:
+                upsert_citation(
+                    pp, source="scope", relevance_md=relevance)
+            except Exception as e:                          # noqa: BLE001
+                print(f"[lit] scope upsert failed: {e}", flush=True)
+            out.append({
+                "key": key,
+                "title": pp.get("title", ""),
+                "authors": pp.get("authors", ""),
+                "year": pp.get("year", ""),
+                "abstract": (pp.get("abstract", "") or "")[:1200],
+                "arxiv_id": pp.get("arxiv_id", ""),
+                "relevance": relevance,
+            })
+            if len(out) >= max_papers:
+                break
+        if on_progress:
+            try: on_progress(len(out), q)
+            except Exception: pass
+        if len(out) >= max_papers:
+            break
+    return out
+
+
 def auto_discover_for_claims(max_per_claim: int = 5) -> int:
     """Run for each active claim: search → file cite_paper decisions for
     the top candidates. Returns the number of decisions filed."""

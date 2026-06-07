@@ -3246,3 +3246,192 @@ def propose_next_move_async() -> dict:
     return {"started": True, "reason": "ok",
             "n_runs": len(ids)}
 
+
+
+# ════════════════════════════════════════════════════════════════════════
+#                    SCOPING  (Phase 0 — before any GPU is spent)
+# ════════════════════════════════════════════════════════════════════════
+#
+# The scoping gate runs the Lit Agent over the project *purpose* + seed
+# ideas, then asks the council to synthesize the state of the art and
+# adversarially pressure-test the direction BEFORE the research agent
+# scaffolds code. The anti-"research-theater" rule (both GPT-5.5 and
+# Gemini converged on it): every proposed idea — the user's or the
+# council's — must cite its closest prior work BY KEY from the retrieved
+# papers (never invented) and carry a cheap kill test (a < ~1 GPU-hour
+# experiment that would falsify it fast).
+
+_SCOPE_SYSTEM = """You are a skeptical, world-class ML research advisor doing
+the SCOPING review for an autonomous research project — BEFORE a single GPU
+hour is spent. You are shown: the research Purpose, the validation metric, the
+user's seed ideas, and a list of RETRIEVED PAPERS (each with a citation `key`,
+title, year, and abstract).
+
+Your job is to prevent wasteful "research theater" and steer toward genuinely
+novel, winnable research. Be direct and critical — do NOT rubber-stamp the
+user's ideas. If a seed idea is probably already done, or unlikely to beat the
+state of the art, say so plainly and explain which paper is the obstacle.
+
+HARD RULES (a response violating these is useless):
+  - Every idea you discuss — both the user's seed ideas AND your own new ideas
+    — MUST cite its `closest_prior_work` as a list of paper KEYS chosen ONLY
+    from the retrieved papers provided. NEVER invent a key or cite a paper not
+    in the list. If nothing in the list is close, use an empty list and say
+    "no close prior work retrieved".
+  - Every idea MUST state the `novel_delta`: precisely what is new versus that
+    closest prior work.
+  - Every idea MUST give a `cheap_kill_test`: a concrete experiment runnable in
+    under ~1 GPU-hour whose negative result would kill the idea fast.
+  - Prefer ORTHOGONAL bets over incremental tweaks when the area is crowded.
+
+Reply with STRICT JSON, no prose outside it:
+{
+  "problem_restated": "<2-4 sentences: what we are actually trying to do and why it matters>",
+  "sota_summary": "<3-6 sentences synthesizing the current state of the art from the retrieved papers, citing keys inline like [key]>",
+  "user_ideas_assessment": [
+    {
+      "idea": "<restate the user's seed idea>",
+      "verdict": "novel" | "overlaps" | "risky",
+      "closest_prior_work": ["<key>", ...],
+      "novel_delta": "<what's new vs that work, or why it overlaps>",
+      "cheap_kill_test": "<the fast falsifying experiment>"
+    }
+  ],
+  "new_ideas": [
+    {
+      "idea": "<a new direction to beat SOTA the user did not propose>",
+      "why": "<the hypothesis / why it could win>",
+      "idea_class": "ORTHOGONAL" | "INCREMENTAL" | "REPRODUCE" | "ABLATION",
+      "closest_prior_work": ["<key>", ...],
+      "novel_delta": "<what's new>",
+      "cheap_kill_test": "<the fast falsifying experiment>"
+    }
+  ],
+  "open_questions": ["<things to confirm with the user before committing>"],
+  "recommended_direction": "<one paragraph: the sharpest, most novel plan you would actually commit GPUs to>"
+}
+
+Give 1-4 new_ideas. Be concise but specific. Cite keys, demand kill tests,
+and push back hard."""
+
+
+def _scope_papers_block(papers: list[dict], max_chars: int = 14000) -> str:
+    """Render the retrieved papers as a compact, key-labelled block for the
+    scoping prompt. Truncates abstracts and the whole block to stay in budget."""
+    lines, total = [], 0
+    for p in papers:
+        entry = (f"[{p.get('key','?')}] {p.get('title','')} "
+                 f"({p.get('year','')}) — {p.get('authors','')[:80]}\n"
+                 f"    {(p.get('abstract','') or '')[:480]}")
+        if total + len(entry) > max_chars:
+            break
+        lines.append(entry); total += len(entry)
+    return "\n".join(lines) if lines else "(no papers retrieved)"
+
+
+def _validate_scope_keys(synth: dict, valid_keys: set[str]) -> dict:
+    """Drop any cited key the Lit Agent did not actually retrieve — kills
+    hallucinated citations (both reviewers flagged this as a must-have)."""
+    def _clean(idea_list):
+        for it in (idea_list or []):
+            if isinstance(it, dict):
+                cpw = [k for k in (it.get("closest_prior_work") or [])
+                       if k in valid_keys]
+                it["closest_prior_work"] = cpw
+        return idea_list
+    if isinstance(synth, dict):
+        _clean(synth.get("user_ideas_assessment"))
+        _clean(synth.get("new_ideas"))
+    return synth
+
+
+def scope_review(purpose: str, metric: str, seed_ideas: str,
+                 papers: list[dict]) -> dict | None:
+    """Synthesize SOTA + adversarially assess the direction. Prefers the
+    flagship Claude reviewer for quality; falls back to gemini/openai.
+    Returns the parsed+citation-validated synthesis dict, or None on failure."""
+    cfg = _settings()
+    user = (f"# Purpose\n{purpose}\n\n# Validation metric\n{metric}\n\n"
+            f"# User's seed ideas\n{seed_ideas or '(none provided)'}\n\n"
+            f"# Retrieved papers (cite these keys ONLY)\n"
+            f"{_scope_papers_block(papers)}\n")
+    order = []
+    if _claude_available(cfg):
+        order.append("claude")
+    order += _available_reviewers(cfg)
+    for reviewer in order:
+        out = _call_reviewer(reviewer, _SCOPE_SYSTEM, user, cfg)
+        if out:
+            out.pop("reviewer", None)
+            out.pop("reviewed_at", None)
+            valid = {p.get("key") for p in papers if p.get("key")}
+            return _validate_scope_keys(out, valid)
+    return None
+
+
+def scope_chat(history: list[dict], synthesis: dict, papers: list[dict],
+               purpose: str, metric: str, seed_ideas: str) -> str:
+    """One conversational turn for the scoping modal — FREE TEXT (not JSON).
+    Stateless reducer: caller passes the full history; we ground the model in
+    the synthesis + retrieved papers and return the assistant's next reply.
+    Prefers Claude (text-mode); falls back to a text Gemini/OpenAI call."""
+    cfg = _settings()
+    sys = (
+        "You are the same skeptical ML research advisor, now in a live "
+        "back-and-forth with the researcher about the scoping of their project "
+        "BEFORE any GPU is spent. Keep pushing for genuinely novel, winnable "
+        "research and away from wasteful 'research theater'. Be concrete, cite "
+        "retrieved papers by [key] when relevant, and when you propose or "
+        "endorse a direction, always attach a cheap kill test. You may only "
+        "cite keys that appear in the retrieved papers. Be conversational and "
+        "concise (a few short paragraphs at most). Do NOT output JSON.")
+    ctx = (f"# Purpose\n{purpose}\n# Metric\n{metric}\n# Seed ideas\n"
+           f"{seed_ideas or '(none)'}\n\n# Your current synthesis\n"
+           f"{json.dumps(synthesis, indent=2)[:6000]}\n\n"
+           f"# Retrieved papers\n{_scope_papers_block(papers, max_chars=8000)}")
+    convo = "\n\n".join(f"{m.get('role','user').upper()}: {m.get('text','')}"
+                        for m in history)
+    user = ctx + "\n\n# Conversation so far\n" + convo + "\n\nASSISTANT:"
+    # Claude text mode (no JSON forcing) — best for conversation.
+    try:
+        if _claude_available(cfg):
+            key = os.environ["ANTHROPIC_API_KEY"]
+            model = cfg.get("council_claude_model") or DEFAULTS["council_claude_model"]
+            data = _post_json_retry(
+                "https://api.anthropic.com/v1/messages",
+                {"model": model, "max_tokens": 1200, "system": sys,
+                 "messages": [{"role": "user", "content": user}]},
+                {"x-api-key": key, "anthropic-version": "2023-06-01"})
+            return data["content"][0]["text"]
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[scope] claude chat failed: {e}", flush=True)
+    # Gemini text mode
+    try:
+        if os.environ.get("GEMINI_API_KEY"):
+            key = os.environ["GEMINI_API_KEY"]
+            model = cfg.get("council_gemini_model") or DEFAULTS["council_gemini_model"]
+            data = _post_json_retry(
+                ("https://generativelanguage.googleapis.com/v1beta/"
+                 f"models/{model}:generateContent?key={key}"),
+                {"system_instruction": {"parts": [{"text": sys}]},
+                 "contents": [{"role": "user", "parts": [{"text": user}]}],
+                 "generationConfig": {"temperature": 0.7}}, {})
+            return data["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[scope] gemini chat failed: {e}", flush=True)
+    # OpenAI text mode
+    try:
+        if os.environ.get("OPENAI_API_KEY"):
+            key = os.environ["OPENAI_API_KEY"]
+            model = cfg.get("council_openai_model") or DEFAULTS["council_openai_model"]
+            data = _post_json_retry(
+                "https://api.openai.com/v1/chat/completions",
+                {"model": model, "messages": [
+                    {"role": "system", "content": sys},
+                    {"role": "user", "content": user}]},
+                {"Authorization": f"Bearer {key}"})
+            return data["choices"][0]["message"]["content"]
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[scope] openai chat failed: {e}", flush=True)
+    return ("(The advisor model is unavailable right now — check that an "
+            "Anthropic, Gemini, or OpenAI key is configured.)")

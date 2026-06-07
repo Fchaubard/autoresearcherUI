@@ -2328,6 +2328,13 @@ async def post_onboarding(request: Request):
     # a Claude token (or the test hook) -> launch the real autonomous agent
     token = (cfg.get("claude_token") or "").strip()
     if token or os.environ.get("ARUI_CLAUDE_BIN"):
+        # Scoping gate (Phase 0): instead of spawning the research agent
+        # immediately, run a literature review + direction-confirmation pass
+        # first. start_real() is deferred until scoping.confirm()/skip().
+        from . import scoping
+        if scoping.gate_enabled():
+            scoping.start(cfg)
+            return _maybe_set_cookie(JSONResponse({"status": "scoping"}))
         realrun.start_real(cfg)
         return _maybe_set_cookie(JSONResponse({"status": "started"}))
 
@@ -2379,6 +2386,50 @@ async def post_onboarding(request: Request):
         db.commit()
     db.close()
     return _maybe_set_cookie(JSONResponse({"status": "configured"}))
+
+
+# ──────────── scoping gate (Phase 0: lit review + direction confirm) ────────
+@router.get("/scope/status")
+def scope_status():
+    from . import scoping
+    return scoping.state_get()
+
+
+@router.post("/scope/start_preview")
+async def scope_start_preview(request: Request):
+    """Isolated test entry point: run the scoping sweep for an arbitrary
+    purpose WITHOUT touching onboarding, the live workspace, or start_real.
+    confirm/skip become dry-runs while in preview."""
+    from . import scoping
+    body = await request.json()
+    cfg = {"purpose": body.get("purpose", ""),
+           "metric": body.get("metric", ""),
+           "seed_ideas": body.get("seed_ideas", ""),
+           "repo_name": body.get("repo_name", "scope_preview")}
+    return scoping.start(cfg, preview=True)
+
+
+@router.post("/scope/chat")
+async def scope_chat_ep(request: Request):
+    from . import scoping
+    body = await request.json()
+    return scoping.chat(body.get("text", ""))
+
+
+@router.post("/scope/confirm")
+async def scope_confirm_ep(request: Request):
+    from . import scoping
+    body = await request.json()
+    return scoping.confirm(
+        final_direction=body.get("final_direction", ""),
+        keep_user=body.get("keep_user"), keep_new=body.get("keep_new"))
+
+
+@router.post("/scope/skip")
+async def scope_skip_ep(request: Request):
+    from . import scoping
+    body = await request.json()
+    return scoping.skip(body.get("reason", ""))
 
 
 # ──────────── file browser + editor (the Files tab) ─────────────────────────
