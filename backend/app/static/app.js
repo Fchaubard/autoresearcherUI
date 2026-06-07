@@ -4700,12 +4700,14 @@ function renderFiles(c) {
           '<input id="files-filter" placeholder="Filter by name…" autocomplete="off"/>' +
           '<button class="files-refresh" id="files-refresh" title="Refresh">⟳</button>' +
         '</div>' +
+        '<div class="files-listhd"><span>Name</span><span>Modified</span></div>' +
         '<div class="files-list" id="files-list"></div>' +
       '</div>' +
       '<div class="files-main">' +
         '<div class="files-edbar">' +
           '<span class="files-edpath" id="files-edpath">No file open</span>' +
           '<span class="files-edspacer"></span>' +
+          '<button class="btn" id="files-new" title="Create a new file in the current folder">+ New file</button>' +
           '<button class="btn pri" id="files-save" disabled>Save</button>' +
         '</div>' +
         '<div class="files-editor" id="files-editor">' +
@@ -4715,7 +4717,21 @@ function renderFiles(c) {
     '</div>';
   c.querySelector('#files-filter').oninput = () => _paintFilesList();
   c.querySelector('#files-refresh').onclick = () => loadFilesDir(FilesState.cwd);
+  c.querySelector('#files-new').onclick = newFileFlow;
   c.querySelector('#files-save').onclick = saveCurrentFile;
+  // Cmd/Ctrl-S saves from anywhere on the Files view. Monaco binds its own
+  // Ctrl-S when the editor is focused; this also covers the filter / list and
+  // suppresses the browser's "save page" dialog. Registered once.
+  if (!window.__filesKeyHandler) {
+    window.__filesKeyHandler = true;
+    document.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S') &&
+          S.view === 'files' && FilesState.file) {
+        e.preventDefault();
+        if (FilesState.dirty) saveCurrentFile();
+      }
+    });
+  }
   loadFilesDir(FilesState.cwd || '/root/autoresearcherUI');
 }
 
@@ -4773,7 +4789,9 @@ function _paintFilesList() {
       '<span class="files-ic">' + (e.is_dir ? '📁' : '📄') + '</span>' +
       '<span class="files-nm">' + esc(e.name) + '</span>' +
       '<span class="files-sz">' + (e.is_dir ? '' : esc(_fmtBytes(e.size))) +
-      '</span></div>');
+      '</span>' +
+      '<span class="files-mod" title="' + esc(e.mtime || '') + '">' +
+      esc(_fmtTimeShort(e.mtime)) + '</span></div>');
   }
   list.innerHTML = rows.join('') || '<div class="files-empty">empty</div>';
   list.querySelectorAll('.files-row').forEach(r => {
@@ -4838,6 +4856,33 @@ function _updateSaveBar() {
   if (edpath) edpath.textContent =
     (FilesState.file || 'No file open') + (FilesState.dirty ? '  •' : '');
   if (save) save.disabled = !FilesState.file || !FilesState.dirty;
+}
+async function newFileFlow() {
+  const dir = FilesState.cwd || '/root/autoresearcherUI';
+  const name = await aruiPrompt('New file name (created in ' + dir + '):',
+    { title: 'New file', okText: 'Create' });
+  if (!name) return;
+  const clean = String(name).trim().replace(/^\/+/, '');
+  if (!clean) return;
+  const path = dir.replace(/\/$/, '') + '/' + clean;
+  try {
+    const r = await fetch('/api/files/write', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, content: '' }),
+    });
+    const d = await r.json();
+    if (!d || !d.ok) {
+      aruiAlert('Could not create file: ' + ((d && d.error) || 'unknown') +
+        '. (The folder must exist; pick a name in the current folder.)',
+        { title: 'New file' });
+      return;
+    }
+  } catch (e) {
+    aruiAlert('Could not create file: ' + String(e), { title: 'New file' });
+    return;
+  }
+  await loadFilesDir(dir);     // refresh so the new file appears in the list
+  openFileInEditor(path);      // open it for editing
 }
 async function saveCurrentFile() {
   if (!FilesState.file || !FilesState.editor) return;

@@ -981,7 +981,13 @@ body.resizing{user-select:none}
 .files-row.isdir .files-nm{color:var(--text);font-weight:500}
 .files-ic{width:16px;text-align:center;flex-shrink:0}
 .files-nm{flex:1;overflow:hidden;text-overflow:ellipsis}
-.files-sz{color:var(--muted);font-size:10.5px;font-family:var(--mono)}
+.files-sz{color:var(--muted);font-size:10px;font-family:var(--mono);
+  flex-shrink:0;min-width:42px;text-align:right}
+.files-mod{color:var(--muted);font-size:10px;font-family:var(--mono);
+  flex-shrink:0;min-width:62px;text-align:right}
+.files-listhd{display:flex;justify-content:space-between;padding:5px 11px 4px;
+  font-size:9.5px;text-transform:uppercase;letter-spacing:.6px;
+  color:var(--muted);border-bottom:1px solid var(--border)}
 .files-up .files-nm{color:var(--muted)}
 .files-loading,.files-empty,.files-err{padding:14px 12px;font-size:12px;
   color:var(--muted)}
