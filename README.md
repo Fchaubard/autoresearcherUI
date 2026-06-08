@@ -67,6 +67,18 @@ arXiv + Semantic Scholar. Flip back to Research at any time.
 ## The agents
 
 ```
+   onboarding submitted
+            │
+            ▼
+   ┌──────────────────────────────────────────┐
+   │   Scoping Agent   ·   Phase 0            │  BEFORE any GPU is spent.
+   │   (server-side: Lit Agent + Council;    │  Literature review (arXiv + S2),
+   │    model = your onboarding pick,         │  SOTA synthesis + adversarial
+   │    Gemini by default)                    │  idea critique w/ cheap kill
+   │                                          │  tests. You confirm/refine the
+   └────────────────────┬─────────────────────┘  plan in a chat modal.
+                        │ on Confirm: seed directives.jsonl + lessons.md, then start_real
+                        ▼
                        ┌─────────────────────┐
                        │      PI Agent       │  every hour, nags whoever's active
                        └──────────┬──────────┘
@@ -76,8 +88,8 @@ arXiv + Semantic Scholar. Flip back to Research at any time.
    ┌──────────────────────────┐      ┌──────────────────────────┐
    │     Research Agent       │      │      Author Agent        │
    │     (Claude Code)        │      │      (Claude Code)       │
-   │  ideas.md → train.py     │      │  ablations + LaTeX +     │
-   │  → queue → kill divergers│      │  figure integration      │
+   │  directives.jsonl →      │      │  ablations + LaTeX +     │
+   │  train.py → kill divergers│     │  figure integration      │
    └────────────┬─────────────┘      └────────────┬─────────────┘
                 │ on every kept run               │ on every paper run finish
                 ▼                                 ▼
@@ -95,8 +107,22 @@ arXiv + Semantic Scholar. Flip back to Research at any time.
                                      └──────────────────────────┘
 ```
 
-- **Research Agent** — Claude Code in `tmux:agent`. Owns `ideas.md` and
-  `train.py`. Generates ideas, edits the script, queues runs, kills divergers.
+- **Scoping Agent (Phase 0)** — runs **before** the Research Agent, server-side
+  (no tmux session of its own). On onboarding submit it drives the **Lit Agent**
+  (arXiv + Semantic Scholar) and the **Council** — using the model you choose in
+  onboarding (the *Scoping agent* dropdown, **Gemini by default**) — to review
+  the literature, synthesize the state of the art, and adversarially
+  pressure-test your direction, proposing novel ideas each with a cheap kill
+  test. You confirm or refine the plan in a chat modal (it re-synthesizes itself
+  as you push back). On **Confirm** it seeds the Research Agent's
+  `directives.jsonl` queue, caches the review in `lessons.md` (reused at paper
+  time), and *then* launches the Research Agent. On by default;
+  `ARUI_SCOPING_GATE=0` skips it. Full detail in
+  [Scoping gate](#scoping-gate-phase-0--plan-before-you-compute).
+- **Research Agent** — Claude Code in `tmux:agent`. Owns `train.py` and works
+  the **`directives.jsonl`** queue (seeded by the Scoping Agent, extended by the
+  Council; `ideas.md` is its human-readable render of that queue). Edits the
+  script, launches runs, kills divergers.
 - **Author Agent** — Claude Code in `tmux:author`. Owns the ablation queue
   and the LaTeX. Each finished paper-mode run is integrated into figures and
   sections in real time via a tmux poke from `/api/track/finish`.
