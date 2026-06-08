@@ -3422,6 +3422,12 @@ const OB_FIELDS = [
   ['claude_token', 'Claude API token', 'password', 'sk-ant-…'],
   ['gemini_token', 'Gemini token (optional)', 'password', ''],
   ['openai_token', 'OpenAI token (optional)', 'password', ''],
+  // Which model runs the SCOPING phase (the pre-research literature review +
+  // plan critique + the back-and-forth chat). Gemini is the default — it's
+  // fast, which matters because the plan re-synthesizes after every message.
+  ['scoping_model',
+    'Scoping agent — model for the pre-research lit review + plan critique',
+    'select', 'Gemini|Claude|OpenAI'],
   ['skip_perms', 'Run the agent with --dangerously-skip-permissions',
     'check', ''],
   ['sec', 'Research'],
@@ -4112,13 +4118,25 @@ function showScopingModal() {
     });
   }
   function commitHtml(s) {
-    // The committable plan — the natural END of the center reading flow:
-    // problem → SOTA → ideas → THE PLAN → commit.
-    return '<h3>The plan to commit <span class="scope-muted">— step 5: this is ' +
-      'what launches; edit it or just keep chatting and it updates itself</span></h3>' +
-      '<textarea id="scope-final" class="scope-final" rows="5" ' +
-      'placeholder="The final research direction to commit to…">' +
+    // The confirmed research DIRECTION — the distilled mandate the agent starts
+    // from. This is NOT the whole plan: your onboarding purpose/baseline/metric
+    // still apply, and the ideas you keep above become the agent's first
+    // directives. This box just captures the high-level direction you and the
+    // advisor converged on; it auto-updates from the conversation.
+    return '<h3>Confirmed research direction <span class="scope-muted">— the ' +
+      'mandate the research agent starts from; edit it, or keep chatting and ' +
+      'it updates itself</span></h3>' +
+      '<textarea id="scope-final" class="scope-final" rows="10" ' +
+      'placeholder="The research direction you and the advisor converged on…">' +
       esc(s.recommended_direction || '') + '</textarea>' +
+      '<div class="scope-onconfirm">On <b>Confirm</b>, autoresearcherUI will: ' +
+        '<b>1.</b> seed the ideas you kept above as the agent’s starting ' +
+        'queue (<code>directives.jsonl</code>); <b>2.</b> save this literature ' +
+        'review (<code>lessons.md</code> + citations) so the paper reuses it; ' +
+        'then <b>3.</b> launch the research agent, which scaffolds ' +
+        '<code>program.md</code>/<code>train.py</code>/<code>ideas.md</code>, ' +
+        'runs your onboarding baseline, and works the queue — all grounded ' +
+        'in the direction + review above.</div>' +
       '<div class="scope-actions">' +
         '<button class="btn pri" id="scope-confirm">Confirm &amp; start ' +
         'research</button>' +

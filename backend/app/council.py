@@ -83,6 +83,10 @@ DEFAULTS = {
     # one complete wave of parallel runs at a time).
     "strategic_review_enabled": True,
     "strategic_review_batch_n": 0,
+    # Which model drives the SCOPING phase (lit review + plan critique + chat).
+    # Gemini by default — it's fast, which matters because the plan
+    # re-synthesizes after every chat message.
+    "scoping_model": "gemini",
 }
 
 
@@ -3329,6 +3333,19 @@ def _scope_papers_block(papers: list[dict], max_chars: int = 14000) -> str:
     return "\n".join(lines) if lines else "(no papers retrieved)"
 
 
+def _scoping_order(cfg: dict) -> list[str]:
+    """Reviewer order for the scoping phase: the user's chosen `scoping_model`
+    first (onboarding dropdown; default 'gemini'), then the others as fallback.
+    Only includes providers whose keys are present."""
+    pref = (cfg.get("scoping_model") or "gemini").strip().lower()
+    if pref not in ("gemini", "openai", "claude"):
+        pref = "gemini"
+    avail = list(_available_reviewers(cfg))        # gemini / openai (with keys)
+    if _claude_available(cfg):
+        avail.append("claude")
+    return [r for r in avail if r == pref] + [r for r in avail if r != pref]
+
+
 def _validate_scope_keys(synth: dict, valid_keys: set[str]) -> dict:
     """Drop any cited key the Lit Agent did not actually retrieve — kills
     hallucinated citations (both reviewers flagged this as a must-have)."""
@@ -3355,11 +3372,7 @@ def scope_review(purpose: str, metric: str, seed_ideas: str,
             f"# User's seed ideas\n{seed_ideas or '(none provided)'}\n\n"
             f"# Retrieved papers (cite these keys ONLY)\n"
             f"{_scope_papers_block(papers)}\n")
-    order = []
-    if _claude_available(cfg):
-        order.append("claude")
-    order += _available_reviewers(cfg)
-    for reviewer in order:
+    for reviewer in _scoping_order(cfg):
         out = _call_reviewer(reviewer, _SCOPE_SYSTEM, user, cfg)
         if out:
             out.pop("reviewer", None)
@@ -3394,14 +3407,7 @@ def scope_finalize(purpose: str, metric: str, seed_ideas: str,
             f"`recommended_direction` the plan you would actually launch now. Keep "
             f"every citation rule (closest_prior_work keys from the provided papers "
             f"only) and a cheap_kill_test on every idea.")
-    # finalize runs after EVERY message in the background, so prefer the faster
-    # reviewers (gemini/openai, ~20-40s) over the flagship Claude (~90s); the
-    # first synthesis already used the flagship for quality. Claude is the
-    # last-resort fallback.
-    order = _available_reviewers(cfg)
-    if _claude_available(cfg):
-        order.append("claude")
-    for reviewer in order:
+    for reviewer in _scoping_order(cfg):
         out = _call_reviewer(reviewer, _SCOPE_SYSTEM, user, cfg)
         if out:
             out.pop("reviewer", None)
@@ -3434,46 +3440,46 @@ def scope_chat(history: list[dict], synthesis: dict, papers: list[dict],
     convo = "\n\n".join(f"{m.get('role','user').upper()}: {m.get('text','')}"
                         for m in history)
     user = ctx + "\n\n# Conversation so far\n" + convo + "\n\nASSISTANT:"
-    # Claude text mode (no JSON forcing) — best for conversation.
-    try:
-        if _claude_available(cfg):
-            key = os.environ["ANTHROPIC_API_KEY"]
-            model = cfg.get("council_claude_model") or DEFAULTS["council_claude_model"]
-            data = _post_json_retry(
-                "https://api.anthropic.com/v1/messages",
-                {"model": model, "max_tokens": 1200, "system": sys,
-                 "messages": [{"role": "user", "content": user}]},
-                {"x-api-key": key, "anthropic-version": "2023-06-01"})
-            return data["content"][0]["text"]
-    except Exception as e:                                  # noqa: BLE001
-        print(f"[scope] claude chat failed: {e}", flush=True)
-    # Gemini text mode
-    try:
-        if os.environ.get("GEMINI_API_KEY"):
-            key = os.environ["GEMINI_API_KEY"]
-            model = cfg.get("council_gemini_model") or DEFAULTS["council_gemini_model"]
-            data = _post_json_retry(
-                ("https://generativelanguage.googleapis.com/v1beta/"
-                 f"models/{model}:generateContent?key={key}"),
-                {"system_instruction": {"parts": [{"text": sys}]},
-                 "contents": [{"role": "user", "parts": [{"text": user}]}],
-                 "generationConfig": {"temperature": 0.7}}, {})
-            return data["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception as e:                                  # noqa: BLE001
-        print(f"[scope] gemini chat failed: {e}", flush=True)
-    # OpenAI text mode
-    try:
-        if os.environ.get("OPENAI_API_KEY"):
-            key = os.environ["OPENAI_API_KEY"]
-            model = cfg.get("council_openai_model") or DEFAULTS["council_openai_model"]
-            data = _post_json_retry(
-                "https://api.openai.com/v1/chat/completions",
-                {"model": model, "messages": [
-                    {"role": "system", "content": sys},
-                    {"role": "user", "content": user}]},
-                {"Authorization": f"Bearer {key}"})
-            return data["choices"][0]["message"]["content"]
-    except Exception as e:                                  # noqa: BLE001
-        print(f"[scope] openai chat failed: {e}", flush=True)
+
+    # FREE-TEXT (no JSON forcing) per-provider callers, tried in the user's
+    # chosen scoping-model order.
+    def _claude_text():
+        key = os.environ["ANTHROPIC_API_KEY"]
+        model = cfg.get("council_claude_model") or DEFAULTS["council_claude_model"]
+        data = _post_json_retry(
+            "https://api.anthropic.com/v1/messages",
+            {"model": model, "max_tokens": 1200, "system": sys,
+             "messages": [{"role": "user", "content": user}]},
+            {"x-api-key": key, "anthropic-version": "2023-06-01"})
+        return data["content"][0]["text"]
+
+    def _gemini_text():
+        key = os.environ["GEMINI_API_KEY"]
+        model = cfg.get("council_gemini_model") or DEFAULTS["council_gemini_model"]
+        data = _post_json_retry(
+            ("https://generativelanguage.googleapis.com/v1beta/"
+             f"models/{model}:generateContent?key={key}"),
+            {"system_instruction": {"parts": [{"text": sys}]},
+             "contents": [{"role": "user", "parts": [{"text": user}]}],
+             "generationConfig": {"temperature": 0.7}}, {})
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+
+    def _openai_text():
+        key = os.environ["OPENAI_API_KEY"]
+        model = cfg.get("council_openai_model") or DEFAULTS["council_openai_model"]
+        data = _post_json_retry(
+            "https://api.openai.com/v1/chat/completions",
+            {"model": model, "messages": [
+                {"role": "system", "content": sys},
+                {"role": "user", "content": user}]},
+            {"Authorization": f"Bearer {key}"})
+        return data["choices"][0]["message"]["content"]
+
+    _fns = {"claude": _claude_text, "gemini": _gemini_text, "openai": _openai_text}
+    for reviewer in _scoping_order(cfg):
+        try:
+            return _fns[reviewer]()
+        except Exception as e:                              # noqa: BLE001
+            print(f"[scope] {reviewer} chat failed: {e}", flush=True)
     return ("(The advisor model is unavailable right now — check that an "
             "Anthropic, Gemini, or OpenAI key is configured.)")

@@ -1896,9 +1896,15 @@ textarea.onb-in{resize:vertical;line-height:1.5}
   transition:background .3s}
 .scope-commit h3{font-size:14px;margin:0 0 9px;color:var(--text)}
 .scope-final{width:100%;background:var(--panel);border:1px solid var(--border);
-  border-radius:8px;color:var(--text);padding:11px 13px;font-size:13.5px;
-  line-height:1.55;font-family:inherit;resize:vertical;min-height:90px}
-.scope-commit .scope-actions{margin-top:12px}
+  border-radius:8px;color:var(--text);padding:13px 15px;font-size:13.5px;
+  line-height:1.6;font-family:inherit;resize:vertical;min-height:210px}
+.scope-onconfirm{margin-top:12px;padding:11px 13px;background:var(--panel-2);
+  border:1px solid var(--border);border-radius:8px;font-size:12px;
+  line-height:1.7;color:var(--text-2)}
+.scope-onconfirm code{background:var(--panel-3);padding:1px 5px;border-radius:4px;
+  font-family:var(--mono);font-size:11px;color:var(--text)}
+.scope-onconfirm b{color:var(--text)}
+.scope-commit .scope-actions{margin-top:14px}
 .scope-commit.flash{animation:scopeFlash 1.5s ease-out}
 @keyframes scopeFlash{
   0%{background:var(--accent-soft)}
