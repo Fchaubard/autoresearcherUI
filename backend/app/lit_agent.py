@@ -10,9 +10,7 @@ periodically when paper mode is active.
 """
 from __future__ import annotations
 
-import datetime as dt
 import json
-import os
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,7 +18,7 @@ import xml.etree.ElementTree as ET
 
 from . import paper
 from .db import SessionLocal
-from .models import (PaperCitation, PaperClaim, PaperMeta, Project)
+from .models import PaperCitation, PaperClaim
 
 _ARXIV_API = "http://export.arxiv.org/api/query"
 _SEMANTIC_API = "https://api.semanticscholar.org/graph/v1/paper/search"
@@ -185,7 +183,7 @@ def _bibtex_for(p: dict) -> str:
               f"  year = {{{p.get('year','').strip()}}}"]
     if p.get("arxiv_id"):
         fields.append(f"  eprint = {{{p['arxiv_id']}}}")
-        fields.append(f"  archivePrefix = {{arXiv}}")
+        fields.append("  archivePrefix = {arXiv}")
     if p.get("doi"):
         fields.append(f"  doi = {{{p['doi']}}}")
     fields.append(f"  abstract = {{{p.get('abstract','')[:1000]}}}")

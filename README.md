@@ -12,7 +12,8 @@ Basic AutoresearcherUI flow per node:
 3. `bash setup.sh`
 4. copy the URL
 5. Open it and fill out the onboarding form (namely the research purpose and objective function)
-6. Then the research agent is good to go! Leave it alone and let it hillclimb. It will create a fresh research repo, write the `train.py`, spin up a council of agents to review the code, do a baseline run, then try to beat it, maintain a priority queue of ideas, and runs them around the clock updating you via email and the live dashboard until you are ready for your research to stop exploring and start writing the paper. Then the researcher agent will hand off the control of the GPUs to an author agent to nail down and prove specific claims and auto-draft the LaTeX paper and do all required ablation runs to support the claims of the paper. More detail below.
+6. **Scope the research before any GPU spins up.** On submit, a scoping agent runs a literature review (arXiv + Semantic Scholar), synthesizes the state of the art, and adversarially pressure-tests your direction — proposing novel, citation-grounded ideas each with a cheap kill test. You confirm or refine the plan in a modal (chat back-and-forth; the plan re-synthesizes itself). See [*Scoping gate*](#scoping-gate-phase-0--plan-before-you-compute) below.
+7. Then the research agent is good to go! Leave it alone and let it hillclimb. It will create a fresh research repo, write the `train.py`, spin up a council of agents to review the code, do a baseline run, then try to beat it, maintain a priority queue of ideas, and runs them around the clock updating you via email and the live dashboard until you are ready for your research to stop exploring and start writing the paper. Then the researcher agent will hand off the control of the GPUs to an author agent to nail down and prove specific claims and auto-draft the LaTeX paper and do all required ablation runs to support the claims of the paper. More detail below.
 
 ---
 
@@ -102,16 +103,67 @@ arXiv + Semantic Scholar. Flip back to Research at any time.
 - **PI Agent** — hourly. Reads GPU saturation, the last ~12 runs, the agent's
   recent output, and the top of `ideas.md`; types short concrete nudges.
   Switches persona by mode.
-- **The Council** — runs in two places. **(1)** Once at startup as the
-  **code-bless gate** (see below). **(2)** After every kept run (batched
-  every N), Gemini and GPT-5 independently review then debate up to N
-  rounds; consensus applies, deadlocks go to Claude. Every round is
-  persisted on the run.
+- **The Council** — runs in three places. **(1)** Up front in the
+  **scoping gate** (see below) to synthesize the SOTA and pressure-test the
+  plan before any GPU runs. **(2)** Once at project start as the
+  **code-bless gate**. **(3)** After every kept run (batched every N), Gemini
+  and GPT-5 independently review then debate up to N rounds; consensus
+  applies, deadlocks go to Claude. Every round is persisted on the run.
 - **Lit Agent** — pulls candidates from arXiv + Semantic Scholar, ranks by
-  relevance, files cite-candidate decisions.
+  relevance, files cite-candidate decisions. Runs both up front (the scoping
+  gate's literature review, keyed off your purpose) and in paper mode (keyed
+  off the paper's claims) — the up-front review is cached and reused.
 - **Paper Runner** — daemon that reads paper-mode `Run` rows with
   `status='queued'`, resolves deps, bin-packs onto the GPU table, launches
   them. Local backend in v0.0.1; SLURM/K8s pluggable later.
+
+## Scoping gate (Phase 0) — plan before you compute
+
+**Before the research agent ever spawns, you and a scoping agent agree on a
+literature-grounded, novelty-checked plan.** This is on by default (set
+`ARUI_SCOPING_GATE=0` to skip it). It exists to stop "research theater" —
+burning GPUs on a direction that's already been done or won't beat the state
+of the art.
+
+When you submit onboarding:
+
+```
+backend: instead of spawning the research agent, starts a scoping phase
+Lit Agent: sweeps arXiv + Semantic Scholar off your PURPOSE + seed ideas,
+           caching PaperCitation rows (reused later at paper time)
+Council:   the scoping model (your onboarding dropdown; Gemini by default)
+           synthesizes the SOTA and adversarially assesses the direction —
+           an honest read on each of YOUR seed ideas + new orthogonal ideas,
+           every one carrying its closest prior work (cited by key, validated
+           against what was actually retrieved — no hallucinated citations)
+           and a cheap kill test (a <~1 GPU-hour experiment that would
+           falsify it fast)
+you:       review it in a full-screen modal — papers + preflight on the left,
+           the plan in the center, a back-and-forth chat on the right, and an
+           editable "confirmed research direction" + Confirm at the bottom.
+           Push back in the chat; the plan re-synthesizes itself after each
+           message (no button).
+```
+
+On **Confirm**, the gate materializes the plan into the existing autoresearcher
+artifacts and *then* launches the research agent:
+
+1. the ideas you kept become the agent's starting **`directives.jsonl`** queue;
+2. the literature review is written to **`lessons.md`** (+ citations) and a
+   `scope_brief` is injected into the agent's setup prompt, so it starts
+   grounded and the Author Agent reuses the review at paper time instead of
+   redoing the search;
+3. `start_real()` spawns the Research Agent, which scaffolds
+   `program.md` / `train.py` / `ideas.md`, runs your baseline, and works the
+   seeded queue — exactly the normal flow, just no longer guessing from a raw
+   prompt.
+
+Escape hatches in the modal: **Skip the review** (start immediately from the
+raw onboarding brief) and **Back to onboarding** (edit the form — it's restored
+exactly as you left it). An in-progress scope also resumes if you reload the
+page. The scoping model is chosen in onboarding (*Scoping agent* dropdown,
+Gemini default — it's fast, which matters because the plan re-synthesizes after
+every chat message).
 
 ## The default safety pattern: council code-bless
 
@@ -182,9 +234,10 @@ fresh review.
 **Onboarding & Settings** — one form is the entire config surface. Email
 for alerts, optional GitHub creds for repo sync, optional Claude / Gemini /
 OpenAI tokens (Claude unlocks the agents; Gemini + OpenAI unlock the
-council), the project's research question, seed ideas, validation metric,
-baseline, the dangerously-skip-permissions toggle, and the agent's raw
-`program.md`. Everything is editable later from the Settings modal.
+council), the *Scoping agent* model dropdown (Gemini default), the project's
+research question, seed ideas, validation metric, baseline, the
+dangerously-skip-permissions toggle, and the agent's raw `program.md`.
+Everything is editable later from the Settings modal.
 ![Onboarding / Settings](docs/screenshots/onboarding-settings.png)
 
 
@@ -225,6 +278,13 @@ metric view.
 ![Tmux Sessions](docs/screenshots/tmux-sessions.png)
 
 
+
+**Files** — a JupyterLab-style file browser + code editor (Monaco, the VS Code
+engine) over the agent's workspace. Browse the whole tree, open files with
+syntax highlighting, edit and save (Ctrl/Cmd-S), create new files, and open
+several at once as tabs that you can switch between — open tabs survive both
+in-app navigation and a full page reload. Handy for peeking at or hand-fixing
+`train.py` / `program.md` / `directives.jsonl` without SSH.
 
 **Write the paper (Paper Mode)** — flip the toggle and the Research Agent
 pauses, the Author Agent starts. Live LaTeX PDF preview on the left,
@@ -323,7 +383,11 @@ and the static dashboard (vanilla JS, no build step). Metrics in **DuckDB**
 orchestrator launches `train.py` subprocesses against a GPU-slot scheduler.
 Agents run as **tmux** sessions (`agent`, `author`) — observable, killable,
 attachable. Background services: `monitor` (GPU telemetry + reconciliation),
-`pi` (hourly oversight), `paper_runner`, `paper_watcher`, `notify`.
+`pi` (hourly oversight), `paper_runner`, `paper_watcher`, `notify`. The
+**scoping gate** (`scoping.py` + `/api/scope/*`) is server-side and runs the
+Lit Agent + Council before `start_real()`; it needs no tmux session. The
+**Files** tab is backed by a small read/write file API (`/api/files/*`) and the
+Monaco editor loaded from CDN.
 
 ## Hacking
 
@@ -336,10 +400,12 @@ bash tests/run_e2e.sh                  # the merge gate
 
 Source layout: `backend/app/` is where everything lives. `api.py` is the route
 surface. `orchestrator.py` is the research loop. `agent.py` has the
-`FakeAgent` / `RealAgent` split. `paper.py`, `author_agent.py`, `paper_runner.py`,
-`paper_watcher.py`, `paper_compile.py`, `lit_agent.py` are paper mode.
-`council.py`, `pi.py`, `monitor.py`, `notify.py`, `maintenance.py` are the
-support services. `arui/` is the tracker SDK.
+`FakeAgent` / `RealAgent` split. `scoping.py` is the Phase-0 scoping gate
+(it drives `lit_agent.py` + the `scope_*` functions in `council.py`).
+`paper.py`, `author_agent.py`, `paper_runner.py`, `paper_watcher.py`,
+`paper_compile.py`, `lit_agent.py` are paper mode. `council.py`, `pi.py`,
+`monitor.py`, `notify.py`, `maintenance.py` are the support services.
+`arui/` is the tracker SDK.
 
 ## License
 
