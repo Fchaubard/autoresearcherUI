@@ -3993,7 +3993,8 @@ function showScopingModal() {
           '<div class="scope-sec-h">Papers found</div>' +
           '<div class="scope-papers" id="scope-papers">—</div>' +
         '</div>' +
-        '<div class="scope-main" id="scope-main">' +
+        // Center column = the evolving research plan (the advisor's analysis).
+        '<div class="scope-center" id="scope-center">' +
           '<div class="scope-loading" id="scope-loading">' +
             '<div class="boot-spinner"></div>' +
             '<div id="scope-loadmsg">Reviewing the literature and ' +
@@ -4002,6 +4003,30 @@ function showScopingModal() {
             'Skip the review — start research now</button>' +
           '</div>' +
         '</div>' +
+        // Right column = the conversation (hidden until the plan is ready).
+        '<div class="scope-chatcol" id="scope-chatcol" style="display:none">' +
+          '<div class="scope-chatcol-h">Discuss &amp; push back' +
+            '<span class="scope-sync" id="scope-sync" style="display:none">' +
+            '· updating plan…</span></div>' +
+          '<div class="scope-chat" id="scope-chat"></div>' +
+          '<div class="scope-chatbar">' +
+            '<textarea id="scope-chatin" rows="2" placeholder="Challenge a ' +
+            'direction, ask for alternatives, demand novelty…"></textarea>' +
+            '<button class="btn" id="scope-send">Send</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      // Persistent commit bar — always visible, never buried in a scroll.
+      '<div class="scope-foot" id="scope-foot" style="display:none">' +
+        '<div class="scope-foot-plan">' +
+          '<label class="scope-foot-lbl">Plan to commit ' +
+            '<span class="scope-muted">— edit if you like; it updates from your ' +
+            'discussion automatically</span></label>' +
+          '<textarea id="scope-final" rows="2" placeholder="The final research ' +
+          'direction to commit to…"></textarea>' +
+        '</div>' +
+        '<button class="btn pri" id="scope-confirm">Confirm &amp; start ' +
+        'research</button>' +
       '</div>' +
     '</div>';
   const ScopeUI = { polling: true, rendered: false, kept: {}, exited: false,
@@ -4022,6 +4047,16 @@ function showScopingModal() {
   document.getElementById('scope-back').onclick = backToOnboarding;
   const _ls = document.getElementById('scope-loadskip');
   if (_ls) _ls.onclick = doSkip;          // expert "don't make me wait" hatch
+  // Persistent controls (chat input + commit bar live in the DOM from the
+  // start, just hidden until the plan is ready) — wire them once.
+  document.getElementById('scope-send').onclick = sendChat;
+  document.getElementById('scope-chatin').onkeydown = (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) sendChat();
+  };
+  document.getElementById('scope-final').oninput = () => {
+    ScopeUI.finalEdited = true;            // stop auto-overwriting a hand edit
+  };
+  document.getElementById('scope-confirm').onclick = doConfirm;
 
   function pill(ok) {
     return '<span class="scope-dot ' + (ok ? 'ok' : 'bad') + '"></span>';
@@ -4074,6 +4109,8 @@ function showScopingModal() {
     const ua = s.user_ideas_assessment || [];
     const na = s.new_ideas || [];
     const oq = s.open_questions || [];
+    // The recommended direction lives in the persistent footer (the editable
+    // "Plan to commit"), so it's intentionally NOT repeated here.
     return '<div class="scope-block"><h3>The problem</h3><p>' +
         esc(s.problem_restated || '') + '</p></div>' +
       '<div class="scope-block"><h3>State of the art</h3><p>' +
@@ -4082,8 +4119,6 @@ function showScopingModal() {
         ua.map((it, i) => ideaCard(it, i, 'user')).join('') + '</div>' : '') +
       (na.length ? '<div class="scope-block"><h3>New directions to beat SOTA</h3>' +
         na.map((it, i) => ideaCard(it, i, 'new')).join('') + '</div>' : '') +
-      (s.recommended_direction ? '<div class="scope-block"><h3>Recommended ' +
-        'direction</h3><p>' + esc(s.recommended_direction) + '</p></div>' : '') +
       (oq.length ? '<div class="scope-block"><h3>Open questions</h3><ul>' +
         oq.map(q => '<li>' + esc(q) + '</li>').join('') + '</ul></div>' : '');
   }
@@ -4094,45 +4129,22 @@ function showScopingModal() {
   }
   function renderSynth(d) {
     const s = d.synthesis || {};
-    const main = document.getElementById('scope-main');
-    main.innerHTML =
-      '<div class="scope-scroll">' +
-        '<div id="scope-plan">' + planSectionsHtml(s) + '</div>' +
-        '<div class="scope-block"><h3>Discuss &amp; push back ' +
-          '<span class="scope-sync" id="scope-sync" style="display:none">' +
-          '· updating plan…</span></h3>' +
-          '<div class="scope-chat" id="scope-chat"></div>' +
-          '<div class="scope-chatbar">' +
-            '<textarea id="scope-chatin" rows="2" placeholder="Challenge a ' +
-            'direction, ask for alternatives, demand novelty…"></textarea>' +
-            '<button class="btn" id="scope-send">Send</button>' +
-          '</div>' +
-          '<div class="scope-muted" style="margin-top:6px;font-size:11px">The ' +
-          'plan above updates on its own to reflect this conversation.</div>' +
-        '</div>' +
-        '<div class="scope-block"><h3>Confirm the plan</h3>' +
-          '<textarea id="scope-final" rows="3" placeholder="The final research ' +
-          'direction to commit to…">' + esc(s.recommended_direction || '') +
-          '</textarea>' +
-          '<div class="scope-actions">' +
-            '<button class="btn pri" id="scope-confirm">Confirm &amp; start ' +
-            'research</button>' +
-          '</div>' +
-        '</div>' +
-      '</div>';
+    const center = document.getElementById('scope-center');
+    center.classList.add('has-plan');
+    center.innerHTML = '<div class="scope-scroll" id="scope-plan">' +
+      planSectionsHtml(s) + '</div>';
+    wireKeepBoxes(center);
     renderChat(d.messages || []);
-    document.getElementById('scope-send').onclick = sendChat;
-    document.getElementById('scope-chatin').onkeydown = (e) => {
-      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) sendChat();
-    };
-    document.getElementById('scope-final').oninput = () => {
-      ScopeUI.finalEdited = true;     // stop auto-overwriting a hand-edited plan
-    };
-    wireKeepBoxes(main);
-    document.getElementById('scope-confirm').onclick = doConfirm;
+    const fin = document.getElementById('scope-final');
+    if (fin && !ScopeUI.finalEdited) fin.value = s.recommended_direction || '';
+    // Reveal the conversation panel + the commit footer now that there's a plan.
+    const cc = document.getElementById('scope-chatcol');
+    const ft = document.getElementById('scope-foot');
+    if (cc) cc.style.display = '';
+    if (ft) ft.style.display = '';
   }
-  // Re-render ONLY the plan sections + refresh the confirm box, leaving the
-  // chat + the user's in-progress typing untouched.
+  // Re-render ONLY the plan column + refresh the commit textarea, leaving the
+  // chat thread + the user's in-progress typing untouched.
   function applyPlanUpdate(d) {
     ScopeUI.last = d; ScopeUI.kept = {};
     const s = d.synthesis || {};
@@ -4236,7 +4248,7 @@ function showScopingModal() {
     renderSide(d);
     if (d.status === 'error') {
       ScopeUI.polling = false;
-      document.getElementById('scope-main').innerHTML =
+      document.getElementById('scope-center').innerHTML =
         '<div class="scope-loading"><div>⚠ ' + esc(d.error || 'scoping failed') +
         '</div><button class="btn" onclick="location.reload()">Reload</button></div>';
       return;

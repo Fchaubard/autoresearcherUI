@@ -1877,9 +1877,30 @@ textarea.onb-in{resize:vertical;line-height:1.5}
 .scope-head{display:flex;align-items:center;justify-content:space-between;
   padding:14px 22px;border-bottom:1px solid var(--border);flex-shrink:0}
 .scope-phase{font-size:13px;color:var(--accent);font-weight:600}
-.scope-body{flex:1;display:grid;grid-template-columns:320px 1fr;min-height:0}
+.scope-body{flex:1;display:grid;grid-template-columns:270px minmax(0,1fr) 400px;
+  min-height:0}
 .scope-side{border-right:1px solid var(--border);overflow:auto;padding:16px;
   background:var(--panel-2)}
+/* center column = the evolving plan */
+.scope-center{overflow:auto;min-height:0}
+.scope-center.has-plan{background:var(--bg)}
+/* right column = the conversation */
+.scope-chatcol{display:flex;flex-direction:column;min-height:0;
+  border-left:1px solid var(--border);background:var(--panel-2)}
+.scope-chatcol-h{display:flex;align-items:center;gap:8px;padding:13px 16px;
+  border-bottom:1px solid var(--border);font-weight:600;font-size:12.5px;
+  color:var(--text);flex-shrink:0}
+/* persistent commit bar */
+.scope-foot{flex-shrink:0;border-top:1px solid var(--border);
+  background:var(--panel);padding:12px 22px;display:flex;gap:18px;
+  align-items:flex-end}
+.scope-foot-plan{flex:1;display:flex;flex-direction:column;gap:5px;min-width:0}
+.scope-foot-lbl{font-size:12px;font-weight:600;color:var(--text)}
+.scope-foot textarea{width:100%;background:var(--panel-2);
+  border:1px solid var(--border);border-radius:8px;color:var(--text);
+  padding:8px 11px;font-size:13px;font-family:inherit;resize:vertical;
+  max-height:120px}
+.scope-foot .btn.pri{white-space:nowrap;padding:10px 20px;flex-shrink:0}
 .scope-sec-h{font-size:10px;text-transform:uppercase;letter-spacing:.6px;
   color:var(--muted);margin:14px 0 6px;font-weight:700}
 .scope-sec-h:first-child{margin-top:0}
@@ -1890,11 +1911,10 @@ textarea.onb-in{resize:vertical;line-height:1.5}
 .scope-dot{display:inline-block;width:8px;height:8px;border-radius:50%;
   margin-right:6px}
 .scope-dot.ok{background:#3ecf8e}.scope-dot.bad{background:var(--crash,#ef4444)}
-.scope-main{overflow:hidden;min-height:0;display:flex;flex-direction:column}
-.scope-loading{flex:1;display:flex;flex-direction:column;align-items:center;
-  justify-content:center;gap:16px;color:var(--text-2);font-size:14px;text-align:center;
-  padding:40px}
-.scope-scroll{overflow:auto;padding:24px 32px;max-width:860px;margin:0 auto;width:100%}
+.scope-loading{min-height:65vh;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:16px;color:var(--text-2);
+  font-size:14px;text-align:center;padding:40px}
+.scope-scroll{padding:24px 30px;max-width:780px}
 .scope-block{margin-bottom:24px}
 .scope-block h3{font-size:14px;margin:0 0 8px;color:var(--text)}
 .scope-block p{font-size:13.5px;line-height:1.6;color:var(--text-2);margin:0}
@@ -1914,18 +1934,20 @@ textarea.onb-in{resize:vertical;line-height:1.5}
 .scope-badge.v-novel{background:#10391f;color:#3ecf8e}
 .scope-badge.v-overlaps{background:#3a2f10;color:#e0b341}
 .scope-badge.v-risky{background:#3a1414;color:#ef6b6b}
-.scope-chat{max-height:300px;overflow:auto;display:flex;flex-direction:column;
-  gap:8px;margin-bottom:10px}
+.scope-chat{flex:1;overflow:auto;display:flex;flex-direction:column;
+  gap:8px;padding:14px 16px}
 .scope-msg{padding:9px 12px;border-radius:10px;font-size:13px;line-height:1.5;
-  white-space:pre-wrap;max-width:85%}
+  white-space:pre-wrap;max-width:92%}
 .scope-msg.user{align-self:flex-end;background:var(--accent-soft);color:#dfe0ff}
 .scope-msg.agent{align-self:flex-start;background:var(--panel);
   border:1px solid var(--border);color:var(--text-2)}
 .scope-thinking{opacity:.6;font-style:italic}
-.scope-chatbar{display:flex;gap:8px}
+.scope-chatbar{display:flex;gap:8px;padding:12px 16px;flex-shrink:0;
+  border-top:1px solid var(--border);align-items:flex-end}
 .scope-chatbar textarea,.scope-block textarea{flex:1;width:100%;background:var(--panel);
   border:1px solid var(--border);border-radius:8px;color:var(--text);padding:9px 11px;
-  font-size:13px;font-family:inherit;resize:vertical}
+  font-size:13px;font-family:inherit;resize:vertical;max-height:140px}
+.scope-chatbar .btn{flex-shrink:0}
 .scope-actions{display:flex;gap:10px;margin-top:12px}
 .btn.ghost{background:transparent;border:1px solid var(--border);color:var(--muted)}
 .scope-head-r{display:flex;align-items:center;gap:14px}
