@@ -317,3 +317,37 @@ def test_scan_lessons_file_counts_good_and_bad(arui_env, setting_setter):
     # samples_bad is capped at 5 and contains the raw lines so we can show
     # them in the Lessons UI as "rejected" entries.
     assert 1 <= len(report["samples_bad"]) <= 5
+
+
+# ── _post_json_retry: don't retry read-timeouts (deadlock regression) ────────
+def test_post_json_retry_does_not_retry_timeouts(arui_env, monkeypatch):
+    """A read timeout means the request is too slow; retrying the same heavy
+    request 4x deadlocked the research-completion review. Fail fast instead."""
+    import socket
+    import pytest as _pytest
+    from backend.app import council
+    calls = {"n": 0}
+
+    def boom(url, body, headers):
+        calls["n"] += 1
+        raise socket.timeout("The read operation timed out")
+    monkeypatch.setattr(council, "_post_json", boom)
+    with _pytest.raises(socket.timeout):
+        council._post_json_retry("http://x", {}, {})
+    assert calls["n"] == 1                      # ONE attempt, no retry
+
+
+def test_post_json_retry_still_retries_429(arui_env, monkeypatch):
+    import urllib.error
+    from backend.app import council
+    monkeypatch.setattr("time.sleep", lambda *a, **k: None)
+    calls = {"n": 0}
+
+    def flaky(url, body, headers):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise urllib.error.HTTPError("http://x", 429, "rate", {}, None)
+        return {"ok": True}
+    monkeypatch.setattr(council, "_post_json", flaky)
+    assert council._post_json_retry("http://x", {}, {}) == {"ok": True}
+    assert calls["n"] == 3                      # retried the 429s

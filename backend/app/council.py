@@ -836,7 +836,16 @@ def _post_json(url: str, body: dict, headers: dict) -> dict:
 
 def _post_json_retry(url: str, body: dict, headers: dict) -> dict:
     """POST with retry on 429 (rate limit) and 5xx (transient). Other HTTP
-    errors propagate so the caller can log and skip."""
+    errors propagate so the caller can log and skip.
+
+    Read-timeouts are NOT retried: a timeout means the request is simply
+    too slow (e.g. gpt-5 at high reasoning effort on a 60k-char completion-
+    review prompt exceeding the 240s limit), and re-issuing the identical
+    heavy request 4x just burns ~16 minutes per reviewer — which deadlocked
+    the research-completion review (no verdict ever landed, so the agent
+    polled forever). Fail fast on timeout so the worker proceeds with
+    whatever reviewer DID respond."""
+    import socket as _socket
     last_exc: Exception | None = None
     for i, d in enumerate((0,) + _RETRY_DELAYS):
         if d:
@@ -848,7 +857,11 @@ def _post_json_retry(url: str, body: dict, headers: dict) -> dict:
             if e.code == 429 or 500 <= e.code < 600:
                 continue
             raise
+        except _socket.timeout:
+            raise                      # too slow — don't retry the same request
         except Exception as e:
+            if "timed out" in str(e).lower():
+                raise                  # URLError-wrapped read timeout
             last_exc = e
             continue
     if last_exc:
