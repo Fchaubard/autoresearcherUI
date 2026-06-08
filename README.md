@@ -1,6 +1,6 @@
 # autoresearcherUI
 
-**`v0.0.1`** &nbsp;·&nbsp; **MIT** &nbsp;·&nbsp; **self-hosted** &nbsp;·&nbsp; 
+**`v0.0.2`** &nbsp;·&nbsp; **MIT** &nbsp;·&nbsp; **self-hosted** &nbsp;·&nbsp; 
 
 > **AutoresearcherUI = Autoresearcher + wandb + datadog + overleaf + iTerm + claude code. All local and all free! Just boot up a node, git clone, bash setup.sh, fill out the onboarding form and let it research rip! Login to the research cockpit URL anywhere on earth.**
 
@@ -141,7 +141,7 @@ arXiv + Semantic Scholar. Flip back to Research at any time.
   off the paper's claims) — the up-front review is cached and reused.
 - **Paper Runner** — daemon that reads paper-mode `Run` rows with
   `status='queued'`, resolves deps, bin-packs onto the GPU table, launches
-  them. Local backend in v0.0.1; SLURM/K8s pluggable later.
+  them. Local backend in v0.0.2; SLURM/K8s pluggable later.
 
 ## Scoping gate (Phase 0) — plan before you compute
 

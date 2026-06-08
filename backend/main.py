@@ -80,7 +80,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="autoresearcherUI", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="autoresearcherUI", version="0.0.2", lifespan=lifespan)
 # Passcode gate runs BEFORE the router so a missing/wrong passcode 401s
 # immediately. The gate is a no-op when no passcode is configured, so
 # fresh installs and pre-onboarding flows work exactly as before.

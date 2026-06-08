@@ -1,6 +1,6 @@
 [project]
 name = "autoresearcherui"
-version = "0.0.1"
+version = "0.0.2"
 description = "Autoresearcher + wandb + datadog + overleaf + claude code. All local, all free, no API keys."
 readme = "README.md"
 requires-python = ">=3.10"

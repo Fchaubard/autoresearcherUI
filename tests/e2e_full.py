@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""autoresearcherUI — comprehensive e2e (v0.0.1 release gate).
+"""autoresearcherUI — comprehensive e2e (v0.0.2 release gate).
 
 Boots the real backend ONCE (no orchestrator, no LLM, no GPU), then walks
 through every major surface area added since the original e2e_test.py:
@@ -692,7 +692,7 @@ def main() -> int:
         except OSError:
             pass
         return 1
-    print("e2e_full PASSED — safe to tag v0.0.1.\n")
+    print("e2e_full PASSED — safe to tag v0.0.2.\n")
     return 0
 
 
