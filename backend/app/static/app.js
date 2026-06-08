@@ -3998,12 +3998,15 @@ function showScopingModal() {
             '<div class="boot-spinner"></div>' +
             '<div id="scope-loadmsg">Reviewing the literature and ' +
             'pressure-testing your direction…</div>' +
+            '<button class="btn ghost" id="scope-loadskip" type="button">' +
+            'Skip the review — start research now</button>' +
           '</div>' +
         '</div>' +
       '</div>' +
     '</div>';
   const ScopeUI = { polling: true, rendered: false, kept: {}, exited: false,
-                    dirtySinceFinalize: false };
+                    finalizing: false, finalizePending: false,
+                    finalEdited: false };
 
   // Escape hatch: bail out of scoping back to the onboarding form (pre-filled
   // with the saved config) so the user can edit and re-submit. Available at
@@ -4017,6 +4020,8 @@ function showScopingModal() {
     onboarding(saved || {});
   }
   document.getElementById('scope-back').onclick = backToOnboarding;
+  const _ls = document.getElementById('scope-loadskip');
+  if (_ls) _ls.onclick = doSkip;          // expert "don't make me wait" hatch
 
   function pill(ok) {
     return '<span class="scope-dot ' + (ok ? 'ok' : 'bad') + '"></span>';
@@ -4061,48 +4066,57 @@ function showScopingModal() {
         esc(it.cheap_kill_test || '—') + '</div>' +
     '</div>';
   }
-  function renderSynth(d) {
-    const s = d.synthesis || {};
+  // The plan sections (problem, SOTA, idea cards, recommended direction,
+  // open questions) live in their own container so they can be re-rendered
+  // in place when the background re-synthesis lands — WITHOUT disturbing the
+  // chat thread or whatever the user is typing.
+  function planSectionsHtml(s) {
     const ua = s.user_ideas_assessment || [];
     const na = s.new_ideas || [];
     const oq = s.open_questions || [];
+    return '<div class="scope-block"><h3>The problem</h3><p>' +
+        esc(s.problem_restated || '') + '</p></div>' +
+      '<div class="scope-block"><h3>State of the art</h3><p>' +
+        esc(s.sota_summary || '') + '</p></div>' +
+      (ua.length ? '<div class="scope-block"><h3>Your seed ideas — honest read</h3>' +
+        ua.map((it, i) => ideaCard(it, i, 'user')).join('') + '</div>' : '') +
+      (na.length ? '<div class="scope-block"><h3>New directions to beat SOTA</h3>' +
+        na.map((it, i) => ideaCard(it, i, 'new')).join('') + '</div>' : '') +
+      (s.recommended_direction ? '<div class="scope-block"><h3>Recommended ' +
+        'direction</h3><p>' + esc(s.recommended_direction) + '</p></div>' : '') +
+      (oq.length ? '<div class="scope-block"><h3>Open questions</h3><ul>' +
+        oq.map(q => '<li>' + esc(q) + '</li>').join('') + '</ul></div>' : '');
+  }
+  function wireKeepBoxes(root) {
+    (root || document).querySelectorAll('[data-keep]').forEach(cb => {
+      cb.onchange = () => { ScopeUI.kept[cb.dataset.keep] = cb.checked; };
+    });
+  }
+  function renderSynth(d) {
+    const s = d.synthesis || {};
     const main = document.getElementById('scope-main');
     main.innerHTML =
       '<div class="scope-scroll">' +
-        '<div class="scope-block"><h3>The problem</h3><p>' +
-          esc(s.problem_restated || '') + '</p></div>' +
-        '<div class="scope-block"><h3>State of the art</h3><p>' +
-          esc(s.sota_summary || '') + '</p></div>' +
-        (ua.length ? '<div class="scope-block"><h3>Your seed ideas — honest read</h3>' +
-          ua.map((it, i) => ideaCard(it, i, 'user')).join('') + '</div>' : '') +
-        (na.length ? '<div class="scope-block"><h3>New directions to beat SOTA</h3>' +
-          na.map((it, i) => ideaCard(it, i, 'new')).join('') + '</div>' : '') +
-        (s.recommended_direction ? '<div class="scope-block"><h3>Recommended ' +
-          'direction</h3><p>' + esc(s.recommended_direction) + '</p></div>' : '') +
-        (oq.length ? '<div class="scope-block"><h3>Open questions</h3><ul>' +
-          oq.map(q => '<li>' + esc(q) + '</li>').join('') + '</ul></div>' : '') +
-        '<div class="scope-block"><h3>Discuss &amp; push back</h3>' +
+        '<div id="scope-plan">' + planSectionsHtml(s) + '</div>' +
+        '<div class="scope-block"><h3>Discuss &amp; push back ' +
+          '<span class="scope-sync" id="scope-sync" style="display:none">' +
+          '· updating plan…</span></h3>' +
           '<div class="scope-chat" id="scope-chat"></div>' +
           '<div class="scope-chatbar">' +
             '<textarea id="scope-chatin" rows="2" placeholder="Challenge a ' +
             'direction, ask for alternatives, demand novelty…"></textarea>' +
             '<button class="btn" id="scope-send">Send</button>' +
           '</div>' +
+          '<div class="scope-muted" style="margin-top:6px;font-size:11px">The ' +
+          'plan above updates on its own to reflect this conversation.</div>' +
         '</div>' +
         '<div class="scope-block"><h3>Confirm the plan</h3>' +
-          '<div class="scope-finalize-row">' +
-            '<button class="btn" id="scope-update" type="button">⟳ Update plan ' +
-            'from our discussion</button>' +
-            '<span class="scope-muted">Re-synthesizes the direction + ideas above ' +
-            'to reflect your back-and-forth.</span>' +
-          '</div>' +
           '<textarea id="scope-final" rows="3" placeholder="The final research ' +
           'direction to commit to…">' + esc(s.recommended_direction || '') +
           '</textarea>' +
           '<div class="scope-actions">' +
             '<button class="btn pri" id="scope-confirm">Confirm &amp; start ' +
             'research</button>' +
-            '<button class="btn ghost" id="scope-skip">Skip &amp; run now</button>' +
           '</div>' +
         '</div>' +
       '</div>';
@@ -4111,28 +4125,36 @@ function showScopingModal() {
     document.getElementById('scope-chatin').onkeydown = (e) => {
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) sendChat();
     };
-    main.querySelectorAll('[data-keep]').forEach(cb => {
-      cb.onchange = () => { ScopeUI.kept[cb.dataset.keep] = cb.checked; };
-    });
-    document.getElementById('scope-update').onclick = updatePlan;
+    document.getElementById('scope-final').oninput = () => {
+      ScopeUI.finalEdited = true;     // stop auto-overwriting a hand-edited plan
+    };
+    wireKeepBoxes(main);
     document.getElementById('scope-confirm').onclick = doConfirm;
-    document.getElementById('scope-skip').onclick = doSkip;
   }
-  async function updatePlan() {
-    const btn = document.getElementById('scope-update');
-    if (btn) { btn.disabled = true;
-      btn.textContent = '⟳ Updating plan from our discussion…'; }
+  // Re-render ONLY the plan sections + refresh the confirm box, leaving the
+  // chat + the user's in-progress typing untouched.
+  function applyPlanUpdate(d) {
+    ScopeUI.last = d; ScopeUI.kept = {};
+    const s = d.synthesis || {};
+    const planEl = document.getElementById('scope-plan');
+    if (planEl) { planEl.innerHTML = planSectionsHtml(s); wireKeepBoxes(planEl); }
+    const fin = document.getElementById('scope-final');
+    if (fin && !ScopeUI.finalEdited) fin.value = s.recommended_direction || '';
+  }
+  // Background re-synthesis after each exchange — no button, non-blocking.
+  // Coalesces: if one is running, the next is queued so the final state always
+  // reflects the latest message (the backend reads the full history).
+  async function autoFinalize() {
+    if (ScopeUI.finalizing) { ScopeUI.finalizePending = true; return; }
+    ScopeUI.finalizing = true;
+    const sync = document.getElementById('scope-sync');
+    if (sync) sync.style.display = '';
     let d;
     try { d = await post('/scope/finalize', {}); } catch (e) { d = null; }
-    if (d && d.synthesis) {
-      ScopeUI.last = d; ScopeUI.kept = {};
-      ScopeUI.dirtySinceFinalize = false;
-      renderSynth(d);              // re-renders idea cards + plan textarea + chat
-    } else if (btn) {
-      btn.disabled = false; btn.textContent = '⟳ Update plan from our discussion';
-      aruiAlert('Could not update the plan — please try again.',
-        { title: 'Scoping' });
-    }
+    ScopeUI.finalizing = false;
+    if (sync) sync.style.display = 'none';
+    if (d && d.synthesis) applyPlanUpdate(d);
+    if (ScopeUI.finalizePending) { ScopeUI.finalizePending = false; autoFinalize(); }
   }
   function renderChat(msgs) {
     const c = document.getElementById('scope-chat');
@@ -4154,8 +4176,9 @@ function showScopingModal() {
     try { d = await post('/scope/chat', { text }); }
     catch (e) { d = null; }
     inp.disabled = false; inp.focus();
-    if (d && d.messages) { renderChat(d.messages);
-      ScopeUI.dirtySinceFinalize = true;   // plan no longer matches discussion
+    if (d && d.messages) {
+      renderChat(d.messages);
+      autoFinalize();        // re-sync the plan in the background, no blocking
     }
   }
   function keptIdx(kind, n) {
@@ -4164,20 +4187,17 @@ function showScopingModal() {
     return out;
   }
   async function doConfirm() {
-    // Never launch a plan that ignores the discussion: if the user chatted
-    // since the last refresh, re-synthesize first and make them review the
-    // updated plan before a second Confirm actually starts the research.
-    if (ScopeUI.dirtySinceFinalize) {
-      await updatePlan();
-      aruiAlert('I updated the plan to reflect your discussion — the direction '
-        + 'and ideas above now match what we agreed. Review them and click '
-        + '"Confirm & start research" again to launch.',
-        { title: 'Plan updated from your discussion' });
-      return;
+    const btn = document.getElementById('scope-confirm');
+    // If a background plan-refresh is still in flight, let it land first so we
+    // launch the plan that reflects the whole discussion.
+    if (ScopeUI.finalizing || ScopeUI.finalizePending) {
+      btn.disabled = true; btn.textContent = 'Finalizing plan…';
+      while (ScopeUI.finalizing || ScopeUI.finalizePending) {
+        await new Promise(r => setTimeout(r, 400));
+      }
     }
     const s = (ScopeUI.last && ScopeUI.last.synthesis) || {};
     const final = (document.getElementById('scope-final').value || '').trim();
-    const btn = document.getElementById('scope-confirm');
     btn.disabled = true; btn.textContent = 'Starting research…';
     try {
       await post('/scope/confirm', {

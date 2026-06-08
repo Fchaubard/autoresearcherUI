@@ -1934,3 +1934,5 @@ textarea.onb-in{resize:vertical;line-height:1.5}
 .scope-finalize-row{display:flex;align-items:center;gap:10px;margin-bottom:10px;
   flex-wrap:wrap}
 .scope-finalize-row .scope-muted{font-size:11.5px}
+.scope-sync{font-size:11px;color:var(--accent);font-weight:500;font-style:italic}
+.scope-loading .btn.ghost{margin-top:8px}
