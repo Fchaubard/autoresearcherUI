@@ -48,6 +48,8 @@ _RELOAD_MODULES = [
     "backend.app.stuck_detector",
     "backend.app.directives",
     "backend.app.scoping",
+    "backend.app.lifecycle",
+    "backend.app.supervisor",
     "backend.app.api",
     "backend.app",
     "backend",
