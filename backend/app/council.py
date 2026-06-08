@@ -3394,10 +3394,13 @@ def scope_finalize(purpose: str, metric: str, seed_ideas: str,
             f"`recommended_direction` the plan you would actually launch now. Keep "
             f"every citation rule (closest_prior_work keys from the provided papers "
             f"only) and a cheap_kill_test on every idea.")
-    order = []
+    # finalize runs after EVERY message in the background, so prefer the faster
+    # reviewers (gemini/openai, ~20-40s) over the flagship Claude (~90s); the
+    # first synthesis already used the flagship for quality. Claude is the
+    # last-resort fallback.
+    order = _available_reviewers(cfg)
     if _claude_available(cfg):
         order.append("claude")
-    order += _available_reviewers(cfg)
     for reviewer in order:
         out = _call_reviewer(reviewer, _SCOPE_SYSTEM, user, cfg)
         if out:

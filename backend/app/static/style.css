@@ -1890,17 +1890,23 @@ textarea.onb-in{resize:vertical;line-height:1.5}
 .scope-chatcol-h{display:flex;align-items:center;gap:8px;padding:13px 16px;
   border-bottom:1px solid var(--border);font-weight:600;font-size:12.5px;
   color:var(--text);flex-shrink:0}
-/* persistent commit bar */
-.scope-foot{flex-shrink:0;border-top:1px solid var(--border);
-  background:var(--panel);padding:12px 22px;display:flex;gap:18px;
-  align-items:flex-end}
-.scope-foot-plan{flex:1;display:flex;flex-direction:column;gap:5px;min-width:0}
-.scope-foot-lbl{font-size:12px;font-weight:600;color:var(--text)}
-.scope-foot textarea{width:100%;background:var(--panel-2);
-  border:1px solid var(--border);border-radius:8px;color:var(--text);
-  padding:8px 11px;font-size:13px;font-family:inherit;resize:vertical;
-  max-height:120px}
-.scope-foot .btn.pri{white-space:nowrap;padding:10px 20px;flex-shrink:0}
+/* committable plan — the last block in the center reading column */
+.scope-commit{margin-top:10px;padding:16px 0 4px;
+  border-top:1px solid var(--border);border-radius:8px;
+  transition:background .3s}
+.scope-commit h3{font-size:14px;margin:0 0 9px;color:var(--text)}
+.scope-final{width:100%;background:var(--panel);border:1px solid var(--border);
+  border-radius:8px;color:var(--text);padding:11px 13px;font-size:13.5px;
+  line-height:1.55;font-family:inherit;resize:vertical;min-height:90px}
+.scope-commit .scope-actions{margin-top:12px}
+.scope-commit.flash{animation:scopeFlash 1.5s ease-out}
+@keyframes scopeFlash{
+  0%{background:var(--accent-soft)}
+  60%{background:var(--accent-soft)}
+  100%{background:transparent}}
+.scope-commit.flash .scope-final{animation:scopeFlashB 1.5s ease-out}
+@keyframes scopeFlashB{
+  0%{border-color:var(--accent)}100%{border-color:var(--border)}}
 .scope-sec-h{font-size:10px;text-transform:uppercase;letter-spacing:.6px;
   color:var(--muted);margin:14px 0 6px;font-weight:700}
 .scope-sec-h:first-child{margin-top:0}

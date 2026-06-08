@@ -4016,18 +4016,6 @@ function showScopingModal() {
           '</div>' +
         '</div>' +
       '</div>' +
-      // Persistent commit bar — always visible, never buried in a scroll.
-      '<div class="scope-foot" id="scope-foot" style="display:none">' +
-        '<div class="scope-foot-plan">' +
-          '<label class="scope-foot-lbl">Plan to commit ' +
-            '<span class="scope-muted">— edit if you like; it updates from your ' +
-            'discussion automatically</span></label>' +
-          '<textarea id="scope-final" rows="2" placeholder="The final research ' +
-          'direction to commit to…"></textarea>' +
-        '</div>' +
-        '<button class="btn pri" id="scope-confirm">Confirm &amp; start ' +
-        'research</button>' +
-      '</div>' +
     '</div>';
   const ScopeUI = { polling: true, rendered: false, kept: {}, exited: false,
                     finalizing: false, finalizePending: false,
@@ -4047,16 +4035,12 @@ function showScopingModal() {
   document.getElementById('scope-back').onclick = backToOnboarding;
   const _ls = document.getElementById('scope-loadskip');
   if (_ls) _ls.onclick = doSkip;          // expert "don't make me wait" hatch
-  // Persistent controls (chat input + commit bar live in the DOM from the
-  // start, just hidden until the plan is ready) — wire them once.
+  // Chat input lives in the DOM from the start (just hidden until the plan is
+  // ready) — wire it once. The commit block is (re)built in renderSynth.
   document.getElementById('scope-send').onclick = sendChat;
   document.getElementById('scope-chatin').onkeydown = (e) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) sendChat();
   };
-  document.getElementById('scope-final').oninput = () => {
-    ScopeUI.finalEdited = true;            // stop auto-overwriting a hand edit
-  };
-  document.getElementById('scope-confirm').onclick = doConfirm;
 
   function pill(ok) {
     return '<span class="scope-dot ' + (ok ? 'ok' : 'bad') + '"></span>';
@@ -4127,31 +4111,58 @@ function showScopingModal() {
       cb.onchange = () => { ScopeUI.kept[cb.dataset.keep] = cb.checked; };
     });
   }
+  function commitHtml(s) {
+    // The committable plan — the natural END of the center reading flow:
+    // problem → SOTA → ideas → THE PLAN → commit.
+    return '<h3>The plan to commit <span class="scope-muted">— step 5: this is ' +
+      'what launches; edit it or just keep chatting and it updates itself</span></h3>' +
+      '<textarea id="scope-final" class="scope-final" rows="5" ' +
+      'placeholder="The final research direction to commit to…">' +
+      esc(s.recommended_direction || '') + '</textarea>' +
+      '<div class="scope-actions">' +
+        '<button class="btn pri" id="scope-confirm">Confirm &amp; start ' +
+        'research</button>' +
+      '</div>';
+  }
+  function wireCommit() {
+    const fin = document.getElementById('scope-final');
+    if (fin) fin.oninput = () => { ScopeUI.finalEdited = true; };
+    const cf = document.getElementById('scope-confirm');
+    if (cf) cf.onclick = doConfirm;
+  }
   function renderSynth(d) {
     const s = d.synthesis || {};
     const center = document.getElementById('scope-center');
     center.classList.add('has-plan');
-    center.innerHTML = '<div class="scope-scroll" id="scope-plan">' +
-      planSectionsHtml(s) + '</div>';
+    // #scope-plan is re-rendered on every update; #scope-commit persists so a
+    // hand-edited plan + its handlers survive (its textarea is updated in place).
+    center.innerHTML = '<div class="scope-scroll">' +
+      '<div id="scope-plan">' + planSectionsHtml(s) + '</div>' +
+      '<div id="scope-commit" class="scope-commit">' + commitHtml(s) + '</div>' +
+      '</div>';
     wireKeepBoxes(center);
+    wireCommit();
     renderChat(d.messages || []);
-    const fin = document.getElementById('scope-final');
-    if (fin && !ScopeUI.finalEdited) fin.value = s.recommended_direction || '';
-    // Reveal the conversation panel + the commit footer now that there's a plan.
+    // Reveal the conversation panel now that there's a plan to discuss.
     const cc = document.getElementById('scope-chatcol');
-    const ft = document.getElementById('scope-foot');
     if (cc) cc.style.display = '';
-    if (ft) ft.style.display = '';
   }
-  // Re-render ONLY the plan column + refresh the commit textarea, leaving the
-  // chat thread + the user's in-progress typing untouched.
+  // Re-render ONLY the plan sections + update the commit textarea IN PLACE
+  // (so edits/handlers survive), leaving the chat + in-progress typing alone.
+  // Flashes the commit block so the user can SEE the plan changed.
   function applyPlanUpdate(d) {
     ScopeUI.last = d; ScopeUI.kept = {};
     const s = d.synthesis || {};
     const planEl = document.getElementById('scope-plan');
     if (planEl) { planEl.innerHTML = planSectionsHtml(s); wireKeepBoxes(planEl); }
     const fin = document.getElementById('scope-final');
-    if (fin && !ScopeUI.finalEdited) fin.value = s.recommended_direction || '';
+    if (fin && !ScopeUI.finalEdited) {
+      fin.value = s.recommended_direction || '';
+      const box = document.getElementById('scope-commit');
+      if (box) { box.classList.remove('flash');
+        void box.offsetWidth;            // restart the CSS animation
+        box.classList.add('flash'); }
+    }
   }
   // Background re-synthesis after each exchange — no button, non-blocking.
   // Coalesces: if one is running, the next is queued so the final state always
