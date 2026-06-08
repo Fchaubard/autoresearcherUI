@@ -174,16 +174,29 @@ def test_search_falls_back_to_arxiv(arui_env, monkeypatch):
     assert out == fake_results
 
 
-def test_search_returns_semantic_first(arui_env, monkeypatch):
+def test_search_semantic_leads_arxiv_backfills(arui_env, monkeypatch):
+    """Semantic Scholar leads (better natural-language ranking); arxiv backfills
+    when semantic returns fewer than `limit` — the fix for the
+    Semantic-Scholar-rate-limited '1 paper' flakiness. Dedup by title."""
     from backend.app import lit_agent
     monkeypatch.setattr(lit_agent, "_semantic_search",
                          lambda q, limit=20: [{"title": "ss-row"}])
-    called = {"v": False}
-
-    def boom(*a, **kw):
-        called["v"] = True
-        return []
-    monkeypatch.setattr(lit_agent, "_arxiv_search", boom)
+    monkeypatch.setattr(lit_agent, "_arxiv_search",
+                         lambda q, limit=20, ml_only=True: [
+                             {"title": "arxiv-row", "arxiv_id": "1"}])
     out = lit_agent.search("anything")
-    assert out == [{"title": "ss-row"}]
-    assert called["v"] is False
+    titles = [r["title"] for r in out]
+    assert titles[0] == "ss-row"          # semantic leads
+    assert "arxiv-row" in titles          # arxiv backfills the short result set
+
+
+def test_search_skips_arxiv_when_semantic_fills_quota(arui_env, monkeypatch):
+    from backend.app import lit_agent
+    full = [{"title": f"r{i}"} for i in range(20)]
+    monkeypatch.setattr(lit_agent, "_semantic_search", lambda q, limit=20: full)
+    called = {"v": False}
+    monkeypatch.setattr(lit_agent, "_arxiv_search",
+                        lambda *a, **k: called.__setitem__("v", True) or [])
+    out = lit_agent.search("anything", limit=20)
+    assert called["v"] is False           # semantic already filled `limit`
+    assert len(out) == 20
