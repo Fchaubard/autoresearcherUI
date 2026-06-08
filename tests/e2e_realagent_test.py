@@ -57,7 +57,14 @@ def main():
     logp = os.path.join(data_dir, "backend.log")
     env = dict(os.environ)
     env.update(ARUI_PORT=str(port), ARUI_DATA_DIR=data_dir,
-               ARUI_CLAUDE_BIN=f"{sys.executable} {ROOT}/tests/mock_claude.py")
+               ARUI_CLAUDE_BIN=f"{sys.executable} {ROOT}/tests/mock_claude.py",
+               # The scoping gate (Phase 0) is ON by default, which makes
+               # /api/onboarding return {"status":"scoping"} and defer the
+               # RealAgent launch until the user confirms a plan — a flow that
+               # needs live LLM keys (lit_agent + council). This test validates
+               # the direct onboarding -> RealAgent path, so we turn the gate
+               # off here.
+               ARUI_SCOPING_GATE="0")
     env.pop("ARUI_AUTORUN", None)
 
     print(f"\n=== autoresearcherUI RealAgent e2e test ===\n    port={port}\n")
