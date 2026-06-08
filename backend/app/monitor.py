@@ -126,6 +126,16 @@ def _loop() -> None:
             wd.tick()
         except Exception as e:                       # noqa: BLE001
             print(f"[monitor] watchdog tick error: {e}", flush=True)
+        # Supervisor tick (PI lifecycle watchdog). Keeps the research
+        # unblocked at the PHASE level — re-triggers an orphaned/stalled
+        # council review so the agent never waits forever on a verdict
+        # that will never come, and keeps lifecycle status fresh for the
+        # feed + emails. Local + fast; no LLM. Best-effort.
+        try:
+            from . import supervisor
+            supervisor.tick()
+        except Exception as e:                       # noqa: BLE001
+            print(f"[monitor] supervisor tick error: {e}", flush=True)
         if changed:
             bus.publish("events", "runs_changed", {})
         time.sleep(_POLL_SEC)

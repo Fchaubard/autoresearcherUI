@@ -1042,6 +1042,11 @@ def _call_reviewer(reviewer: str, system: str, user: str, cfg: dict
         return None
     except Exception as e:                              # noqa: BLE001
         print(f"[council] {reviewer} call failed: {e}", flush=True)
+        # A read/socket timeout is the failure that wedged us before — make it
+        # VISIBLE in the feed (and de-duped) instead of a silent return.
+        if "timed out" in str(e).lower() or e.__class__.__name__ == "timeout":
+            _emit_token_failure_event(reviewer, "timed_out",
+                                       str(e)[:200] or "read timeout")
         return None
     out = _safe_parse(text)
     if not out:
@@ -3048,6 +3053,53 @@ def _build_completion_review_context(evidence_run_ids: list[str],
 def _completion_review_worker(evidence_run_ids: list[str], summary: str,
                                 answer_to_purpose: str,
                                 recommendation: str) -> None:
+    """Resilient wrapper around the real review. Holds a lifecycle lease so the
+    supervisor can tell whether this worker is alive (and re-trigger if it was
+    orphaned by a crash / restart). ALWAYS writes a terminal verdict — even if
+    the inner review raises — so the conclusion never stays 'pending' forever
+    and the agent never polls a verdict that never comes."""
+    try:
+        from . import lifecycle
+        lifecycle.lease_acquire("completion_review")
+    except Exception:                                   # noqa: BLE001
+        pass
+    try:
+        _completion_review_worker_inner(evidence_run_ids, summary,
+                                        answer_to_purpose, recommendation)
+    except Exception as e:                              # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        print(f"[council] completion review worker crashed: {e}", flush=True)
+        try:
+            existing = _conclusion_state_get()
+            existing.update({
+                "status": "needs_more",
+                "council_verdict": {
+                    "verdict": "NEEDS_MORE",
+                    "reasons": [f"completion review errored ({e}); the "
+                                "supervisor will not leave you blocked"],
+                    "missing_evidence": ["the automated review failed — submit "
+                                         "a tighter conclusion or run more "
+                                         "experiments"],
+                    "summary": "Completion review crashed; see logs.",
+                    "verdicts": {}, "auto": True,
+                    "reviewed_at":
+                        dt.datetime.now(dt.timezone.utc).isoformat()},
+            })
+            _conclusion_state_set(existing)
+        except Exception:                               # noqa: BLE001
+            pass
+    finally:
+        try:
+            from . import lifecycle
+            lifecycle.lease_release("completion_review")
+        except Exception:                               # noqa: BLE001
+            pass
+
+
+def _completion_review_worker_inner(evidence_run_ids: list[str], summary: str,
+                                      answer_to_purpose: str,
+                                      recommendation: str) -> None:
     cfg = _settings()
     reviewers = _available_reviewers(cfg)
     if not reviewers:
@@ -3214,6 +3266,18 @@ def review_completion_async(evidence_run_ids: list[str],
         "recommendation": recommendation or "",
         "conclude_at": now,
     })
+    # Observability: mark the phase + announce the launch so the activity feed
+    # and emails show the council is reviewing (not a mysterious "idle").
+    try:
+        from . import lifecycle
+        lifecycle.set_phase(lifecycle.PHASE_CONCLUSION_REVIEW)
+        lifecycle.emit_event(
+            "council_launch",
+            "Council review launched: evaluating the research conclusion "
+            f"({len(evidence_run_ids or [])} runs of evidence)",
+            severity="info", actor="council")
+    except Exception:                                   # noqa: BLE001
+        pass
     threading.Thread(target=_completion_review_worker,
                      args=(list(evidence_run_ids or []),
                            summary or "",

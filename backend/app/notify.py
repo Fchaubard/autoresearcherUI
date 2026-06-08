@@ -866,6 +866,14 @@ def summary_text(window_hours: float):
         L = [f"autoresearcherUI digest - {proj.name}",
              f"Window: last {window_hours:g}h  "
              f"({now.strftime('%Y-%m-%d %H:%M UTC')})", ""]
+        # Lifecycle status — the "what phase are we in and WHY aren't we
+        # progressing" line, so an idle digest is never a mystery.
+        try:
+            from . import lifecycle
+            L.append(f"Status: {lifecycle.summary_line()}")
+            L.append("")
+        except Exception:                               # noqa: BLE001
+            pass
         if base is not None:
             L.append(f"Baseline {metric}: {base:.6f}")
         if best is not None:

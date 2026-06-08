@@ -24,12 +24,16 @@ command -v tmux >/dev/null 2>&1 || {
 }
 
 echo
-echo "──────── 1/2  FakeAgent orchestrator e2e ────────"
+echo "──────── 1/3  FakeAgent orchestrator e2e ────────"
 "$PY" tests/e2e_test.py
 
 echo
-echo "──────── 2/2  RealAgent e2e ────────"
+echo "──────── 2/3  RealAgent e2e ────────"
 "$PY" tests/e2e_realagent_test.py
+
+echo
+echo "──────── 3/3  PI supervisor e2e ────────"
+"$PY" tests/e2e_supervisor_test.py
 
 echo
 echo "✅  all e2e suites passed."
