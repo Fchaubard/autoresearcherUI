@@ -164,6 +164,8 @@ exactly as you left it). An in-progress scope also resumes if you reload the
 page. The scoping model is chosen in onboarding (*Scoping agent* dropdown,
 Gemini default — it's fast, which matters because the plan re-synthesizes after
 every chat message).
+![Scoping gate](docs/screenshots/scoping.png)
+
 
 ## The default safety pattern: council code-bless
 
@@ -285,6 +287,8 @@ syntax highlighting, edit and save (Ctrl/Cmd-S), create new files, and open
 several at once as tabs that you can switch between — open tabs survive both
 in-app navigation and a full page reload. Handy for peeking at or hand-fixing
 `train.py` / `program.md` / `directives.jsonl` without SSH.
+![Files](docs/screenshots/files.png)
+
 
 **Write the paper (Paper Mode)** — flip the toggle and the Research Agent
 pauses, the Author Agent starts. Live LaTeX PDF preview on the left,
