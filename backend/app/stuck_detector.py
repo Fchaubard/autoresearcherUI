@@ -295,7 +295,7 @@ def _top_idea_signature() -> str:
     ignored the council.
     """
     try:
-        from .config import DATA_DIR  # local import to keep this file cheap
+        from .config import DATA_DIR, WORKSPACE_DIR  # local import to keep this file cheap
 
         db = SessionLocal()
         try:
@@ -308,7 +308,7 @@ def _top_idea_signature() -> str:
             db.close()
         if not name:
             return ""
-        path = DATA_DIR / "workspace" / name / "ideas.md"
+        path = WORKSPACE_DIR / name / "ideas.md"
         if not path.exists():
             return ""
         for ln in path.read_text(errors="ignore").splitlines():

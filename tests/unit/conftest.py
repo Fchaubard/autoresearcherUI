@@ -79,6 +79,11 @@ def arui_env(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("ARUI_DATA_DIR", str(data_dir))
+    # Keep the project workspace under the tmp data dir for test isolation.
+    # Pointing it at <data>/workspace makes WORKSPACE_DIR/<name> resolve to
+    # the historical data/workspace/<name> layout the tests construct, so the
+    # production default (repo ROOT) never leaks real files into the repo.
+    monkeypatch.setenv("ARUI_WORKSPACE_DIR", str(data_dir / "workspace"))
     # Don't accidentally let any test contact real services.
     # NOTE: backend.app.council loads .deploy/keys.env at import time and
     # may set these — we delete AFTER the import below.

@@ -15,7 +15,7 @@ import subprocess
 import threading
 from pathlib import Path
 
-from .config import DATA_DIR
+from .config import DATA_DIR, WORKSPACE_DIR
 from .db import SessionLocal
 from .models import (PaperBaseline, PaperBudgetEvent, PaperCitation,
                      PaperClaim, PaperDecision, PaperFigure, PaperMeta,
@@ -46,7 +46,7 @@ def paper_folder(db=None) -> Path | None:
         cfg = db.query(Setting).filter(Setting.key == "onboarding").first()
         repo = ((cfg.value.get("repo_name") if cfg and isinstance(cfg.value, dict)
                  else None) or proj.name or "project").strip()
-        p = DATA_DIR / "workspace" / repo / sub
+        p = WORKSPACE_DIR / repo / sub
         p.mkdir(parents=True, exist_ok=True)
         return p
     finally:

@@ -60,7 +60,7 @@ import threading
 from pathlib import Path
 from typing import Iterable
 
-from .config import DATA_DIR
+from .config import DATA_DIR, WORKSPACE_DIR
 from .db import SessionLocal
 from .models import Setting
 
@@ -137,7 +137,7 @@ def directives_path() -> Path | None:
     name = _onboarding_repo_name()
     if not name:
         return None
-    p = DATA_DIR / "workspace" / name / "directives.jsonl"
+    p = WORKSPACE_DIR / name / "directives.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 

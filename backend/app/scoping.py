@@ -32,7 +32,7 @@ import shutil
 import subprocess
 import threading
 
-from .config import DATA_DIR
+from .config import DATA_DIR, WORKSPACE_DIR
 from .db import SessionLocal
 from .models import Setting
 
@@ -101,7 +101,7 @@ def _patch(**kw) -> dict:
 
 def _workspace(cfg: dict):
     name = (cfg.get("repo_name") or "research").strip() or "research"
-    p = DATA_DIR / "workspace" / name
+    p = WORKSPACE_DIR / name
     return p
 
 

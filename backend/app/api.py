@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from . import (archive, authkeys, metrics, monitor, notify, orchestrator,
                realrun)
 from .bus import bus
-from .config import DATA_DIR, ROOT
+from .config import DATA_DIR, ROOT, WORKSPACE_DIR
 from .db import Base, SessionLocal, engine, get_session
 from .models import (ChatMessage, Event, Gpu, Idea, JournalEntry,
                      ModeHistory, PaperBaseline, PaperBudgetEvent,
@@ -813,7 +813,7 @@ async def council_bless(request: Request):
             db.close()
         name = ((cfg.get("repo_name") or
                  (proj.name if proj else "research") or "research").strip())
-        workspace = str(DATA_DIR / "workspace" / name)
+        workspace = str(WORKSPACE_DIR / name)
     bless_meta = {
         k: body[k]
         for k in ("val_set_size", "dataset_kind", "train_30s",
@@ -1793,7 +1793,7 @@ def agent_terminal():
     text = r.stdout if r.returncode == 0 else ""
     if not text.strip():                       # no live pane — fall back to log
         logs = [p for p in glob.glob(
-                str(DATA_DIR / "workspace" / "*" / "agent.log"))
+                str(WORKSPACE_DIR / "*" / "agent.log"))
                 if os.path.exists(p) and os.path.getsize(p) > 0]
         logs.sort(key=os.path.getmtime)
         if logs:
@@ -2638,7 +2638,7 @@ async def session_create(request: Request):
         # Find a workspace dir if any project exists.
         cwd = "/root"
         try:
-            ws = DATA_DIR / "workspace"
+            ws = WORKSPACE_DIR
             if ws.exists():
                 for entry in ws.iterdir():
                     if entry.is_dir():
@@ -3952,7 +3952,7 @@ async def paper_revert(request: Request):
         # Restart the research orchestrator/agent in 'agent' tmux. If a
         # session is somehow still alive (shouldn't be), this is a no-op
         # because orchestrator.start handles that.
-        workspace = ROOT / "data" / "workspace" / repo
+        workspace = WORKSPACE_DIR / repo
         if workspace.exists():
             orchestrator.start(str(workspace), name="resume", n_slots=10)
     except Exception as e:                              # noqa: BLE001

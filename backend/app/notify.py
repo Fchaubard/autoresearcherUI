@@ -25,7 +25,7 @@ import time
 import urllib.request
 from email.message import EmailMessage
 
-from .config import DATA_DIR
+from .config import DATA_DIR, WORKSPACE_DIR
 from .db import SessionLocal
 from .models import Event, Project, Run, Setting
 
@@ -807,7 +807,7 @@ def _ideas_on_deck(cfg: dict, proj) -> list[str]:
     """Best-effort: pull not-yet-run ideas from the agent's ideas.md. Handles
     both markdown-table and bullet-list layouts; tables win when present."""
     name = (cfg.get("repo_name") or (proj.name if proj else "") or "").strip()
-    path = DATA_DIR / "workspace" / name / "ideas.md"
+    path = WORKSPACE_DIR / name / "ideas.md"
     if not path.exists():
         return []
     table: list[str] = []

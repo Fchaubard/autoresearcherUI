@@ -13,7 +13,7 @@ import shlex
 import subprocess
 
 from .agent import RealAgent
-from .config import DATA_DIR, PORT, ROOT
+from .config import DATA_DIR, PORT, ROOT, workspace_dir
 from .db import SessionLocal
 from .models import Event, Project
 
@@ -245,15 +245,32 @@ canonical `train_loss` / `train_acc` / `lr` / `val_loss` / `val_acc` /
 coverage at `GET /api/runs/{run_id}/metric_coverage` — it returns
 `{logged, missing, required}` for the seven defaults.
 
-# Logging convention for self-imposed helper daemons
-If you write your own watchdog / guard scripts (a good pattern — e.g.
-a `guard_daemon.py` that kills off-mandate runs, or a `gpu_sweeper.py`
-that re-balances jobs), log ONLY on positive events (a hit, a kill, a
-fix). Do NOT log a sweep-clean line every interval — that drowns the
-right-rail terminal in noise (a 30s sweep over 5 days = 14,000 lines
-of nothing) and crowds out signals the operator actually needs to
-see. One-line summaries on shutdown / startup are fine; every-tick
-"all clear" messages are not.
+# REPO HYGIENE — keep the project directory MINIMAL (non-negotiable)
+This directory IS the operator's working copy; they read it directly, so it
+must stay clean and legible. Follow the reference-autoresearcher discipline:
+  - `train.py` is the ONE file you edit to run experiments. Put every
+    experimental variant behind a CLI FLAG on train.py (`--mode`,
+    `--defense`, `--solver`, hyperparameters, …) — do NOT create a new
+    top-level module per idea. A spray of files like `ablation.py`,
+    `baselines.py`, `grid_eval.py`, `hardening.py`, `*_probe.py`,
+    `*_sweep.py`, `*_profiler.py` is EXACTLY the sprawl we forbid: fold that
+    logic into `train.py` flags or a single small importable module.
+  - `prepare.py` is READ-ONLY: fixed data prep + the evaluation harness (the
+    ground-truth metric). Never edit it to change how you are scored.
+  - The ONLY files allowed at the TOP LEVEL of this directory are:
+    `program.md` (spec), `train.py`, `prepare.py`, `ideas.md` (your idea
+    priority queue), `lessons.md` / `directives.jsonl` (the tracking record),
+    and run logs / `results.tsv`. NOTHING else.
+  - EVERY one-off, throwaway, analysis, ablation, probe, profiling, or
+    scratch script MUST be created under `./garbage/` so it never mucks up
+    the working directory — e.g. write `./garbage/check_layer_norms.py`, run
+    it, and leave it there. Same for any long-lived helper daemon (a guard
+    that kills off-mandate runs, etc.): it lives in `./garbage/` and logs
+    ONLY on positive events (a hit, a kill, a fix) — never an every-tick
+    "all clear" line that floods the Sessions terminal.
+  - SELF-CHECK before ending a work cycle: `ls` the directory. If you created
+    any top-level file that is NOT in the allowed list above, `mv` it into
+    `./garbage/` now. Keeping the repo tiny and readable is part of the job.
 
 # The directives queue — your ONLY source of work
 Your sole function is to process `directives.jsonl` in priority order.
@@ -371,10 +388,12 @@ your ATTACK-SURFACE list, and your running conclusions. Keep ALL of it
 there. Do NOT scatter findings across ad-hoc files like FINDINGS.md,
 STATUS.md, RESULTS.md, etc. — the operator reads lessons.md (it backs the
 dashboard's Lessons tab); a separate FINDINGS.md is invisible there and
-fragments the record. The only other files you maintain are the code
-(train.py, prepare.py, …), `program.md` (the project spec), and
-`directives.jsonl` (the work queue). If you have a status/blocker that
-genuinely needs operator action, the one allowed exception is
+fragments the record. The only files you maintain are `train.py`
+(experiments — via FLAGS, never a new module per idea — see REPO HYGIENE),
+`program.md` (the project spec), `ideas.md` + `directives.jsonl` (the work
+queue), and `lessons.md` (the record); `prepare.py` is read-only. Any other
+script is a one-off and belongs in `./garbage/`. If you have a status/blocker
+that genuinely needs operator action, the one allowed exception is
 `AGENT_NEEDS_RESTART.md`.
 
 # Council reviews — IMPORTANT
@@ -711,7 +730,7 @@ def start_real(cfg: dict, resume: bool = False) -> RealAgent:
     if cb:
         agent_cmd = shlex.split(cb)
 
-    workspace = os.path.join(DATA_DIR, "workspace", name)
+    workspace = str(workspace_dir(name))
     _agent = RealAgent(
         workspace=workspace, project_name=name,
         ingest_url=f"http://127.0.0.1:{PORT}", repo_root=str(ROOT),

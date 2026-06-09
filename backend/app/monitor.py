@@ -23,7 +23,7 @@ import time
 
 from . import kill_criteria, metrics
 from .bus import bus
-from .config import DATA_DIR
+from .config import DATA_DIR, WORKSPACE_DIR
 from .db import SessionLocal
 from .models import Event, Gpu, Idea, Project, Run, Setting
 
@@ -454,7 +454,7 @@ def _parse_ideas(cfg: dict) -> dict[str, tuple[str, bool]]:
     name = (cfg.get("repo_name") or "").strip()
     if not name:
         return {}
-    path = DATA_DIR / "workspace" / name / "ideas.md"
+    path = WORKSPACE_DIR / name / "ideas.md"
     if not path.exists():
         return {}
     out: dict[str, tuple[str, bool]] = {}

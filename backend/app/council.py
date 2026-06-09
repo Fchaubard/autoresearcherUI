@@ -31,7 +31,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from .config import DATA_DIR, ROOT
+from .config import DATA_DIR, ROOT, WORKSPACE_DIR
 from .db import SessionLocal
 from .models import ChatMessage, Event, Gpu, Idea, Project, Run, Setting
 
@@ -513,7 +513,7 @@ def _lessons_path() -> Path | None:
     name = _onboarding_repo_name()
     if not name:
         return None
-    p = DATA_DIR / "workspace" / name / "lessons.md"
+    p = WORKSPACE_DIR / name / "lessons.md"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -1793,7 +1793,7 @@ def _apply_to_ideas_md(review: dict) -> None:
     name = _onboarding_repo_name()
     if not name:
         return
-    path = DATA_DIR / "workspace" / name / "ideas.md"
+    path = WORKSPACE_DIR / name / "ideas.md"
     if not path.exists():
         return
     with _FILE_LOCK:

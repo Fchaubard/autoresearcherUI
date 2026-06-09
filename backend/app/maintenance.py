@@ -24,7 +24,7 @@ from pathlib import Path
 
 import shutil
 
-from .config import DATA_DIR
+from .config import DATA_DIR, WORKSPACE_DIR
 from .db import SessionLocal
 from .models import Project, Run, Setting
 
@@ -63,7 +63,7 @@ def _candidate_paths(run: Run, repo: str) -> list[Path]:
     name = (run.run_name or "").strip()
     if not name or not repo:
         return out
-    ws = DATA_DIR / "workspace" / repo
+    ws = WORKSPACE_DIR / repo
     # per-run dirs (some projects use this layout)
     out.append(ws / "runs" / name)
     out.append(ws / "runs" / f"{name}.log")
