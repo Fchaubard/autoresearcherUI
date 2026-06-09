@@ -191,12 +191,23 @@ class Run:
 
 
 def init(project: str | None = None, name: str | None = None,
-         config: dict | None = None, **_: object) -> Run:
-    """Register a run with the backend and return a Run handle."""
+         config: dict | None = None, baseline: bool = False,
+         **_: object) -> Run:
+    """Register a run with the backend and return a Run handle.
+
+    Pass ``baseline=True`` to mark this run as THE no-mitigation baseline
+    anchor (e.g. the undefended/poisoned model, the un-tuned control). The
+    dashboard's "improvement vs baseline" reads this run as the starting
+    point, so mark the run that demonstrates the problem EXISTS — not a
+    run that already solved it, and not a clean/ideal floor. Without an
+    explicit mark, the dashboard falls back to the worst real run, which
+    can be misleading."""
     global _active
     project = project or os.environ.get("ARUI_PROJECT", "default")
     name = name or os.environ.get("ARUI_RUN_NAME", f"run-{int(time.time())}")
-    config = config or {}
+    config = dict(config or {})
+    if baseline:
+        config["is_baseline"] = True
     run_id = name
     try:
         resp = _post("/api/track/run",

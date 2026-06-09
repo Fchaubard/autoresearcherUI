@@ -313,20 +313,53 @@ def get_project(db: Session = Depends(get_session)):
         return ("clean_" in n or n.endswith("_clean")
                 or n.startswith("clean_") or "_floor" in n)
 
-    kept_with_metric = [r for r in kept
-                        if r.headline_metric is not None
-                        and math.isfinite(r.headline_metric)]
-    marked = next((r for r in runs if r.is_baseline), None)
+    def _is_probe(name: str) -> bool:
+        n = (name or "").lower()
+        return n.startswith("_smoke") or n.startswith("_probe")
+
+    def _finite_real(r) -> bool:
+        # A real (non-probe), scoreable, non-crashed run.
+        return (r.headline_metric is not None
+                and math.isfinite(r.headline_metric)
+                and not _is_crashed(r.headline_metric, p.metric_direction)
+                and not _is_probe(r.run_name or ""))
+
+    # Anchor pool: ANY real non-crashed run with a finite headline — NOT
+    # just `kept` ones. The undefended "no-mitigation" baseline is often
+    # not a kept run (it's a control / seed / discarded run), and when we
+    # only looked at kept runs the dashboard grabbed the worst *already-
+    # mitigated* run as the baseline — a near-optimal, misleading anchor
+    # (e.g. it showed "0.034 → 0.0 solved" when the true undefended
+    # baseline `seed_bl_lora` sat at ASR 0.85). 2026-06-09 fix.
+    anchor_pool = [r for r in runs if _finite_real(r)]
+    marked = next((r for r in runs if r.is_baseline and _finite_real(r)), None)
     base_run = None
     if marked and not _looks_like_floor(marked.run_name or "") \
             and not (_is_better(marked.headline_metric, best)
                      or marked.headline_metric == best):
         base_run = marked
-    elif kept_with_metric:
-        # Worst kept run — i.e., the WORST metric value among kept runs,
-        # which is what "no progress yet" looks like.
+    elif anchor_pool:
+        # Worst real run — the WORST metric value, i.e. the genuine
+        # "no progress yet / no-mitigation" starting point.
         base_run = (max if p.metric_direction != "maximize" else min)(
-            kept_with_metric, key=lambda r: r.headline_metric)
+            anchor_pool, key=lambda r: r.headline_metric)
+
+    # Degenerate-baseline guard: if we can't find an anchor that is
+    # actually WORSE than `best`, the "improvement vs baseline" story is
+    # meaningless (best == baseline, or no real run yet). Surface that
+    # honestly instead of printing a fake near-optimal baseline — and tell
+    # the agent how to fix it (mark the undefended run explicitly).
+    base_metric = base_run.headline_metric if base_run else None
+    baseline_degenerate = False
+    baseline_note = ""
+    if base_metric is None:
+        baseline_degenerate = True
+        baseline_note = "no baseline run established yet"
+    elif best is not None and not _is_better(best, base_metric):
+        baseline_degenerate = True
+        baseline_note = ("baseline is at-or-better than the best run — mark "
+                         "the true no-mitigation run with "
+                         "arui.init(baseline=True)")
 
     return {
         **p.dict(),
@@ -335,8 +368,10 @@ def get_project(db: Session = Depends(get_session)):
         "experiments_total": len(ideas),
         "success_rate": round(len(kept) / len(done), 2) if done else 0,
         "best_metric": best,
-        "baseline_metric": base_run.headline_metric if base_run else None,
+        "baseline_metric": base_metric,
         "baseline_run_name": base_run.run_name if base_run else None,
+        "baseline_degenerate": baseline_degenerate,
+        "baseline_note": baseline_note,
     }
 
 
@@ -986,8 +1021,16 @@ async def track_run(request: Request):
                     description="", status="running",
                     source="agent", created_at=_iso(), started_at=_iso())
         db.add(idea)
+        # is_baseline can be set EXPLICITLY by the agent via
+        # arui.init(baseline=True) (lands in config as "is_baseline"), or
+        # inferred from a name containing "baseline". The explicit flag is
+        # what lets the agent mark a no-mitigation anchor whose name isn't
+        # literally "baseline" (e.g. "seed_bl_*") — see the baseline-picker
+        # in /project. 2026-06-09 fix.
+        explicit_bl = bool((config or {}).get("is_baseline"))
         db.add(Run(id=name, project_id=pid, idea_id=idea.id, run_name=name,
-                   status="running", is_baseline=_looks_baseline(name),
+                   status="running",
+                   is_baseline=(explicit_bl or _looks_baseline(name)),
                    config=config,
                    started_at=_iso(), created_at=_iso()))
         db.commit()

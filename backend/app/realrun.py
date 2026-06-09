@@ -492,6 +492,34 @@ def _setup_prompt(cfg: dict) -> str:
 # Baseline method
 {cfg.get('baseline', '')}
 
+# BASELINE DISCIPLINE — establish the anchor BEFORE any mitigation
+Your FIRST real run must measure the NO-MITIGATION condition — the state
+that demonstrates the problem EXISTS — and log it under the headline
+metric `{metric}`, marked as the baseline:
+
+    import arui
+    arui.init(project=..., name="baseline_nomitigation", baseline=True,
+              config={{"what": "undefended / no-mitigation control",
+                       "why":  "anchor: shows the problem is real"}})
+    # ... measure ...
+    arui.summary["__METRIC__"] = <the no-mitigation value>   # e.g. high ASR
+    arui.finish()
+
+Rules:
+  - The baseline is the run that shows the problem is REAL (e.g. an
+    undefended/poisoned model with HIGH attack-success-rate), NOT a run
+    that already fixed it and NOT a clean/ideal floor.
+  - Mark it with `arui.init(baseline=True)` so the dashboard anchors
+    "improvement vs baseline" on it. A name alone is not enough.
+  - If `{metric}` is phrased as an AFTER-mitigation quantity (e.g.
+    `*_after_defense`), the baseline run still logs it for the
+    no-mitigation case so the dashboard shows the real gap (e.g. 0.85 →
+    0.00), not a degenerate near-zero "baseline".
+  - Do NOT declare the purpose solved off a degenerate metric where the
+    trivial do-nothing/break-the-model answer scores perfectly. Check
+    `GET /api/project`: if `baseline_degenerate` is true, you have not
+    established a valid baseline yet — fix that first.
+
 # Evaluation
 {cfg.get('eval', '')}
 Validation metric: {metric}.
