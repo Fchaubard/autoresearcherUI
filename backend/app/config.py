@@ -28,17 +28,21 @@ WORKSPACE_DIR = Path(os.environ["ARUI_WORKSPACE_DIR"]) \
     if os.environ.get("ARUI_WORKSPACE_DIR") else DATA_DIR / "workspace"
 
 
-def _ensure_root_gitignored(name: str) -> None:
-    """Idempotently add `/<name>` to the repo .gitignore so the convenience
-    symlink at the repo root doesn't show up as untracked."""
+def _ensure_root_ignored(name: str) -> None:
+    """Locally ignore the repo-root project symlink via .git/info/exclude.
+
+    We deliberately do NOT touch the tracked .gitignore: a dirty .gitignore
+    would block `git pull --ff-only` on every deploy. .git/info/exclude is
+    the per-clone, never-committed ignore list — perfect for this."""
     try:
-        gi = ROOT / ".gitignore"
+        exclude = ROOT / ".git" / "info" / "exclude"
+        if not exclude.parent.exists():       # not a git checkout — skip
+            return
         line = f"/{name}"
-        existing = gi.read_text().splitlines() if gi.exists() else []
+        existing = exclude.read_text().splitlines() if exclude.exists() else []
         if line not in existing:
-            with open(gi, "a") as f:
-                f.write(("" if (not existing or existing[-1] == "") else "\n")
-                        + f"# project workspace symlink\n{line}\n")
+            with open(exclude, "a") as f:
+                f.write(f"\n# autoresearcher project workspace symlink\n{line}\n")
     except Exception:
         pass
 
@@ -63,7 +67,7 @@ def workspace_dir(name: str):
             if not link.exists() and not link.is_symlink() \
                     and link.resolve() != p.resolve():
                 link.symlink_to(p.resolve(), target_is_directory=True)
-                _ensure_root_gitignored(name)
+                _ensure_root_ignored(name)
         except Exception:
             pass
     return p
