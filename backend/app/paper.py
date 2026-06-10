@@ -382,6 +382,9 @@ def bundle_blockers(folder=None, waive=()) -> list[dict]:
     bv = paper_lint.lint_bib(folder)
     if bv:
         out.append({"gate": "bib", "detail": paper_lint.format_violations(bv)})
+    av = paper_lint.lint_assets(folder)
+    if av:
+        out.append({"gate": "assets", "detail": paper_lint.format_violations(av)})
     med = reviewer_sim_median()
     if med is None:
         out.append({"gate": "reviewer_sim",

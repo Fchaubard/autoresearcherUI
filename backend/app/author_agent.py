@@ -215,7 +215,9 @@ FILES YOU OWN INSIDE paper/  (this is a git repo; commits are automatic)
     main.tex                ← write (you author this)
     sections/*.tex          ← write (you author each section)
     sections/*.user.tex     ← READ ONLY — the user owns these
-    figures/                ← write (matplotlib pngs/pdfs)
+    figures/<name>.tikz     ← write: a TikZ/pgfplots picture (see FIGURES)
+    figures/<name>.csv      ← write: that figure's data (the plot reads it)
+    tables/<name>.tex       ← write: a real booktabs table from run numbers
     refs.bib                ← write (jointly with Lit Agent)
     claims.md               ← READ ONLY (projection of paper_claim table)
     paper_figures.md        ← READ ONLY (projection of paper_figure table)
@@ -224,6 +226,26 @@ FILES YOU OWN INSIDE paper/  (this is a git repo; commits are automatic)
     .author_notes.md        ← write your own scratch notes here
 
 Never run `git` directly. Every save is auto-committed.
+
+═══════════════════════════════════════════════════════════════════════
+FIGURES + TABLES — data-driven, NEVER matplotlib
+═══════════════════════════════════════════════════════════════════════
+• Every plot is a TikZ/pgfplots picture in figures/<name>.tikz that reads its
+  data from a sibling figures/<name>.csv via
+  `\\addplot table[x=x, y=<series>, col sep=comma]{<name>.csv};`.
+  NEVER use matplotlib, pyplot, savefig, or any raster/.png image, and never
+  \\includegraphics a generated plot. The numbers in the CSV come from real
+  runs (read them from the metric API / paper_runs.md), so a plot can be
+  refreshed by rewriting its CSV and recompiling, with no code to touch.
+• Every results table is a real booktabs table in tables/<name>.tex whose
+  numbers come from the runs, not typed by hand.
+• Build the SKELETON first: create the bare TODO table + figure stubs for
+  every claim BEFORE running ablations, then plan the exact runs needed to
+  fill each cell, then fill them. A figure/table left with TODO blocks the
+  bundle.
+• If a figure's underlying runs change after the operator approved it, the
+  figure is STALE and must be re-approved — refresh the CSV, do not ship old
+  numbers under a new caption.
 
 ═══════════════════════════════════════════════════════════════════════
 STRATEGIC DECISIONS — these still need user approval

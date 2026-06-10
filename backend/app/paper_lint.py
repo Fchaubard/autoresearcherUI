@@ -133,6 +133,39 @@ def lint_bib(folder) -> list[dict]:
     return out
 
 
+# ── asset lint: figures are TikZ-from-CSV (no matplotlib), no leftover TODO ─
+_ASSET_BANNED = [
+    (re.compile(r"\b(matplotlib|pyplot|savefig)\b", re.I),
+     "raster plotting (must be TikZ/pgfplots from CSV)"),
+    (re.compile(r"\\includegraphics(\[[^\]]*\])?\{[^}]*\.(png|jpe?g|gif)",
+                re.I), "raster image include (use TikZ)"),
+]
+
+
+def lint_assets(folder) -> list[dict]:
+    """At bundle time, figures/ + tables/ must be TikZ-from-CSV (no matplotlib
+    or raster includes) and contain no leftover TODO placeholder. Empty ==
+    clean."""
+    folder = Path(folder)
+    out: list[dict] = []
+    for sub in ("figures", "tables"):
+        d = folder / sub
+        if not d.exists():
+            continue
+        for p in sorted(d.rglob("*")):
+            if not p.is_file() or p.suffix.lower() not in (".tex", ".tikz", ".py"):
+                continue
+            txt = p.read_text(errors="ignore")
+            src = f"{sub}/{p.name}"
+            for rx, label in _ASSET_BANNED:
+                if rx.search(txt):
+                    out.append({"kind": "assets", "source": src, "rule": label})
+            if re.search(r"\bTODO\b", txt):
+                out.append({"kind": "assets", "source": src,
+                            "rule": "unfilled TODO placeholder"})
+    return out
+
+
 def format_violations(violations: list[dict], limit: int = 40) -> str:
     """Human-readable summary for an error message / event. Handles both prose
     (source/line/snippet) and bib (key) violations."""
