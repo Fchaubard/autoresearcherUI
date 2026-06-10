@@ -9095,17 +9095,24 @@ async function boot() {
     const pc = await fetch('/api/passcode/check').then(r => r.json());
     if (pc && pc.enabled && !pc.authed) { renderLogin(); return; }
   } catch (e) { /* gate down → fall through */ }
-  // Resume an in-progress scoping session across reloads (real sessions only,
-  // not leftover preview/test states) so the modal + conversation aren't lost.
-  try {
-    const sc = await api('/scope/status');
-    if (sc && !sc.preview &&
-        ['searching', 'synthesizing', 'awaiting_user'].includes(sc.status)) {
-      showScopingModal(); return;
-    }
-  } catch (e) { /* no scope → fall through */ }
+  // Fetch the project FIRST. A running project ALWAYS wins: a stale
+  // 'awaiting_user' scope_state must NEVER hijack the dashboard of live
+  // research (a leftover scope preview once stranded a 156-run session on the
+  // "Confirm your research direction" screen even though the agent never
+  // stopped). Only resume a scoping modal when no research has launched yet.
   const project = await api('/project');
-  if (!project || !project.name) { onboarding(); return; }
+  if (!project || !project.name) {
+    // Resume an in-progress scoping session across reloads (real sessions
+    // only, not leftover preview/test states) so the modal isn't lost.
+    try {
+      const sc = await api('/scope/status');
+      if (sc && !sc.preview &&
+          ['searching', 'synthesizing', 'awaiting_user'].includes(sc.status)) {
+        showScopingModal(); return;
+      }
+    } catch (e) { /* no scope → fall through */ }
+    onboarding(); return;
+  }
   const [runs, ideas, events, chat, gpus, mode] = await Promise.all([
     api('/runs'), api('/ideas'), api('/events'), api('/chat'),
     api('/gpus'), api('/mode').catch(() => ({ mode: 'research' }))]);
