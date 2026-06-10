@@ -3647,12 +3647,19 @@ async def paper_runs_queue(request: Request):
     if not cmd:
         return {"ok": False,
                 "detail": "Either cmd or train_args is required"}
+    # OPERATOR GPU GATE (make the prompt's promise real): until the operator
+    # APPROVES the ablation plan, queued paper runs are 'proposed' (visible,
+    # schedulable-on-paper, but NOT dispatched to a GPU). approve_plan() flips
+    # every 'proposed' run to 'queued'. So the operator review actually gates
+    # GPU spend instead of being decorative.
+    from . import paper_phase as _pp
+    run_status = "queued" if _pp.plan_approved() else "proposed"
     db = SessionLocal()
     try:
         rid = "pr-" + os.urandom(5).hex()
         db.add(Run(
             id=rid, run_name=name,
-            status="queued", context="paper",
+            status=run_status, context="paper",
             paper_claim_id=claim_id,
             paper_figure_id=figure_id,
             paper_role=role,
@@ -3667,8 +3674,10 @@ async def paper_runs_queue(request: Request):
     finally:
         db.close()
     bus.publish("paper", "run_queued",
-                {"run_id": rid, "queued_by": "author_agent"})
-    return {"ok": True, "id": rid, "name": name}
+                {"run_id": rid, "queued_by": "author_agent",
+                 "status": run_status})
+    return {"ok": True, "id": rid, "name": name, "status": run_status,
+            "gated": run_status == "proposed"}
 
 
 @router.post("/paper/runs/queue_batch")
