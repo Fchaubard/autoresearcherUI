@@ -557,18 +557,53 @@ def get_phase(db: Session = Depends(get_session)):
         v.setdefault("at", "")
         v.setdefault("detail", {})
         v["fallback_used"] = False
-        return v
-    # Fallback: derive phase from DB so the pill is informative even on
-    # legacy projects that don't call arui.phase().
-    running = db.query(Run).filter(Run.status == "running").count()
-    total = db.query(Run).count()
-    if total == 0:
-        ph = "bootstrap"
-    elif running > 0:
-        ph = "watching_runs"
     else:
-        ph = "planning"
-    return {"phase": ph, "at": "", "detail": {}, "fallback_used": True}
+        # Fallback: derive phase from DB so the pill is informative even on
+        # legacy projects that don't call arui.phase().
+        running = db.query(Run).filter(Run.status == "running").count()
+        total = db.query(Run).count()
+        if total == 0:
+            ph = "bootstrap"
+        elif running > 0:
+            ph = "watching_runs"
+        else:
+            ph = "planning"
+        v = {"phase": ph, "at": "", "detail": {}, "fallback_used": True}
+    # COUNCIL-GATE the "done"-ish phases. The agent self-reports its phase via
+    # arui.phase(), so 'concluding'/'complete' only mean "the agent decided to
+    # draft / declared itself done" — NOT that the council approved. The
+    # AUTHORITATIVE signal is the council completion-review verdict
+    # (research_conclusion). Surface it, and never let a self-declared
+    # 'complete' show as done unless the council actually APPROVED it — the
+    # conclusion is the council's gate, not the agent's.
+    try:
+        from . import council as _c
+        cs = _c.conclusion_state() or {}
+        cstatus = cs.get("status") or "none"      # none|pending|approved|rejected|needs_more
+        v["council_status"] = cstatus
+        ph = v.get("phase", "")
+        if ph in ("concluding", "complete", "concluded", "done"):
+            det = dict(v.get("detail") or {})
+            if cstatus == "approved":
+                v["phase"] = "complete"
+                v["council_approved"] = True
+                det["council"] = "approved — ready for paper"
+            elif cstatus == "pending":
+                v["phase"] = "concluding"
+                v["council_approved"] = False
+                det["council"] = "reviewing the conclusion (verdict pending)"
+            elif cstatus in ("rejected", "needs_more"):
+                v["phase"] = "concluding"
+                v["council_approved"] = False
+                det["council"] = "rejected the conclusion — keep researching"
+            else:                                  # agent declared done, never submitted
+                v["phase"] = "concluding"
+                v["council_approved"] = False
+                det["council"] = "not yet submitted to the council for approval"
+            v["detail"] = det
+    except Exception:                              # noqa: BLE001
+        pass
+    return v
 
 
 # ─────────────────────── Watchdog config (PR 4) ───────────────────────────

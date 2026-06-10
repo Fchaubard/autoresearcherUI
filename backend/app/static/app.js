@@ -534,8 +534,8 @@ const _PHASE_LABELS = {
   watching_runs:          'Watching runs',
   council_review:         'Council review',
   idle_waiting_direction: 'Awaiting direction',
-  concluding:             'Concluding',
-  complete:               'Research complete',
+  concluding:             'Concluding — pending council',
+  complete:               'Complete ✓ council-approved',
   error:                  'Error',
 };
 // Severity → pill style class (matches the existing rh-* CSS).
@@ -603,9 +603,13 @@ function openResearchHealth() {
     const phase = (s.phase && s.phase.phase) || 'bootstrap';
     const phaseLabel = _PHASE_LABELS[phase] || phase;
     const issues = s.issues || [];
+    const councilNote = (s.phase.detail && s.phase.detail.council) || '';
     const lines = [
       'Phase: ' + phaseLabel
         + (s.phase.fallback_used ? '  (DB-derived fallback)' : ''),
+      // The council completion-review is the GATE: 'concluding' is just the
+      // agent drafting; only a council-APPROVED conclusion is truly done.
+      ...(councilNote ? ['Council: ' + councilNote] : []),
       (s.phase.at ? ('Reported at: ' + new Date(s.phase.at).toLocaleString())
                   : 'Reported at: (never — agent has not called arui.phase yet)'),
       '',
@@ -2174,6 +2178,20 @@ function createRailTerm(session) {
      when there's been no new bytes — keeps the network quiet while
      the agent thinks, snappy when it's emitting output. */
   let _offset = 0, _streamTimer = null, _idleMs = 250;
+  // Cross-view scrollback cache. Leaving + returning to this view disposes the
+  // xterm and used to re-stream the WHOLE pane log from offset 0 ("it buffers
+  // in from the top"). We keep the received bytes (capped) keyed by session in
+  // a module-global, so on remount we repaint history INSTANTLY from memory
+  // and resume from the last byte offset — only net-new bytes hit the network.
+  const _PANE_CACHE = (window.__aruiPaneCache = window.__aruiPaneCache || {});
+  const _PANE_CAP = 1024 * 1024;        // keep ~last 1MB of pane bytes
+  const _cacheAppend = (chunk) => {
+    const c = _PANE_CACHE[session] || { bytes: new Uint8Array(0), offset: 0 };
+    let m = new Uint8Array(c.bytes.length + chunk.length);
+    m.set(c.bytes, 0); m.set(chunk, c.bytes.length);
+    if (m.length > _PANE_CAP) m = m.slice(m.length - _PANE_CAP);
+    _PANE_CACHE[session] = { bytes: m, offset: _offset };
+  };
   const b64ToBytes = (b64) => {
     if (!b64) return new Uint8Array(0);
     try {
@@ -2191,6 +2209,7 @@ function createRailTerm(session) {
       if (d.rotated) {
         t.reset();
         _offset = 0;
+        delete _PANE_CACHE[session];     // stale history — start fresh
         // Agent was restarted server-side. Our last dimensions cache
         // is invalidated — force a re-push so the fresh tmux pane
         // gets sized to our actual rail width instead of the 120x40
@@ -2202,6 +2221,7 @@ function createRailTerm(session) {
       if (bytes.length) {
         t.write(bytes);
         _offset = d.offset || (_offset + bytes.length);
+        _cacheAppend(bytes);    // remember for instant repaint on remount
         _idleMs = 250;          // got data, stay snappy
       } else {
         // Make sure we know where the file ends even if we got 0 bytes
@@ -2212,7 +2232,17 @@ function createRailTerm(session) {
     } catch (e) { _idleMs = Math.min(_idleMs * 1.5, 2000); }
     _streamTimer = setTimeout(tick, _idleMs);
   };
-  const start = () => { if (!_streamTimer) tick(); };
+  const start = () => {
+    if (_streamTimer) return;
+    // Repaint cached history instantly, then resume from the last offset so
+    // only net-new bytes are fetched (no slow "buffer in from the top").
+    const c = _PANE_CACHE[session];
+    if (c && c.bytes && c.bytes.length) {
+      try { t.write(c.bytes); } catch (e) {}
+      _offset = c.offset || _offset;
+    }
+    tick();
+  };
   const stop  = () => {
     if (_streamTimer) { clearTimeout(_streamTimer); _streamTimer = null; }
   };
