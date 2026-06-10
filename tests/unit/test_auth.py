@@ -61,6 +61,26 @@ def test_is_public_prefixes(arui_env):
     assert not _is_public("/api/settings")
 
 
+def test_scope_and_sensitive_endpoints_are_gated(arui_env):
+    """Operator decision: the onboarding FORM is the only public entry (a
+    wifi-style 'claim the box fast' SOP). Once a passcode is set, EVERYTHING
+    else requires it — INCLUDING the scoping section, the agent terminal, file
+    + shell endpoints, and paper mode. This test pins that boundary."""
+    from backend.app.auth import _is_public
+    must_be_gated = (
+        "/api/scope/status", "/api/scope/confirm", "/api/scope/chat",
+        "/api/scope/skip", "/api/scope/start_preview",
+        "/api/project", "/api/runs", "/api/settings",
+        "/api/agent/raw", "/api/agent/keys", "/api/sessions/agent/attach",
+        "/api/paper/runs/queue", "/api/research/conclude", "/api/reset",
+    )
+    for p in must_be_gated:
+        assert not _is_public(p), p + " must require the passcode"
+    # ...but the onboarding form + its defaults remain public (first-run SOP)
+    assert _is_public("/api/onboarding")
+    assert _is_public("/api/onboarding/defaults")
+
+
 def test_extract_passcode_query_wins(arui_env):
     from backend.app.auth import _extract_passcode
     req = _make_request(query="p=fromquery",
