@@ -36,6 +36,66 @@ def tick() -> None:
         _supervise_completion_review()
     except Exception as e:                              # noqa: BLE001
         print(f"[supervisor] tick error: {e}", flush=True)
+    try:
+        _supervise_paper_mode()
+    except Exception as e:                              # noqa: BLE001
+        print(f"[supervisor] paper tick error: {e}", flush=True)
+
+
+# Paper-mode phases where the Author Agent is supposed to be actively working
+# (so its tmux session dying is a stall). operator_review legitimately WAITS
+# for the human; submission_ready/error are terminal/manual.
+_PAPER_WORKING_PHASES = {
+    "paper.whittle_claims", "paper.lit_review", "paper.draft_v0",
+    "paper.plan_ablations", "paper.build_gantt", "paper.run_ablations",
+    "paper.reviewer_simulator",
+}
+
+
+def _paper_action(phase: str, fallback_used: bool, author_alive: bool,
+                  remediations: int):
+    """Pure decision (testable): what should the PI do about paper mode now?
+    Returns (action, reason) where action is None | 'restart' | 'hard_stall'."""
+    if fallback_used or phase not in _PAPER_WORKING_PHASES:
+        return (None, "")                # paper mode idle / waiting on human / done
+    if author_alive:
+        return (None, "")                # author is working — nothing to do
+    label = phase.replace("paper.", "")
+    if remediations >= 3:                # MAX_REMEDIATION
+        return ("hard_stall",
+                f"the author agent keeps dying during {label}")
+    return ("restart", f"the author agent died during {label}")
+
+
+def _supervise_paper_mode() -> None:
+    """Keep PAPER mode unblocked the same way the research loop is: if the
+    paper is in an active author phase but the 'author' tmux session has died,
+    restart it (3-strike circuit breaker -> HARD_STALLED). The author then
+    resumes from its phase + the persisted decisions, so a crashed author
+    never silently strands the paper."""
+    from . import author_agent, lifecycle, paper_phase
+    st = paper_phase.get_phase()
+    phase = st.get("phase", "")
+    try:
+        alive = author_agent._tmux_alive("author")
+    except Exception:                                   # noqa: BLE001
+        alive = True                                    # can't tell -> don't act
+    action, reason = _paper_action(
+        phase, bool(st.get("fallback_used", True)), alive,
+        lifecycle.remediation_count("paper_author"))
+    if action == "restart":
+        lifecycle.set_phase(lifecycle.PHASE_PAPER)
+        lifecycle.record_remediation("paper_author",
+                                     reason + " -- restarting it")
+        try:
+            author_agent.start()
+        except Exception as e:                          # noqa: BLE001
+            lifecycle.emit_event("supervisor_error",
+                                 f"author restart failed: {e}",
+                                 severity="warning")
+    elif action == "hard_stall":
+        lifecycle.set_phase(lifecycle.PHASE_PAPER)
+        lifecycle.set_health(lifecycle.HARD_STALLED, reason + " -- needs you")
 
 
 def _supervise_completion_review() -> None:
