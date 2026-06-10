@@ -1379,6 +1379,50 @@ function _fmtTimeShort(iso) {
 // Renders / refreshes the "Past paper proposals" history table inside
 // the Write-the-paper view. The container has id="paper-proposals-history".
 // Safe to call when the container isn't mounted — it just no-ops.
+// Draw a REAL Gantt chart of the paper ablation schedule (data from
+// /api/paper/gantt: a dependency- + GPU-constrained schedule). One track per
+// GPU; each run is a bar positioned by start/end as a fraction of the
+// makespan; the critical path is outlined.
+async function renderPaperGantt(hostId) {
+  const host = document.getElementById(hostId);
+  if (!host) return;
+  let d;
+  try { d = await api('/paper/gantt'); } catch (e) { host.innerHTML = ''; return; }
+  const tasks = (d && d.tasks) || [];
+  if (!tasks.length) { host.innerHTML = ''; return; }
+  const mk = Math.max(1, d.makespan_sec || 1);
+  const ng = Math.max(1, d.n_gpus || 1);
+  const crit = new Set(d.critical_path || []);
+  const fmtH = (s) => (s / 3600).toFixed(s >= 3600 ? 1 : 2) + 'h';
+  const COL = { running: '#22c55e', queued: '#6366f1', proposed: '#a78bfa',
+                done: '#64748b', kept: '#64748b', kept_novel: '#64748b',
+                crashed: '#ef4444' };
+  let rows = '';
+  for (let g = 0; g < ng; g++) {
+    const bars = tasks.filter((t) => t.gpu === g).map((t) => {
+      const left = (t.start_sec / mk) * 100;
+      const w = Math.max(0.8, (t.est_time_sec / mk) * 100);
+      const c = COL[t.status] || '#6366f1';
+      const cp = crit.has(t.id) ? 'box-shadow:0 0 0 2px #f59e0b inset;' : '';
+      return `<div title="${esc(t.name)} · ${fmtH(t.est_time_sec)} · ${esc(t.status)}"` +
+        ` style="position:absolute;left:${left}%;width:${w}%;top:3px;bottom:3px;` +
+        `background:${c};border-radius:3px;${cp}overflow:hidden;font-size:9px;` +
+        `color:#fff;line-height:14px;padding:0 3px;white-space:nowrap">` +
+        `${esc(t.name)}</div>`;
+    }).join('');
+    rows += `<div style="display:flex;align-items:center;gap:6px;margin:2px 0">` +
+      `<div style="width:46px;color:var(--muted);font-size:10px;flex:0 0 auto">GPU ${g}</div>` +
+      `<div style="position:relative;flex:1;height:20px;background:var(--bg-2,#1e293b);border-radius:3px">${bars}</div></div>`;
+  }
+  host.innerHTML =
+    `<div style="margin-top:10px">` +
+      `<div style="font-size:11px;color:var(--text-2);margin-bottom:4px">` +
+        `<b>Gantt</b> · ${tasks.length} runs on ${ng} GPU(s) · makespan ≈ ` +
+        `<b>${fmtH(mk)}</b> · <span style="color:#f59e0b">▮</span> critical path</div>` +
+      rows + `</div>`;
+}
+
+
 async function _renderPaperProposalsHistory(hostEl) {
   // hostEl lets the caller pass the container element directly. On first
   // mount the Write-the-paper view is built while still detached from the
@@ -2630,11 +2674,12 @@ function updateBrief() {
     brief.innerHTML =
       `<h3><span class="dot live" style="color:#A78BFA"></span>📝 Paper mode — ${esc(meta.venue || 'Paper')}</h3>` +
       `<p style="color:var(--text-2);font-size:12px;margin:2px 0 8px">` +
-        `Switched from research to paper mode` +
-        (days != null ? ` · <b>${days.toFixed ? days.toFixed(1) : days}d</b> till deadline` : '') +
-        `.</p>` +
+        `Switched from research to paper mode (quality-gated, not time-gated).` +
+        `</p>` +
       breakdown +
+      `<div id="brief-gantt"></div>` +
       alert;
+    try { renderPaperGantt('brief-gantt'); } catch (e) {}
     const rs = document.getElementById('brief-rescaffold');
     if (rs) rs.onclick = async (e) => {
       e.preventDefault();
