@@ -334,6 +334,66 @@ def populate_claims_from_proposal(proposal_id: str = "") -> int:
         db.close()
 
 
+REVIEWER_SIM_THRESHOLD = 5.0     # median NeurIPS-tier simulated score to pass
+
+
+def reviewer_sim_median():
+    """Median 'score' across the simulated reviewer pass, or None if it has
+    never run on this paper. Drives the bundle gate."""
+    import statistics
+    db = SessionLocal()
+    try:
+        scores = []
+        for r in db.query(PaperReviewSim).all():
+            try:
+                s = json.loads(r.content_md or "{}").get("score")
+                if isinstance(s, (int, float)):
+                    scores.append(float(s))
+            except Exception:                              # noqa: BLE001
+                pass
+        return statistics.median(scores) if scores else None
+    finally:
+        db.close()
+
+
+def bundle_blockers(folder=None, waive=()) -> list[dict]:
+    """Everything that must pass before the paper can be BUNDLED for
+    submission. Returns a list of {gate, detail}; empty == clear to bundle.
+    `waive` is a set of gate names the OPERATOR explicitly overrides.
+
+    Gates: (1) compile clean (no undefined refs), (2) no em-dash / AI-slop
+    prose, (3) complete + consistent citations, (4) the simulated-reviewer
+    pass has run and its median score clears the bar."""
+    from . import paper_lint, paper_compile
+    waive = set(waive or ())
+    folder = folder or paper_folder()
+    out: list[dict] = []
+    if not folder:
+        return [{"gate": "folder", "detail": "no paper folder yet"}]
+    st = paper_compile.status()
+    if not st.get("ok"):
+        bl = ", ".join(st.get("blockers") or
+                       (["build is stale / not compiled"]
+                        if not st.get("pdf_exists") else ["compile not ok"]))
+        out.append({"gate": "compile", "detail": "latest build not ok: " + bl})
+    pv = paper_lint.lint_paper_dir(folder)
+    if pv:
+        out.append({"gate": "prose", "detail": paper_lint.format_violations(pv)})
+    bv = paper_lint.lint_bib(folder)
+    if bv:
+        out.append({"gate": "bib", "detail": paper_lint.format_violations(bv)})
+    med = reviewer_sim_median()
+    if med is None:
+        out.append({"gate": "reviewer_sim",
+                    "detail": "reviewer_sim has not run on this paper yet"})
+    elif med < REVIEWER_SIM_THRESHOLD:
+        out.append({"gate": "reviewer_sim",
+                    "detail": f"median simulated score {med:.1f} < "
+                              f"{REVIEWER_SIM_THRESHOLD} (keep improving or "
+                              f"waive)"})
+    return [b for b in out if b["gate"] not in waive]
+
+
 def paper_ingest_env_prefix(project: str) -> str:
     """Env prefix every paper run needs so (a) `import arui` works and (b) the
     arui SDK can actually register + log to the dashboard.

@@ -4465,14 +4465,28 @@ def paper_anonymize_check():
 
 
 @router.post("/paper/submit/bundle")
-def paper_submit_bundle():
+async def paper_submit_bundle(request: Request):
     """Build paper/submission/<project>-<ts>.zip with PDF + .tex sources +
-    refs.bib + supplementary stub. Auto-pin as v-submitted on success."""
+    refs.bib + supplementary stub. Auto-pin as v-submitted on success.
+
+    GATED: refuses to bundle unless the paper passes compile (no undefined
+    refs), the prose lint (no em-dash / AI-slop), the bib lint (complete
+    citations), and the reviewer_sim median-score bar. The operator can
+    override specific gates with body ``{"waive": ["reviewer_sim", ...]}``."""
     import zipfile
     from . import paper as _paper
+    body = await _safe_json(request)
+    waive = body.get("waive") or []
+    if not isinstance(waive, list):
+        waive = []
     folder = _paper.paper_folder()
     if not folder:
         return {"ok": False, "detail": "no paper folder"}
+    blockers = _paper.bundle_blockers(folder, waive=waive)
+    if blockers:
+        return {"ok": False, "blocked": True, "blockers": blockers,
+                "detail": "bundle gate failed; fix the gates or waive them",
+                "waivable": [b["gate"] for b in blockers]}
     pdf = folder / "build" / "main.pdf"
     if not pdf.exists():
         return {"ok": False, "detail": "no PDF compiled yet"}
