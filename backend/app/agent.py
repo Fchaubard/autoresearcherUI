@@ -20,6 +20,44 @@ import subprocess
 from . import repo
 
 
+def _install_arui_pth(repo_root: str) -> None:
+    """Make `import arui` work from ANY python / ANY cwd, permanently.
+
+    The agent's training runs execute from the project workspace (not the
+    repo root) and inside arun's detached tmux sessions. Even though arun now
+    forwards PYTHONPATH, we ALSO drop an `arui_repo.pth` into each candidate
+    interpreter's site-packages so a bare `python train.py` works too. This
+    is exactly the workaround the agent kept hand-rolling (and burning ~10
+    min on) every fresh boot — now the platform just does it. Idempotent +
+    best-effort."""
+    snippet = (
+        "import site,os\n"
+        f"root={repo_root!r}\n"
+        "dirs=set()\n"
+        "try:\n"
+        " dirs.update(site.getsitepackages())\n"
+        "except Exception: pass\n"
+        "try:\n"
+        " dirs.add(site.getusersitepackages())\n"
+        "except Exception: pass\n"
+        "for d in dirs:\n"
+        " try:\n"
+        "  os.makedirs(d,exist_ok=True)\n"
+        "  open(os.path.join(d,'arui_repo.pth'),'w').write(root+'\\n')\n"
+        " except Exception: pass\n")
+    pythons = ["python3", "python",
+               os.path.join(repo_root, ".venv", "bin", "python")]
+    seen = set()
+    for py in pythons:
+        if py in seen:
+            continue
+        seen.add(py)
+        try:
+            subprocess.run([py, "-c", snippet], capture_output=True, timeout=20)
+        except Exception:
+            pass
+
+
 class FakeAgent:
     """A scripted stand-in for the Principal Researcher. Given an experiment
     repo whose program.md / train.py / ideas.md already exist, it parses the
@@ -224,6 +262,9 @@ class RealAgent:
         chattable; the setup prompt is handed to it once it has booted.
         """
         os.makedirs(self.workspace, exist_ok=True)
+        # Make `import arui` work from any python/cwd in the runs this agent
+        # will launch (recurring footgun — see _install_arui_pth).
+        _install_arui_pth(self.repo_root)
         env = {
             "ARUI_INGEST_URL": self.ingest_url,
             "ARUI_PROJECT": self.project_name,

@@ -201,6 +201,15 @@ automatically. For ad-hoc curl calls to the dashboard API, just use
 `-H "Authorization: Bearer $ARUI_INGEST_TOKEN"` (do NOT query the DB
 to find the passcode — it is already in $ARUI_INGEST_TOKEN).
 
+`import arui` ALWAYS WORKS — from any cwd, any python, and inside the
+detached tmux sessions that `arun` launches (the platform installs a path
+file + `arun` forwards the env for you). So NEVER debug `ModuleNotFoundError:
+arui`, NEVER hand-roll a `.pth`, and NEVER set PYTHONPATH yourself — that is
+all handled. If `import arui` somehow still fails, it is a PLATFORM bug:
+write one line to `AGENT_NEEDS_RESTART.md` and move on; do not burn time on
+it. (Always launch runs with `arun <run_id> python -u train.py …` so the env
+is forwarded.)
+
 For EVAL-only runs (no training loop — e.g. evaluating an ensemble), STILL
 call arui.log per example or per ensemble member with the running cumulative
 metric, e.g. `arui.log({"__METRIC__": cumulative_acc}, step=i)` after each

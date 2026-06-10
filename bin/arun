@@ -32,6 +32,18 @@ case "$CMD" in
   *">"*|*"&>"*) echo "arun: do NOT put a '>' file redirect in the command — arun already logs to $LOG and streams to the pane." >&2; exit 2;;
 esac
 tmux kill-session -t "$SESS" 2>/dev/null || true
-tmux new-session -d -s "$SESS" \
+# Forward the autoresearcherUI env INTO the detached session. A new tmux
+# session inherits the tmux SERVER's env, NOT this caller's — so without this
+# `import arui` fails (no PYTHONPATH) and the arui SDK can't reach the
+# dashboard (no ARUI_INGEST_URL/TOKEN), which made the agent waste ~10 min
+# hand-rolling a fix on every fresh boot. We pass them via `tmux -e`.
+ENVARGS=()
+PP="${ARUI_REPO:-}${PYTHONPATH:+:$PYTHONPATH}"
+[ -n "$PP" ] && ENVARGS+=(-e "PYTHONPATH=$PP")
+for v in ARUI_REPO ARUI_INGEST_URL ARUI_INGEST_TOKEN ARUI_PROJECT ARUI_KILL_CRITERIA; do
+  eval "val=\${$v:-}"
+  [ -n "$val" ] && ENVARGS+=(-e "$v=$val")
+done
+tmux new-session -d -s "$SESS" "${ENVARGS[@]}" \
   "cd '$WS' && PYTHONUNBUFFERED=1 stdbuf -oL -eL $CMD 2>&1 | tee '$LOG'"
 echo "arun: launched '$SESS' — live in the Sessions tab; log at $LOG"

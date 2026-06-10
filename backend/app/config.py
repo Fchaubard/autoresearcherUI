@@ -17,19 +17,18 @@ METRICS_DB = DATA_DIR / "metrics.duckdb"          # DuckDB: metric analytics
 ARTIFACTS_DIR = DATA_DIR / "artifacts"
 
 # Per-project agent workspaces. A project's code (program.md, train.py,
-# ideas.md, lessons.md, run logs, …) is STORED at <WORKSPACE_DIR>/<project>.
-# The bytes stay under data/ so the archive/backup + restore (which snapshot
-# DATA_DIR) keep working unchanged. For findability — the operator rightly
-# complained that data/workspace/<project> is buried — workspace_dir() also
-# surfaces each project as a symlink at the repo root: ./<project>/ . Tests
-# set ARUI_WORKSPACE_DIR to a tmp dir for isolation (and that also disables
-# the repo-root symlink so tests never write into the real repo).
+# ideas.md, lessons.md, run logs, …) LIVES at <WORKSPACE_DIR>/<project>.
+# Default to the repo ROOT so the agent actually works in ./<project>/ — easy
+# to find and edit, instead of the buried ./data/workspace/<project>. The
+# archive/backup is taught about this location (see archive.py). Tests set
+# ARUI_WORKSPACE_DIR to a tmp dir so they never write into the real repo.
 WORKSPACE_DIR = Path(os.environ["ARUI_WORKSPACE_DIR"]) \
-    if os.environ.get("ARUI_WORKSPACE_DIR") else DATA_DIR / "workspace"
+    if os.environ.get("ARUI_WORKSPACE_DIR") else ROOT
 
 
 def _ensure_root_ignored(name: str) -> None:
-    """Locally ignore the repo-root project symlink via .git/info/exclude.
+    """Locally ignore the repo-root project dir via .git/info/exclude so it
+    never shows as untracked.
 
     We deliberately do NOT touch the tracked .gitignore: a dirty .gitignore
     would block `git pull --ff-only` on every deploy. .git/info/exclude is
@@ -42,34 +41,23 @@ def _ensure_root_ignored(name: str) -> None:
         existing = exclude.read_text().splitlines() if exclude.exists() else []
         if line not in existing:
             with open(exclude, "a") as f:
-                f.write(f"\n# autoresearcher project workspace symlink\n{line}\n")
+                f.write(f"\n# autoresearcher project workspace\n{line}\n")
     except Exception:
         pass
 
 
 def workspace_dir(name: str):
-    """Absolute path to project <name>'s STORED workspace, created on demand.
-
-    In a real deploy (ARUI_WORKSPACE_DIR unset) it also creates a convenience
-    symlink at ROOT/<name> -> the stored dir, so the operator finds the
-    project at ./<name>/ instead of ./data/workspace/<name>/. Read-only
-    callers can use ``WORKSPACE_DIR / name`` directly."""
+    """Absolute path to project <name>'s workspace (./<name>/ at the repo root
+    in a real deploy), created on demand. When it lives at ROOT, register it
+    in .git/info/exclude so the project tree never pollutes git status.
+    Read-only callers can use ``WORKSPACE_DIR / name`` directly."""
     p = WORKSPACE_DIR / name
     try:
         p.mkdir(parents=True, exist_ok=True)
+        if WORKSPACE_DIR.resolve() == ROOT.resolve():
+            _ensure_root_ignored(name)
     except Exception:
-        return p
-    # Repo-root convenience symlink (production only — skipped in tests, which
-    # set ARUI_WORKSPACE_DIR, so we never drop symlinks into the real repo).
-    if not os.environ.get("ARUI_WORKSPACE_DIR"):
-        try:
-            link = ROOT / name
-            if not link.exists() and not link.is_symlink() \
-                    and link.resolve() != p.resolve():
-                link.symlink_to(p.resolve(), target_is_directory=True)
-                _ensure_root_ignored(name)
-        except Exception:
-            pass
+        pass
     return p
 
 HOST = os.environ.get("ARUI_HOST", "0.0.0.0")
