@@ -56,5 +56,5 @@ def test_lint_paper_dir_and_format(tmp_path):
     (tmp_path / "ok.tex").write_text("A plain clean sentence about ASR.\n")
     vs = L.lint_paper_dir(tmp_path)
     assert len(vs) == 1 and vs[0]["source"] == "intro.tex"
-    assert "1 prose violation" in L.format_violations(vs)
+    assert "1 violation" in L.format_violations(vs)
     assert "clean" in L.format_violations([])

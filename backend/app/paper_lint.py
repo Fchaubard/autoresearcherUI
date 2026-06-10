@@ -73,14 +73,78 @@ def lint_paper_dir(folder, exts=(".tex", ".md")) -> list[dict]:
     return out
 
 
+# ── bib lint: every \cite resolves; no placeholder / incomplete entries ────
+_CITE_RX = re.compile(r"\\cite[a-zA-Z]*\s*(?:\[[^\]]*\])?\s*\{([^}]*)\}")
+_ENTRY_RX = re.compile(r"@(\w+)\s*\{\s*([^,\s]+)\s*,")
+_SKIP_TYPES = {"comment", "string", "preamble", "set"}
+_PLACEHOLDER_RX = re.compile(r"\b(TODO|TBD|FIXME|XXX|\?\?\?|placeholder|unknown|"
+                             r"author\s*name|paper\s*title)\b", re.I)
+_REQUIRED = ("title", "author", "year")
+
+
+def _field(body: str, name: str):
+    m = re.search(r"\b" + name + r"\s*=\s*[{\"]([^}\"]*)", body, re.I)
+    return m.group(1).strip() if m else None
+
+
+def lint_bib(folder) -> list[dict]:
+    """Check that every \\cite resolves to a complete, non-placeholder .bib
+    entry. Returns violations (empty == clean). Mirrors Widom's "make all
+    citations complete and consistent; do not just paste random BibTeX". A
+    non-empty result BLOCKS bundling."""
+    folder = Path(folder)
+    tex, bib = "", ""
+    try:
+        for p in folder.rglob("*.tex"):
+            tex += "\n" + p.read_text(errors="ignore")
+        for p in folder.rglob("*.bib"):
+            bib += "\n" + p.read_text(errors="ignore")
+    except Exception:                                      # noqa: BLE001
+        pass
+    # parse bib entries -> {key: body up to next @}
+    entries: dict[str, str] = {}
+    ms = list(_ENTRY_RX.finditer(bib))
+    for i, m in enumerate(ms):
+        if m.group(1).lower() in _SKIP_TYPES:
+            continue
+        start = m.end()
+        end = ms[i + 1].start() if i + 1 < len(ms) else len(bib)
+        entries[m.group(2)] = bib[start:end]
+    cited: set[str] = set()
+    for m in _CITE_RX.finditer(tex):
+        for k in m.group(1).split(","):
+            k = k.strip()
+            if k:
+                cited.add(k)
+    out: list[dict] = []
+    for k in sorted(cited):
+        if k not in entries:
+            out.append({"kind": "bib", "key": k,
+                        "rule": "cited key has no .bib entry (will render [?])"})
+    for key, body in entries.items():
+        for f in _REQUIRED:
+            val = _field(body, f)
+            if not val:
+                out.append({"kind": "bib", "key": key,
+                            "rule": f"entry missing required field '{f}'"})
+            elif _PLACEHOLDER_RX.search(val):
+                out.append({"kind": "bib", "key": key,
+                            "rule": f"placeholder '{f}': {val[:60]!r}"})
+    return out
+
+
 def format_violations(violations: list[dict], limit: int = 40) -> str:
-    """Human-readable summary for an error message / event."""
+    """Human-readable summary for an error message / event. Handles both prose
+    (source/line/snippet) and bib (key) violations."""
     if not violations:
-        return "clean — no em-dashes or AI-slop found"
-    lines = [f"{len(violations)} prose violation(s):"]
+        return "clean: no em-dash, AI-slop, or citation issues found"
+    lines = [f"{len(violations)} violation(s):"]
     for v in violations[:limit]:
-        loc = f"{v.get('source','')}:{v.get('line','?')}"
-        lines.append(f"  [{v['kind']}] {loc}  {v['rule']}  ::  {v['snippet']}")
+        loc = (f"{v.get('source','')}:{v.get('line','?')}"
+               if v.get("source") or v.get("line")
+               else (f"[{v.get('key','')}]" if v.get("key") else ""))
+        tail = f"  ::  {v['snippet']}" if v.get("snippet") else ""
+        lines.append(f"  [{v.get('kind','?')}] {loc}  {v.get('rule','')}{tail}")
     if len(violations) > limit:
-        lines.append(f"  … and {len(violations) - limit} more")
+        lines.append(f"  ... and {len(violations) - limit} more")
     return "\n".join(lines)
