@@ -9,6 +9,7 @@ error in the build log, never raises.
 from __future__ import annotations
 
 import datetime as dt
+import re
 import shutil
 import subprocess
 import threading
@@ -16,6 +17,35 @@ from pathlib import Path
 
 from . import paper
 from .bus import bus
+
+# STRICT compile gate: these in the LaTeX log are FAILURES, not "usable with
+# warnings". A NeurIPS submission cannot ship with ?? / [?] standing in for a
+# reference or citation, so a build that produces a PDF but has any of these
+# is NOT ok.
+_BLOCKING_LOG_PATTERNS = [
+    (re.compile(r"There were undefined references", re.I), "undefined references"),
+    (re.compile(r"There were undefined citations", re.I), "undefined citations"),
+    (re.compile(r"Citation [`'\"][^`'\"]+['\"`]\s*(on page \d+\s*)?undefined", re.I),
+     "undefined citation"),
+    (re.compile(r"Reference [`'\"][^`'\"]+['\"`]\s*(on page \d+\s*)?undefined", re.I),
+     "undefined reference"),
+    (re.compile(r"LaTeX Warning: Citation .*undefined", re.I), "undefined citation"),
+    (re.compile(r"LaTeX Warning: Reference .*undefined", re.I), "undefined reference"),
+    (re.compile(r"I couldn't open .*\.bbl|No \\bibdata", re.I), "bibliography missing"),
+    (re.compile(r"Emergency stop|Fatal error occurred|! LaTeX Error", re.I),
+     "fatal LaTeX error"),
+]
+
+
+def compile_blockers(log: str) -> list[str]:
+    """Distinct blocking issues found in a LaTeX log (undefined refs/cites,
+    missing bib, fatal errors). Empty == the PDF is genuinely submission-clean.
+    Pure function so it is unit-testable without a TeX install."""
+    found: list[str] = []
+    for rx, label in _BLOCKING_LOG_PATTERNS:
+        if rx.search(log or "") and label not in found:
+            found.append(label)
+    return found
 
 _LOCK = threading.Lock()
 _LAST_BUILD: dict = {
@@ -130,23 +160,26 @@ def build(force: bool = False) -> dict:
                    "Install TeX Live or use the Docker image.")
             ok = False
         elapsed = (dt.datetime.now(dt.timezone.utc) - t0).total_seconds()
-        # latexmk returns exit code 1 on undefined refs / cite-key misses
-        # even when it produces a valid PDF. Treat the build as usable
-        # whenever a PDF actually exists; surface compile warnings in the
-        # log for the user to triage.
         pdf_path = folder / "build" / "main.pdf"
         pdf_exists = pdf_path.exists() and pdf_path.stat().st_size > 0
+        # STRICT: a PDF that still has undefined references / missing citations
+        # is NOT a successful build. latexmk/pdflatex happily emit a PDF with
+        # ?? placeholders; we refuse to call that ok so the agent must fix the
+        # refs before the paper can advance / bundle.
+        blockers = compile_blockers(log)
+        ok = bool(ok) and pdf_exists and not blockers
         _LAST_BUILD = {
             "at": dt.datetime.now(dt.timezone.utc).isoformat(),
-            "ok": bool(ok),
+            "ok": ok,
             "pdf_exists": pdf_exists,
+            "blockers": blockers,
             "has_warnings": pdf_exists and not ok,
             "stale": False,
             "log": log[-30000:],
             "elapsed_sec": round(elapsed, 1),
         }
         bus.publish("paper", "build_finished",
-                    {"ok": ok, "pdf_exists": pdf_exists,
+                    {"ok": ok, "pdf_exists": pdf_exists, "blockers": blockers,
                      "elapsed_sec": _LAST_BUILD["elapsed_sec"]})
         return dict(_LAST_BUILD)
 
