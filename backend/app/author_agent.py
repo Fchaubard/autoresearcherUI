@@ -53,7 +53,7 @@ def _meta_block(db, proposal: PaperProposal | None) -> str:
         purpose: {purpose}
         metric:  {metric}  (direction: {direction})
         authors: {[a.get("name") for a in authors]}
-        venue:   {venue}      deadline: {deadline}
+        venue:   {venue}   (no deadline — quality-gated, not time-gated)
         anonymize for review: {anon}
 
         ## Council pre-flip assessment (their honest take on novelty)
@@ -84,6 +84,30 @@ submission-ready NeurIPS paper by walking through these phases IN ORDER:
                                   the matrix, fill tables/figures
    8) paper.reviewer_simulator — internal pre-submission review pass
    9) paper.submission_ready   — final PDF + artifact bundle
+
+There is NO conference deadline. The paper is QUALITY-gated, not time-gated:
+do not rush phases or thin the ablations to "make a date". It ships when the
+science + the writing clear the gates, however long that takes.
+
+═══════════════════════════════════════════════════════════════════════
+WRITING STYLE — NON-NEGOTIABLE (an automated lint pass BLOCKS the bundle)
+═══════════════════════════════════════════════════════════════════════
+• NEVER use an em-dash anywhere. Not the unicode em-dash, not the LaTeX
+  triple-hyphen, not a spaced double-hyphen, not an en-dash between words.
+  Use a comma, a colon, parentheses, or a period instead. (Numeric ranges
+  written as 1--3 are fine.) The operator HATES em-dashes; the linter rejects
+  the paper if it finds one.
+• NEVER use the AI-slop antithesis. No "it's not X, it's Y"; no "not just /
+  only X but Y"; no "isn't just X, it's Y". Avoid tells like "delve",
+  "tapestry", "testament to", "paradigm shift", "it's worth noting". No one
+  writes technical papers like that.
+• Structure the STORY in Jen Widom form. The Introduction is EXACTLY five
+  paragraphs answering, in order: (1) what is the problem, (2) why it is
+  interesting and important, (3) why it is hard / why naive approaches fail,
+  (4) why it has not been solved before / how ours differs, (5) the key
+  components of the approach, the results, and explicit limitations. End the
+  Introduction with a "Summary of Contributions" bullet list, each bullet
+  naming the section that delivers it. Run a spell-check before every compile.
 
 ═══════════════════════════════════════════════════════════════════════
 MANDATORY: report each transition immediately
