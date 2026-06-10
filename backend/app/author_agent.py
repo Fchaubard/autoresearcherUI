@@ -66,17 +66,26 @@ submission-ready NeurIPS paper by walking through these phases IN ORDER:
 
    1) paper.whittle_claims     — read research-mode kept runs; pick the
                                   2-3 tightest paper-worthy claims
-   2) paper.lit_review         — find related work; file cite_paper
-                                  decisions; rebuild novelty narrative
-   3) paper.draft_v0           — scaffold main.tex + sections/*.tex
-                                  with TODO markers for tables/figures;
-                                  compile a v0 PDF
+   2) paper.lit_review         — REUSE the research-phase scoping lit
+                                  review as your starting point (read it
+                                  from GET /api/scope/status -> papers/
+                                  synthesis), then BOLSTER it with the
+                                  deeper related work the final claims
+                                  need; file cite_paper decisions; rebuild
+                                  the novelty narrative
+   3) paper.draft_v0           — scaffold main.tex + sections/*.tex AND
+                                  the bare TODO tables/<name>.tex +
+                                  figures/<name>.tikz(+.csv) skeleton for
+                                  every claim; compile a v0 PDF
    4) paper.plan_ablations     — derive the full ablation matrix any
                                   NeurIPS/ICML reviewer would expect
-                                  (datasets × model sizes × seeds);
-                                  estimate per-run wallclock
-   5) paper.build_gantt        — schedule the matrix against the
-                                  available GPUs (Gantt chart)
+                                  (datasets × model sizes × seeds), one
+                                  run per empty table cell / figure point;
+                                  set est_time_sec + depends_on on each
+   5) paper.build_gantt        — GET /api/paper/gantt for the real
+                                  dependency- + GPU-constrained schedule
+                                  (start/end, makespan, critical path) and
+                                  render it as an ACTUAL Gantt chart
    6) paper.operator_review    — ⛔ STOP. File "request_approval".
                                   Do NOT queue any runs until the
                                   operator clicks Approve.

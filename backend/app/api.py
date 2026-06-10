@@ -3703,6 +3703,29 @@ async def paper_runs_queue_batch(request: Request):
     return {"ok": True, "queued_ids": queued, "n": len(queued)}
 
 
+@router.get("/paper/gantt")
+def paper_gantt(db: Session = Depends(get_session)):
+    """Real dependency- + GPU-constrained schedule of the paper ablation runs
+    (the data behind the Gantt chart). Pulls proposed/queued/running paper runs
+    + the GPU count and returns per-run start/end (in GPU-seconds from now),
+    the makespan, total GPU-seconds, and the critical path."""
+    from . import paper_gantt as _g
+    n_gpus = db.query(Gpu).count() or 1
+    rows = (db.query(Run)
+            .filter(Run.context == "paper",
+                    Run.status.in_(("proposed", "queued", "running"))).all())
+    runs = [{
+        "id": r.id, "name": r.run_name,
+        "est_time_sec": int(r.est_time_sec or 0),
+        "gpus_required": int(r.gpus_required or 1),
+        "depends_on": (r.depends_on if isinstance(r.depends_on, list) else []),
+        "status": r.status,
+    } for r in rows]
+    out = _g.schedule(runs, n_gpus)
+    out["generated_at"] = _iso()
+    return out
+
+
 @router.get("/paper/runs/results")
 def paper_runs_results(since: str = "", status: str = "",
                         db: Session = Depends(get_session)):
