@@ -134,6 +134,52 @@ _IDLE_GPU_ALERT_AFTER_SEC = 30 * 60     # 30 minutes
 _IDLE_GPU_REPEAT_SEC = 60 * 60          # max one email/hour
 
 
+def _no_real_runs_yet() -> bool:
+    """True iff no real (non-probe/-smoke) run has ever been registered — i.e.
+    we are still in SETUP (scoping / scaffolding / preflight / bless) and the
+    research loop has not actually started running experiments. This is the
+    reviewer-independent signal for 'of course the GPUs are idle'."""
+    db = SessionLocal()
+    try:
+        from .models import Run
+        for r in db.query(Run).all():
+            nm = (r.run_name or r.id or "")
+            if not (nm.startswith("_probe") or nm.startswith("_smoke")):
+                return False
+        return True
+    except Exception:                                   # noqa: BLE001
+        return False
+    finally:
+        db.close()
+
+
+def _gpus_expected_idle() -> tuple[bool, str]:
+    """Is it NORMAL for GPUs to be idle right now? During setup (scoping,
+    scaffolding, the council code-review) and while paused or while the
+    council reviews the conclusion, idle GPUs are EXPECTED — not a stall — so
+    we must not email "research loop may be stuck". Returns (expected, why)."""
+    try:
+        from . import notify as _n
+        if _n.research_paused():
+            return True, "research is paused"
+    except Exception:                                   # noqa: BLE001
+        pass
+    # The big one — the misleading-email case the operator hit: in setup mode
+    # no experiment has run yet, so idle GPUs are expected, not a stall.
+    if _no_real_runs_yet():
+        return True, ("setup — no experiments have started yet "
+                      "(scoping / scaffolding / waiting on the code bless)")
+    try:
+        from . import council as _c
+        if not _c.is_code_blessed():
+            return True, "code is being re-reviewed (bless reset after an edit)"
+        if (_c.conclusion_state() or {}).get("status") == "pending":
+            return True, "the council is reviewing the research conclusion"
+    except Exception:                                   # noqa: BLE001
+        pass
+    return False, ""
+
+
 def _idle_gpu_escalation(ctx: dict) -> None:
     """Email + Summary-bubble alert when ALL GPUs sit idle for >= 30 min.
 
@@ -147,7 +193,11 @@ def _idle_gpu_escalation(ctx: dict) -> None:
     idle  = int(ctx.get("gpus_idle")  or 0)
     if total == 0:
         return
-    all_idle = (idle >= total)
+    # Phase gate: idle GPUs are only a STALL once we're past setup and the
+    # research is actually meant to be running. Otherwise treat as "working"
+    # so the stuck-timer never accrues (no misleading email during setup).
+    expected_idle, _why = _gpus_expected_idle()
+    all_idle = (idle >= total) and not expected_idle
     now_iso = _iso()
     now_ts = dt.datetime.now(dt.timezone.utc).timestamp()
     db = SessionLocal()
@@ -188,20 +238,28 @@ def _idle_gpu_escalation(ctx: dict) -> None:
         if now_ts - last_ts < _IDLE_GPU_REPEAT_SEC:
             return
         mins = int(age_sec // 60)
-        subject = (f"[autoresearcherUI] {total} GPU(s) idle {mins}m "
-                   "— research loop may be stuck")
+        try:
+            from . import lifecycle as _lc
+            status_line = _lc.summary_line()
+        except Exception:                               # noqa: BLE001
+            status_line = ""
+        subject = (f"[autoresearcherUI] research stalled — {total} GPU(s) "
+                   f"idle {mins}m mid-run")
         try:
             from . import notify
             notify.send_alert(
                 subject=subject,
-                headline=(f"All {total} GPU(s) have been idle for "
-                          f"{mins} minutes."),
+                headline=(
+                    "The code is blessed and the research loop should be "
+                    f"running, but all {total} GPU(s) have been idle for "
+                    f"{mins} minutes."
+                    + (f"  Status: {status_line}" if status_line else "")),
                 bullets=[
-                    "Agent may have crashed or be waiting in the REPL.",
-                    "Council deliberation may be in progress.",
-                    "Preflight may not yet have been blessed.",
-                    "A directive may have been malformed and the agent "
-                    "gave up.",
+                    "This is PAST setup, so idle GPUs here are a real stall "
+                    "— not the normal scoping/scaffolding/bless wait.",
+                    "The PI/supervisor will attempt auto-recovery; if it "
+                    "can't, the agent may be wedged in its REPL or out of "
+                    "ready directives.",
                 ],
                 action_text=(
                     "Open the dashboard, check the agent's tmux pane in "
