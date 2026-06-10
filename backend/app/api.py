@@ -3640,13 +3640,10 @@ async def paper_runs_queue(request: Request):
     if not cmd and train_args:
         folder = _paper.paper_folder()
         if folder:
-            from .config import ROOT
             workspace = str(folder.parent)
             cmd = (f"cd {workspace} && "
-                   f"PYTHONPATH={ROOT}:${{PYTHONPATH:-}} "
-                   f"ARUI_INGEST_URL=http://127.0.0.1:8000/api/track "
-                   f"ARUI_PROJECT={folder.parent.name} "
-                   f"python train.py {train_args}")
+                   + _paper.paper_ingest_env_prefix(folder.parent.name) + " "
+                   + f"python train.py {train_args}")
     if not cmd:
         return {"ok": False,
                 "detail": "Either cmd or train_args is required"}

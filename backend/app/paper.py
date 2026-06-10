@@ -334,6 +334,33 @@ def populate_claims_from_proposal(proposal_id: str = "") -> int:
         db.close()
 
 
+def paper_ingest_env_prefix(project: str) -> str:
+    """Env prefix every paper run needs so (a) `import arui` works and (b) the
+    arui SDK can actually register + log to the dashboard.
+
+    CRITICAL: ARUI_INGEST_URL must be the BASE url. The SDK appends
+    ``/api/track/run`` itself (see arui/__init__.py ``_BASE`` + ``_post``);
+    pointing it at ``.../api/track`` doubled the path to ``/api/track/api/
+    track/run`` so paper runs silently logged NOTHING. We also forward the
+    ingest token so logging keeps working once a passcode is set."""
+    from .config import ROOT, PORT
+    tok = ""
+    try:
+        from .auth import _saved_passcode
+        tok = _saved_passcode()
+    except Exception:                                   # noqa: BLE001
+        pass
+    parts = [
+        f"PYTHONPATH={ROOT}:${{PYTHONPATH:-}}",
+        f"ARUI_REPO={ROOT}",
+        f"ARUI_INGEST_URL=http://127.0.0.1:{PORT}",
+        f"ARUI_PROJECT={project}",
+    ]
+    if tok:
+        parts.append(f"ARUI_INGEST_TOKEN={tok}")
+    return " ".join(parts)
+
+
 def _default_run_cmd_for_project(role: str, suffix: str, seed: int,
                                   claim_title: str) -> str:
     """Build a runnable shell command for a paper-ablation row. v1 uses
@@ -365,15 +392,11 @@ def _default_run_cmd_for_project(role: str, suffix: str, seed: int,
     # Resolve the repo root so we can set PYTHONPATH the same way agent.py
     # does for the research agent — without it the project's `import arui`
     # in train.py raises ModuleNotFoundError and the run crashes immediately.
-    from .config import ROOT
-    repo_root = str(ROOT)
     workspace = str(folder.parent)
     return (f"cd {workspace} && "
-            f"PYTHONPATH={repo_root}:${{PYTHONPATH:-}} "
-            f"ARUI_INGEST_URL=http://127.0.0.1:8000/api/track "
-            f"ARUI_PROJECT={folder.parent.name} "
-            f"python train.py --mode {mode} "
-            f"--name pr_{suffix}_s{seed} --seed {seed}")
+            + paper_ingest_env_prefix(folder.parent.name) + " "
+            + f"python train.py --mode {mode} "
+            + f"--name pr_{suffix}_s{seed} --seed {seed}")
 
 
 def queue_ablations_for_claims(default_seeds: int = 3) -> int:
