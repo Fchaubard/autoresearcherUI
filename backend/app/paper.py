@@ -154,9 +154,11 @@ def _push_token() -> str:
 
 
 def _push_branch(root: Path) -> str:
-    # DEDICATED branch per project, NEVER main: pushing research+latex onto the
-    # origin's main would collide with the app's own main + pollute it.
-    return f"autoresearch/{root.name}"
+    # Push to the project repo's CURRENT branch. The project is its OWN
+    # dedicated GitHub repo (separate from the app), so its own main is the
+    # right target, no special branch needed.
+    b = _run_git(root, "rev-parse", "--abbrev-ref", "HEAD")
+    return b if b and b != "HEAD" else "main"
 
 
 def commit_paper_changes(folder: Path, message: str,

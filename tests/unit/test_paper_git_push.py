@@ -24,10 +24,13 @@ def _mk_repo(tmp_path, name):
     return root, latex
 
 
-def test_push_branch_name(arui_env, tmp_path):
+def test_push_branch_is_current_branch(arui_env, tmp_path):
+    # dedicated project repo -> push to its own current branch (e.g. main)
     from backend.app import paper
-    assert paper._push_branch(tmp_path / "llm-backdoor-removal") == \
-        "autoresearch/llm-backdoor-removal"
+    root, _ = _mk_repo(tmp_path, "ddd")
+    subprocess.run(["git", "-C", str(root), "checkout", "-q", "-B", "main"],
+                   capture_output=True)
+    assert paper._push_branch(root) == "main"
 
 
 def test_commit_into_enclosing_project_repo(arui_env, tmp_path, monkeypatch):
