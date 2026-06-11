@@ -64,3 +64,41 @@ def test_gantt_rows_grouped_and_numbered_by_figure(client, make_project):
     # command + duration carried through
     assert any("train.py" in (t["command"] or "") for t in tasks)
     assert any(t["duration_sec"] == 75600 for t in tasks)
+
+
+def test_enumerate_expands_the_grid(client, make_project):
+    make_project()
+    f1 = client.post("/api/paper/figures",
+                     json={"title": "Figure 1"}).json()["id"]
+    r = client.post("/api/paper/runs/enumerate", json={
+        "figure_id": f1, "name_prefix": "f1",
+        "arg_template": "--model {model} --lr {lr} --seed {seed}",
+        "axes": {"model": ["m70", "m160"], "lr": [1e-4, 3e-4],
+                 "seed": [0, 1, 2]},
+        "est_time_sec": 75600})
+    j = r.json()
+    assert j["ok"] is True and j["n"] == 2 * 2 * 3       # full cartesian grid
+    d = client.get("/api/paper/gantt").json()
+    assert len(d["tasks"]) == 12
+    assert all(t["figure_label"] == "Figure 1" for t in d["tasks"])
+    assert any("--model m70" in (t["command"] or "") for t in d["tasks"])
+    assert all(t["duration_sec"] == 75600 for t in d["tasks"])
+
+
+def test_enumerate_requires_figure_and_axes(client, make_project):
+    make_project()
+    assert client.post("/api/paper/runs/enumerate",
+                       json={"arg_template": "x", "axes": {"a": [1]}}
+                       ).json()["ok"] is False
+    f = client.post("/api/paper/figures", json={"title": "F"}).json()["id"]
+    assert client.post("/api/paper/runs/enumerate",
+                       json={"figure_id": f}).json()["ok"] is False
+
+
+def test_enumerate_proposed_status_for_dry_run(client, make_project):
+    make_project()
+    f = client.post("/api/paper/figures", json={"title": "F"}).json()["id"]
+    r = client.post("/api/paper/runs/enumerate", json={
+        "figure_id": f, "arg_template": "--seed {seed}",
+        "axes": {"seed": [0, 1]}, "status": "proposed"})
+    assert r.json()["status"] == "proposed"

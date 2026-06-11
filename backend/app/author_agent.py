@@ -396,22 +396,29 @@ seeds. Example: 5 sizes x 10 LRs x 3 seeds = 150 runs. A run that feeds BOTH
 figures counts ONCE: tag it to one figure_id (e.g. all sweep runs -> Figure 1;
 Figure 2 reads the same runs).
 
-STEP 3 - queue every run with figure_id + a reproducible command + duration +
-gpus. One run per grid cell; never collapse seeds or LRs.
-  curl -sS -X POST $ARUI_INGEST_URL/api/paper/runs/queue \\
+STEP 3 - queue the WHOLE grid for each figure in ONE call with
+/api/paper/runs/enumerate. Give it the arg_template (with {placeholders}) and
+the axis value lists; it expands the cartesian product and queues one run per
+cell tagged to the figure. THIS IS REQUIRED - do not skip it, do not just
+describe the plan. The Critical Path Gantt is empty until you do this.
+  curl -sS -X POST $ARUI_INGEST_URL/api/paper/runs/enumerate \\
     -H 'Content-Type: application/json' \\
-    -d '{"name":"f1_sz70m_lr3e-4_s0","figure_id":"pf-...","claim_id":"pc-...",
-         "role":"ablation","est_time_sec":75600,"gpus_required":1,
-         "train_args":"--model_size 70m --lr 3e-4 --seed 0"}'
-  # est_time_sec = wall-clock per run (21 h = 75600 s). The scheduler packs all
-  # runs across the REAL GPU count, so the Gantt shows the true makespan.
-Tip: build the full list in a shell loop and use /api/paper/runs/queue_batch
-({"runs":[ ... ]}) to queue them in one call.
+    -d '{"figure_id":"pf-...","claim_id":"pc-...","name_prefix":"f1",
+         "arg_template":"--model {model} --lr {lr} --seed {seed} --mode diff",
+         "axes":{"model":["EleutherAI/pythia-70m","EleutherAI/pythia-160m",
+                           "EleutherAI/pythia-410m"],
+                 "lr":[1e-4,3e-4,1e-3],"seed":[0,1,2]},
+         "est_time_sec":75600,"gpus_required":1}'
+  # -> {"ok":true,"n":27,...}. est_time_sec = wall-clock per run (21 h=75600 s).
+  # The scheduler packs all runs across the REAL GPU count -> true makespan.
+  # arg_template placeholders MUST match train.py's real flags (you read them
+  # in STEP 0) and the axes keys.
 
 RULES
-  - Always set figure_id, est_time_sec, gpus_required (1 unless model-parallel).
-  - train_args must be the EXACT flags train.py accepts.
+  - Call enumerate ONCE per figure (a run that feeds 2 figures: tag it to one).
+  - arg_template flags must be the EXACT flags train.py accepts.
   - Queue them ALL up front (autopilot: no approval gate).
+  - After enumerating, GET /api/paper/gantt and confirm tasks is non-empty.
 Then POST /api/paper/phase {"phase":"paper.run_ablations"} and open the Critical
 Path tab to confirm the Gantt filled in. Poll /paper/runs/results and integrate
 results into the figures as runs finish.

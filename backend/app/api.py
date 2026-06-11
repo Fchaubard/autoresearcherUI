@@ -3703,6 +3703,83 @@ async def paper_runs_queue_batch(request: Request):
     return {"ok": True, "queued_ids": queued, "n": len(queued)}
 
 
+@router.post("/paper/runs/enumerate")
+async def paper_runs_enumerate(request: Request):
+    """Deterministically expand a sweep grid into ONE queued run per cell, all
+    tagged to a figure. This is how the author turns a figure into its full run
+    matrix in a single reliable call instead of hand-queuing N runs.
+
+    Body:
+      {
+        figure_id:   "pf-…",            # required
+        claim_id:    "pc-…",
+        arg_template:"--model {model} --lr {lr} --seed {seed} --mode diff",
+        axes:        {"model":["m70","m160",…], "lr":[1e-4,3e-4,…], "seed":[0,1,2]},
+        est_time_sec:75600, gpus_required:1, name_prefix:"f1",
+        status:      "queued"|"proposed"   # proposed = stage in the Gantt, do
+                                            # NOT dispatch to a GPU (dry run)
+      }
+    Returns {ok, n, status}.
+    """
+    import itertools
+    from . import paper as _paper, paper_phase as _pp
+    body = await _safe_json(request)
+    figure_id = body.get("figure_id") or ""
+    arg_template = body.get("arg_template") or ""
+    axes = body.get("axes") or {}
+    if not figure_id:
+        return {"ok": False, "detail": "figure_id is required"}
+    if not arg_template or not isinstance(axes, dict) or not axes:
+        return {"ok": False, "detail": "arg_template + non-empty axes required"}
+    names = list(axes.keys())
+    value_lists = [axes[n] if isinstance(axes[n], list) else [axes[n]]
+                   for n in names]
+    combos = list(itertools.product(*value_lists))
+    if len(combos) > 2000:
+        return {"ok": False, "detail": f"{len(combos)} runs exceeds 2000 cap"}
+    est = int(body.get("est_time_sec") or 5400)
+    gpus = max(1, int(body.get("gpus_required") or 1))
+    claim_id = body.get("claim_id") or ""
+    role = body.get("role") or "ablation"
+    prefix = (body.get("name_prefix") or "run")[:24]
+    forced = (body.get("status") or "").strip()
+    run_status = (forced if forced in ("proposed", "queued")
+                  else ("queued" if _pp.plan_approved() else "proposed"))
+    folder = _paper.paper_folder()
+    workspace = str(folder.parent) if folder else "."
+    env_prefix = (_paper.paper_ingest_env_prefix(folder.parent.name)
+                  if folder else "")
+    db = SessionLocal()
+    ids = []
+    try:
+        for combo in combos:
+            mapping = {names[i]: combo[i] for i in range(len(names))}
+            try:
+                args = arg_template.format(**mapping)
+            except Exception:
+                return {"ok": False,
+                        "detail": "arg_template placeholders must match axes keys"}
+            cmd = (f"cd {workspace} && {env_prefix} "
+                   f"python train.py {args}").replace("  ", " ").strip()
+            short = "_".join(f"{k}{str(v).replace('/', '-')[:10]}"
+                             for k, v in mapping.items())[:90]
+            rid = "pr-" + os.urandom(5).hex()
+            db.add(Run(id=rid, run_name=f"{prefix}_{short}"[:120],
+                       status=run_status, context="paper",
+                       paper_claim_id=claim_id, paper_figure_id=figure_id,
+                       paper_role=role,
+                       config={"cmd": cmd, "queued_by": "enumerate",
+                               "train_args": args},
+                       gpus_required=gpus, est_time_sec=est, depends_on=[]))
+            ids.append(rid)
+        db.commit()
+    finally:
+        db.close()
+    bus.publish("paper", "runs_enumerated",
+                {"figure_id": figure_id, "n": len(ids), "status": run_status})
+    return {"ok": True, "n": len(ids), "status": run_status}
+
+
 @router.post("/paper/figures")
 async def paper_figure_create(request: Request):
     """Author files a figure/table to plan, so its ablation runs can be tagged
