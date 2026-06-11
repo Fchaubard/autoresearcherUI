@@ -508,6 +508,29 @@ def _build_paper_context() -> dict:
         bs = paper_compile.status() or {}
     finally:
         db.close()
+    # Writing-review inputs so the PI can enforce Jen Widom structure +
+    # NOVELTY + the style rules each cycle (it reads, the author edits).
+    intro_tex = ""
+    relwork_tex = ""
+    prose_lint = []
+    try:
+        folder = _paper.paper_folder()
+        if folder:
+            for cand in ("sections/01_introduction.tex",
+                         "sections/01_intro.tex"):
+                p = folder / cand
+                if p.exists():
+                    intro_tex = p.read_text(errors="ignore")[:6000]
+                    break
+            rw = folder / "sections" / "02_related_work.tex"
+            if rw.exists():
+                relwork_tex = rw.read_text(errors="ignore")[:4000]
+            from . import paper_lint
+            v = paper_lint.lint_paper_dir(folder)
+            if v:
+                prose_lint = [paper_lint.format_violations(v)[:800]]
+    except Exception:                                      # noqa: BLE001
+        pass
     return {
         "now": _iso(),
         "mode": "paper",
@@ -518,8 +541,10 @@ def _build_paper_context() -> dict:
         "n_claims": len(claims),
         "claims": [{
             "id": c["id"], "title": c["title"],
+            "summary": (c.get("summary_md") or "")[:500],
             "status": c.get("status"),
             "evidence_strength": c.get("evidence_strength"),
+            "novelty": c.get("novelty"),
             "ready": c.get("ready"),
         } for c in claims],
         "paper_runs_by_status": by_status,
@@ -534,6 +559,9 @@ def _build_paper_context() -> dict:
         },
         "recent_paper_events": recent_events,
         "author_tail": author_tail,
+        "intro_tex": intro_tex,
+        "related_work_tex": relwork_tex,
+        "prose_lint": prose_lint,
     }
 
 
@@ -543,10 +571,27 @@ driving the paper to submission — queueing ablation runs, killing
 divergers, integrating results, writing LaTeX. You wake up periodically,
 read what's happening, and nudge the Author Agent if it's drifting.
 
-You do NOT run experiments. You do NOT touch LaTeX. You type SHORT,
-ACTIONABLE messages into the author's tmux.
+You do NOT run experiments and you do NOT edit LaTeX yourself. You READ the
+draft (intro_tex, related_work_tex, claims, prose_lint) and type SHORT,
+ACTIONABLE messages into the author's tmux. You are the QUALITY GATE: there is
+no human reviewer, so on every cycle you must police structure, novelty, and
+style, not just logistics.
 
-NUDGE the Author Agent if you see:
+REVIEW THE WRITING each cycle (this is your main job, nudge on any miss):
+  - JEN WIDOM STRUCTURE: the Introduction (intro_tex) must be EXACTLY five
+    paragraphs answering, in order: (1) what is the problem, (2) why it is
+    important, (3) why it is hard / why naive approaches fail, (4) why it is
+    unsolved / how ours differs, (5) the approach + results + explicit
+    limitations, then a "Summary of Contributions" bullet list. If it drifts,
+    nudge: "rewrite the intro to the 5-paragraph Widom structure: <which para
+    is missing/weak>".
+  - NOVELTY: every claim must be sharply differentiated from related_work_tex.
+    If a claim reads incremental or overlaps prior work, nudge: "sharpen the
+    novelty of claim <id> vs <prior work> — state precisely what is new".
+  - STYLE: prose_lint must be empty. If it flags an em-dash or the AI-slop
+    antithesis ("not X, it's Y"), nudge: "fix the style violations: <detail>".
+
+ALSO nudge the Author Agent if you see:
   - Paper runs finished in the last hour but no commits to paper/ →
     "integrate the new results from run X into section Y and recompile".
   - A claim has 0 supporting runs queued or completed →
