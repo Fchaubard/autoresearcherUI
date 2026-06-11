@@ -456,7 +456,8 @@ def _build_paper_context() -> dict:
     from . import paper as _paper
     db = SessionLocal()
     try:
-        from .models import (PaperClaim, PaperMeta, PaperDecision)
+        from .models import (PaperClaim, PaperMeta, PaperDecision,
+                             PaperFigure)
         meta = db.query(PaperMeta).first()
         claims = [c.dict() for c in db.query(PaperClaim).all()]
         # All paper runs grouped by status
@@ -464,6 +465,9 @@ def _build_paper_context() -> dict:
         by_status: dict[str, int] = {}
         for r in prs:
             by_status[r.status] = by_status.get(r.status, 0) + 1
+        # Figures + how many runs are tagged to a figure (the run matrix).
+        n_figures = db.query(PaperFigure).count()
+        n_runs_for_figures = sum(1 for r in prs if (r.paper_figure_id or ""))
         # Last few finished — with metric
         recent_done = []
         for r in sorted([r for r in prs if r.status in
@@ -548,6 +552,8 @@ def _build_paper_context() -> dict:
             "ready": c.get("ready"),
         } for c in claims],
         "paper_runs_by_status": by_status,
+        "n_figures": n_figures,
+        "runs_tagged_to_figures": n_runs_for_figures,
         "recent_finished_runs": recent_done,
         "gpus_total": len(gpus),
         "gpus_idle": idle_gpus,
@@ -590,6 +596,12 @@ REVIEW THE WRITING each cycle (this is your main job, nudge on any miss):
     novelty of claim <id> vs <prior work> — state precisely what is new".
   - STYLE: prose_lint must be empty. If it flags an em-dash or the AI-slop
     antithesis ("not X, it's Y"), nudge: "fix the style violations: <detail>".
+
+CRITICAL - EMPTY RUN MATRIX: if n_figures > 0 but runs_tagged_to_figures == 0,
+the author registered figures but never queued their ablation runs (the Critical
+Path Gantt is empty). Nudge HARD: "queue the run matrix NOW: for each figure
+call POST /api/paper/runs/enumerate with arg_template + axes (model x lr x seed)
++ est_time_sec. The Gantt is empty until you do." This takes priority.
 
 ALSO nudge the Author Agent if you see:
   - Paper runs finished in the last hour but no commits to paper/ →
