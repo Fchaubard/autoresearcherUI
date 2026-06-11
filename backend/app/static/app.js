@@ -1504,9 +1504,6 @@ async function openPaperOnboard(proposalId) {
     `<option>ICLR 2026</option><option>CVPR 2026</option>` +
     `<option>ACL 2026</option><option>EMNLP 2026</option>` +
     `<option>Workshop</option></select></div>` +
-    `<div class="onb-field"><label class="onb-lbl">Submission deadline (UTC)</label>` +
-    `<input class="onb-in" type="datetime-local" id="po-deadline" ` +
-    `value="${t.toISOString().slice(0,16)}"/></div>` +
     `<div class="onb-field"><label class="onb-lbl">Author name</label>` +
     `<input class="onb-in" id="po-author-name" placeholder="Francois Chaubard"/></div>` +
     `<div class="onb-field"><label class="onb-lbl">Author affiliation</label>` +
@@ -1523,10 +1520,8 @@ async function openPaperOnboard(proposalId) {
   m.querySelector('#onx').onclick = () => sc.remove();
   m.querySelector('#po-cancel').onclick = () => sc.remove();
   m.querySelector('#po-go').onclick = async () => {
-    const dl = m.querySelector('#po-deadline').value;
     const meta = {
       venue: m.querySelector('#po-venue').value,
-      deadline_iso: dl ? new Date(dl + 'Z').toISOString() : '',
       anonymize: m.querySelector('#po-anon').checked,
       authors: [{ name: m.querySelector('#po-author-name').value,
                   affiliation: m.querySelector('#po-author-aff').value }],
@@ -6122,13 +6117,12 @@ function paintToday(b) {
     <div class="td-summary">
       <h2>Today · ${esc(meta.venue || 'Paper')}</h2>
       <div class="td-stats">
-        <div class="td-stat"><b>${days != null ? (days.toFixed ? days.toFixed(1) : days) : '—'}</b><span>days till deadline</span><div class="td-bar td-bar-days"><i style="width:${daysPct}%"></i></div></div>
         <div class="td-stat"><b>${claims}</b><span>claims</span></div>
         <div class="td-stat"><b>${doneN}/${doneN+queued+running.length}</b><span>runs done</span><div class="td-bar td-bar-runs"><i style="width:${doneN+queued+running.length ? Math.round(100*doneN/(doneN+queued+running.length)) : 0}%"></i></div></div>
         <div class="td-stat"><b>${running.length}</b><span>running now</span></div>
       </div>
       ${(claims === 0) ? `<div class="td-warn td-empty-warn">
-        ⚠ No claims yet. Click <button class="btn xs inline" id="td-scaffold-now">⚡ Scaffold now</button> to import them from the council's pre-flip assessment.
+        ⏳ The author agent is whittling the claims from your runs. They will appear here automatically once it files them, no action needed.
       </div>` : ''}
     </div>
 
@@ -9103,10 +9097,7 @@ async function renderShareViewer(token) {
     '<div class="share-wrap">' +
     '<div class="share-hd">' +
     '<div class="share-brand">autoresearcher<span>UI</span></div>' +
-    '<div class="share-sub">' + esc(d.venue || 'paper share') +
-    (d.days_till_deadline != null
-      ? ' · ' + d.days_till_deadline.toFixed(1) + ' days to deadline'
-      : '') + '</div>' +
+    '<div class="share-sub">' + esc(d.venue || 'paper share') + '</div>' +
     '</div>' +
     (d.has_pdf
       ? '<div class="share-pdf"><iframe src="/api/paper/share/' +

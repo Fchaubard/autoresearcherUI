@@ -638,7 +638,11 @@ def budget_summary() -> dict:
 
 
 def days_till_deadline() -> float | None:
-    db = SessionLocal()
+    # Paper mode is QUALITY-gated, not time-gated (operator decision): there is
+    # no conference deadline concept. Always None so no "N days till deadline"
+    # countdown / progress bar / email ever renders.
+    return None
+    db = SessionLocal()                                # noqa: F811  (dead code kept for ref)
     try:
         meta = _meta(db)
         if not meta or not meta.deadline_iso:
