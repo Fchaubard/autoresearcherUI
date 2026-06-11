@@ -4556,8 +4556,8 @@ async def paper_submit_bundle(request: Request):
                 zf.write(p, arcname=p.name)
         for p in folder.glob("sections/*.tex"):
             zf.write(p, arcname=f"sections/{p.name}")
-        for p in folder.glob("figures/*"):
-            zf.write(p, arcname=f"figures/{p.name}")
+        for p in folder.glob("tikz/*"):
+            zf.write(p, arcname=f"tikz/{p.name}")
         for n in ("refs.bib",):
             if (folder / n).exists():
                 zf.write(folder / n, arcname=n)

@@ -165,7 +165,7 @@ def write_table(folder, name: str, tex: str) -> str:
 
 def write_figure(folder, fig: dict) -> dict:
     from pathlib import Path
-    d = Path(folder) / "figures"
+    d = Path(folder) / "tikz"          # tikz + data live under latex/tikz/
     d.mkdir(parents=True, exist_ok=True)
     (d / fig["tikz_name"]).write_text(fig["tikz"])
     (d / fig["csv_name"]).write_text(fig["csv"])

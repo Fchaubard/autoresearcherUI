@@ -40,9 +40,9 @@ def paper_folder(db=None) -> Path | None:
         meta = db.query(PaperMeta).first()
         if not proj:
             return None
-        sub = (meta.paper_folder if meta else None) or "paper"
-        # paper lives under data/workspace/<repo>/<sub>/
-        # so it's a sibling of the research workspace.
+        sub = (meta.paper_folder if meta else None) or "latex"
+        # LaTeX lives under <WORKSPACE>/<repo>/latex/  (tikz under latex/tikz/),
+        # tracked inside the project repo so every edit is committed + pushed.
         cfg = db.query(Setting).filter(Setting.key == "onboarding").first()
         repo = ((cfg.value.get("repo_name") if cfg and isinstance(cfg.value, dict)
                  else None) or proj.name or "project").strip()
@@ -92,9 +92,22 @@ def _run_git(folder: Path, *args: str, timeout: int = 20) -> str:
     return out.stdout.strip() if out.returncode == 0 else ""
 
 
+def _enclosing_git_root(folder: Path) -> Path | None:
+    """The git repo that already contains `folder`, or None."""
+    out = subprocess.run(
+        ["git", "-C", str(folder), "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True)
+    return Path(out.stdout.strip()) if out.returncode == 0 else None
+
+
 def ensure_paper_repo(folder: Path) -> None:
-    """Initialize paper/ as a git repo on first entry, with an initial
-    commit so subsequent commits have a parent."""
+    """If latex/ already lives inside the project's git repo (the cloned
+    research repo), do NOT create a nested repo — the project repo tracks
+    latex/ so commits cover code + LaTeX together and can be pushed. Only
+    init a standalone repo if latex/ is not inside any git repo."""
+    folder.mkdir(parents=True, exist_ok=True)
+    if _enclosing_git_root(folder) is not None:
+        return
     if not (folder / ".git").exists():
         try:
             subprocess.run(["git", "init", "-q", str(folder)],

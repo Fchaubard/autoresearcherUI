@@ -86,5 +86,6 @@ def test_writers_create_files(tmp_path):
     fig = R.bare_figure(name="f1", caption="c", label="fig:1",
                         xlabel="x", ylabel="y", series_names=["a"])
     R.write_figure(tmp_path, fig)
-    assert (tmp_path / "figures" / "f1.tikz").exists()
-    assert (tmp_path / "figures" / "f1.csv").exists()
+    # tikz pictures + their data live under latex/tikz/
+    assert (tmp_path / "tikz" / "f1.tikz").exists()
+    assert (tmp_path / "tikz" / "f1.csv").exists()

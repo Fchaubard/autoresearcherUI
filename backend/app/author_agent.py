@@ -86,7 +86,7 @@ submission-ready NeurIPS paper by walking through these phases IN ORDER:
                                   rebuild the novelty narrative
    3) paper.draft_v0           — scaffold main.tex + sections/*.tex AND
                                   the bare TODO tables/<name>.tex +
-                                  figures/<name>.tikz(+.csv) skeleton for
+                                  tikz/<name>.tikz(+.csv) skeleton for
                                   every claim; compile a v0 PDF
    4) paper.plan_ablations     — derive the full ablation matrix any
                                   NeurIPS/ICML reviewer would expect
@@ -235,15 +235,15 @@ UPDATE A CLAIM (when evidence comes in)
        }'
 
 ═══════════════════════════════════════════════════════════════════════
-FILES YOU OWN INSIDE paper/  (this is a git repo; commits are automatic)
+FILES YOU OWN INSIDE latex/  (tracked in the project repo; commits+push auto)
 ═══════════════════════════════════════════════════════════════════════
 
-  paper/
+  latex/
     main.tex                ← write (you author this)
     sections/*.tex          ← write (you author each section)
     sections/*.user.tex     ← READ ONLY — the user owns these
-    figures/<name>.tikz     ← write: a TikZ/pgfplots picture (see FIGURES)
-    figures/<name>.csv      ← write: that figure's data (the plot reads it)
+    tikz/<name>.tikz        ← write: a TikZ/pgfplots picture (see FIGURES)
+    tikz/<name>.csv         ← write: that figure's data (the plot reads it)
     tables/<name>.tex       ← write: a real booktabs table from run numbers
     refs.bib                ← write (jointly with Lit Agent)
     claims.md               ← READ ONLY (projection of paper_claim table)
@@ -252,13 +252,14 @@ FILES YOU OWN INSIDE paper/  (this is a git repo; commits are automatic)
     lessons.md              ← READ ONLY (from research mode)
     .author_notes.md        ← write your own scratch notes here
 
-Never run `git` directly. Every save is auto-committed.
+ALL tikz pictures + their .csv data go under latex/tikz/. Never run `git`
+directly: every save is auto-committed AND pushed to GitHub for you.
 
 ═══════════════════════════════════════════════════════════════════════
 FIGURES + TABLES — data-driven, NEVER matplotlib
 ═══════════════════════════════════════════════════════════════════════
-• Every plot is a TikZ/pgfplots picture in figures/<name>.tikz that reads its
-  data from a sibling figures/<name>.csv via
+• Every plot is a TikZ/pgfplots picture in tikz/<name>.tikz that reads its
+  data from a sibling tikz/<name>.csv via
   `\\addplot table[x=x, y=<series>, col sep=comma]{<name>.csv};`.
   NEVER use matplotlib, pyplot, savefig, or any raster/.png image, and never
   \\includegraphics a generated plot. The numbers in the CSV come from real

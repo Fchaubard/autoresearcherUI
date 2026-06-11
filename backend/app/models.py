@@ -182,7 +182,7 @@ class PaperMeta(Base):
     gpu_budget_hours = Column(Float, default=800.0)
     llm_budget_daily_usd = Column(Float, default=20.0)
     title_preference = Column(String, default="auto")
-    paper_folder = Column(String, default="paper")
+    paper_folder = Column(String, default="latex")
     # Phase: proposal | scaffold | daily | reviewer_sim | submission |
     #        rebuttal | camera_ready | archived
     phase = Column(String, default="proposal")
