@@ -1,6 +1,6 @@
-"""The operator GPU gate must be REAL: paper runs queued before the operator
-approves the ablation plan are 'proposed' (not dispatched to a GPU), and
-approving the plan flips them to 'queued'.
+"""AUTOPILOT: there is NO operator GPU gate. Paper runs queue straight to
+'queued' (paper_runner launches them) and the ablation plan is always
+auto-approved, so the paper never waits on a human to approve GPU spend.
 """
 import pytest
 
@@ -27,26 +27,18 @@ def _run_status(rid_name):
         db.close()
 
 
-def test_queue_is_proposed_before_plan_approval(client, make_project):
+def test_paper_runs_auto_queue_no_gate(client, make_project):
     make_project()
     r = client.post("/api/paper/runs/queue",
                     json={"name": "abl1", "cmd": "echo hi"})
     assert r.status_code == 200
     j = r.json()
     assert j["ok"] is True
-    assert j["status"] == "proposed" and j["gated"] is True
-    assert _run_status("abl1") == "proposed"
+    # straight to queued, not gated behind an operator approval
+    assert j["status"] == "queued" and j.get("gated") is False
+    assert _run_status("abl1") == "queued"
 
 
-def test_approve_plan_releases_proposed_runs(client, make_project):
-    make_project()
-    client.post("/api/paper/runs/queue", json={"name": "abl1", "cmd": "echo hi"})
-    assert _run_status("abl1") == "proposed"
+def test_plan_is_always_approved(arui_env):
     from backend.app import paper_phase
-    out = paper_phase.approve_plan(by="op")
-    assert out["queued_count"] >= 1
-    assert _run_status("abl1") == "queued"          # released to the scheduler
-    # and once approved, new runs queue directly
-    r2 = client.post("/api/paper/runs/queue",
-                     json={"name": "abl2", "cmd": "echo hi"})
-    assert r2.json()["status"] == "queued"
+    assert paper_phase.plan_approved() is True

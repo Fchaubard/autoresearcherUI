@@ -1,5 +1,6 @@
-"""The paper bundle is GATED: compile-clean + no em-dash/slop + complete
-citations + a reviewer_sim median that clears the bar (or operator waiver).
+"""The paper bundle is gated by AUTOMATIC quality lints only (compile-clean +
+no em-dash/slop + complete citations + TikZ assets). AUTOPILOT: reviewer_sim is
+NOT a gate anymore (no human approvals) — it is advisory only.
 """
 import json
 
@@ -21,8 +22,10 @@ def test_bundle_blocked_by_prose_bib_and_reviewer(arui_env, tmp_path,
     monkeypatch.setattr(paper_compile, "status",
                         lambda: {"ok": True, "pdf_exists": True})
     gates = {b["gate"] for b in paper.bundle_blockers()}
-    assert {"prose", "bib", "reviewer_sim"} <= gates
+    assert {"prose", "bib"} <= gates
     assert "compile" not in gates
+    # reviewer_sim is NOT a gate under autopilot
+    assert "reviewer_sim" not in gates
 
 
 def test_compile_blocker_propagates(arui_env, tmp_path, monkeypatch):
@@ -35,15 +38,15 @@ def test_compile_blocker_propagates(arui_env, tmp_path, monkeypatch):
     assert "compile" in {b["gate"] for b in paper.bundle_blockers()}
 
 
-def test_operator_waiver_removes_gate(arui_env, tmp_path, monkeypatch):
+def test_clean_paper_has_no_blockers(arui_env, tmp_path, monkeypatch):
     from backend.app import paper, paper_compile
     f = _mk(tmp_path, "A clean introduction about attack success rate.")
     monkeypatch.setattr(paper, "paper_folder", lambda *a, **k: f)
     monkeypatch.setattr(paper_compile, "status",
                         lambda: {"ok": True, "pdf_exists": True})
-    # only reviewer_sim blocks (it never ran); operator can waive it
-    assert {b["gate"] for b in paper.bundle_blockers()} == {"reviewer_sim"}
-    assert paper.bundle_blockers(waive=["reviewer_sim"]) == []
+    # autopilot: a compile-clean, lint-clean paper bundles with NO gates left
+    # (reviewer_sim never blocks even though it has not run)
+    assert paper.bundle_blockers() == []
 
 
 def test_reviewer_sim_median_clears_bar(arui_env, tmp_path, monkeypatch,

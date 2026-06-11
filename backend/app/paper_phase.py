@@ -36,13 +36,15 @@ from .models import Event, PaperClaim, PaperCitation, PaperDecision, \
     PaperMeta, Run, Setting
 
 
+# AUTOPILOT flow — no human gate. operator_review is removed: the author goes
+# straight from build_gantt to run_ablations (runs auto-queue). reviewer_simulator
+# is an ADVISORY pass, not a gate. The PI + council review each revision.
 PAPER_PHASES = (
     "paper.whittle_claims",
     "paper.lit_review",
     "paper.draft_v0",
     "paper.plan_ablations",
     "paper.build_gantt",
-    "paper.operator_review",
     "paper.run_ablations",
     "paper.reviewer_simulator",
     "paper.submission_ready",
@@ -56,7 +58,6 @@ PHASE_LABELS = {
     "paper.draft_v0":           "Drafting v0",
     "paper.plan_ablations":     "Planning ablations",
     "paper.build_gantt":        "Building Gantt",
-    "paper.operator_review":    "Awaiting approval",
     "paper.run_ablations":      "Running ablations",
     "paper.reviewer_simulator": "Reviewer simulation",
     "paper.submission_ready":   "Submission ready",
@@ -300,9 +301,11 @@ def request_changes(by: str = "operator", note: str = "") -> dict:
 
 
 def plan_approved(db=None) -> bool:
-    """Quick boolean for paper_runner: is the ablation plan approved?"""
-    g = get_gate(db)
-    return ((g.get("plan") or {}).get("status") or "").lower() == "approved"
+    """AUTOPILOT (operator: no human gating — let the paper rip). The ablation
+    plan is always auto-approved so the author never waits on a human GPU gate;
+    proposed runs flow straight to queued. The PI + council review each
+    revision for quality/novelty instead of a human approving GPU spend."""
+    return True
 
 
 # ─────────────────────────── status overview ──────────────────────────
@@ -403,29 +406,8 @@ def _compute_issues(db, phase: dict, progress: dict, gate: dict) -> list[dict]:
     """Build the issues list (same shape as health/service)."""
     out: list[dict] = []
     cur_phase = phase.get("phase", "")
-    # Operator-review needs human action — surface as critical.
-    if (cur_phase == "paper.operator_review"
-            and (gate.get("plan") or {}).get("status") == "pending"):
-        out.append({
-            "code": "operator_approval_required",
-            "severity": 2,                  # SEV_CRITICAL
-            "summary": ("Author has a plan ready — your approval needed "
-                        "before any GPU hours are burned"),
-            "evidence": {
-                "ablations_planned":
-                    (progress.get("ablations") or {}).get("proposed", 0),
-            },
-            "since": (gate.get("plan") or {}).get("requested_at") or "",
-            "actions": [
-                {"label": "View plan", "kind": "view_plan"},
-                {"label": "Approve",
-                 "method": "POST",
-                 "href": "/api/paper/plan/approve"},
-                {"label": "Request changes",
-                 "method": "POST",
-                 "href": "/api/paper/plan/request_changes"},
-            ],
-        })
+    # (Autopilot: operator_approval gate removed — the paper never waits on a
+    # human to approve GPU spend. The PI/council review each revision instead.)
     # Author error — also critical.
     if cur_phase == "paper.error":
         out.append({

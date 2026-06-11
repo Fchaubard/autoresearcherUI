@@ -4849,25 +4849,13 @@ def paper_antipatterns_run():
 
 
 def _file_nudge(title: str, body: str) -> int:
-    """File a nudge ONLY if a near-duplicate (same title) isn't already
-    pending — prevents flooding the queue on repeated watcher ticks.
-    Returns 1 if filed, 0 if deduped."""
-    from . import paper as _paper
-    db = SessionLocal()
-    try:
-        existing = db.query(PaperDecision).filter(
-            PaperDecision.status == "pending",
-            PaperDecision.title == title).first()
-        if existing:
-            return 0
-    finally:
-        db.close()
-    _paper.file_decision(
-        source="system", kind="approve_text",
-        title=title, body_md=body,
-        default_action="approve",
-        priority=3)
-    return 1
+    """AUTOPILOT (operator: no human approvals — let the paper rip). The human
+    decision queue is disabled: we no longer file approve_* nags. The same
+    signals (failure spikes, missing reviewer sim, stale compile) are handled
+    by the PI loop, which nudges the AUTHOR directly via its tmux session
+    instead of asking the human to click Approve. No-op, kept so existing
+    callers don't break."""
+    return 0
 
 
 @router.get("/lessons")

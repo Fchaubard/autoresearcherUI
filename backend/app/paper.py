@@ -361,9 +361,11 @@ def bundle_blockers(folder=None, waive=()) -> list[dict]:
     submission. Returns a list of {gate, detail}; empty == clear to bundle.
     `waive` is a set of gate names the OPERATOR explicitly overrides.
 
-    Gates: (1) compile clean (no undefined refs), (2) no em-dash / AI-slop
-    prose, (3) complete + consistent citations, (4) the simulated-reviewer
-    pass has run and its median score clears the bar."""
+    Gates are AUTOMATIC quality lints only (no human approval): (1) compile
+    clean (no undefined refs), (2) no em-dash / AI-slop prose, (3) complete +
+    consistent citations, (4) assets are TikZ/CSV not raster. The reviewer
+    simulator is NOT a gate anymore — it's advisory feedback the author/PI act
+    on, never a human approval the paper waits on."""
     from . import paper_lint, paper_compile
     waive = set(waive or ())
     folder = folder or paper_folder()
@@ -385,15 +387,9 @@ def bundle_blockers(folder=None, waive=()) -> list[dict]:
     av = paper_lint.lint_assets(folder)
     if av:
         out.append({"gate": "assets", "detail": paper_lint.format_violations(av)})
-    med = reviewer_sim_median()
-    if med is None:
-        out.append({"gate": "reviewer_sim",
-                    "detail": "reviewer_sim has not run on this paper yet"})
-    elif med < REVIEWER_SIM_THRESHOLD:
-        out.append({"gate": "reviewer_sim",
-                    "detail": f"median simulated score {med:.1f} < "
-                              f"{REVIEWER_SIM_THRESHOLD} (keep improving or "
-                              f"waive)"})
+    # NOTE: reviewer_sim is intentionally NOT a gate (operator: no reviewer
+    # gating, no human approvals — the paper just rips). reviewer_sim_median()
+    # is still computed for advisory display, but never blocks the bundle.
     return [b for b in out if b["gate"] not in waive]
 
 
