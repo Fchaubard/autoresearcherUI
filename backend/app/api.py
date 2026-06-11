@@ -3747,11 +3747,20 @@ def paper_gantt(db: Session = Depends(get_session)):
     from . import paper_gantt as _g
     import datetime as _dt
     n_gpus = db.query(Gpu).count() or 1
-    rows = (db.query(Run)
-            .filter(Run.context == "paper",
-                    Run.status.in_(("proposed", "queued", "running",
-                                    "done", "kept", "kept_novel", "success",
-                                    "crashed", "failed", "error"))).all())
+    # The Critical Path Gantt is the PAPER's figure run-matrix: include every
+    # active run (proposed/queued/running), but only FINISHED runs that are
+    # tagged to a figure (so historical research runs don't flood the table).
+    active = (db.query(Run)
+              .filter(Run.context == "paper",
+                      Run.status.in_(("proposed", "queued", "running"))).all())
+    done_tagged = (db.query(Run)
+                   .filter(Run.context == "paper",
+                           Run.paper_figure_id != None,            # noqa: E711
+                           Run.paper_figure_id != "",
+                           Run.status.in_(("done", "kept", "kept_novel",
+                                           "success", "crashed", "failed",
+                                           "error"))).all())
+    rows = active + done_tagged
     # Figure labels: "Figure 1", "Figure 2", ... in stable order of first
     # appearance among the runs (so the two requested figures get 1 + 2).
     fig_order: list[str] = []
