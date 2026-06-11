@@ -3703,26 +3703,111 @@ async def paper_runs_queue_batch(request: Request):
     return {"ok": True, "queued_ids": queued, "n": len(queued)}
 
 
+@router.post("/paper/figures")
+async def paper_figure_create(request: Request):
+    """Author files a figure/table to plan, so its ablation runs can be tagged
+    to it (figure_id) and grouped in the Critical Path Gantt. Body:
+    {title (required), kind? (line|bar|table|scatter), claim_id?, caption_md?}.
+    Returns the new figure id."""
+    body = await _safe_json(request)
+    title = (body.get("title") or "").strip()
+    if not title:
+        return {"ok": False, "detail": "title is required"}
+    db = SessionLocal()
+    try:
+        fid = "pf-" + os.urandom(5).hex()
+        db.add(PaperFigure(
+            id=fid, title=title[:300],
+            kind=(body.get("kind") or "line"),
+            claim_id=body.get("claim_id") or "",
+            caption_md=body.get("caption_md") or "",
+            status="planned"))
+        db.commit()
+    finally:
+        db.close()
+    bus.publish("paper", "figure_created", {"id": fid})
+    return {"ok": True, "id": fid}
+
+
+@router.get("/paper/figures")
+def paper_figures_list(db: Session = Depends(get_session)):
+    return {"figures": [f.dict() for f in db.query(PaperFigure).all()]}
+
+
 @router.get("/paper/gantt")
 def paper_gantt(db: Session = Depends(get_session)):
     """Real dependency- + GPU-constrained schedule of the paper ablation runs
-    (the data behind the Gantt chart). Pulls proposed/queued/running paper runs
-    + the GPU count and returns per-run start/end (in GPU-seconds from now),
-    the makespan, total GPU-seconds, and the critical path."""
+    (the data behind the Critical Path Gantt). Returns one ROW per run with the
+    columns the Gantt table needs: figure label + per-figure run number +
+    command + duration + status + scheduled start/end (+ gpu lane), plus the
+    makespan + critical path.
+
+    Includes finished runs (done/kept/failed) too so the table shows the whole
+    plan, not just what's left."""
     from . import paper_gantt as _g
+    import datetime as _dt
     n_gpus = db.query(Gpu).count() or 1
     rows = (db.query(Run)
             .filter(Run.context == "paper",
-                    Run.status.in_(("proposed", "queued", "running"))).all())
-    runs = [{
+                    Run.status.in_(("proposed", "queued", "running",
+                                    "done", "kept", "kept_novel", "success",
+                                    "crashed", "failed", "error"))).all())
+    # Figure labels: "Figure 1", "Figure 2", ... in stable order of first
+    # appearance among the runs (so the two requested figures get 1 + 2).
+    fig_order: list[str] = []
+    for r in rows:
+        fid = r.paper_figure_id or ""
+        if fid and fid not in fig_order:
+            fig_order.append(fid)
+    figs = {f.id: f for f in db.query(PaperFigure).all()}
+    fig_label = {fid: f"Figure {i}" for i, fid in enumerate(fig_order, 1)}
+    # Only the schedulable runs go through the GPU scheduler; finished runs are
+    # appended afterward (so they still appear as completed rows).
+    sched_states = ("proposed", "queued", "running")
+    sched_in = [{
         "id": r.id, "name": r.run_name,
         "est_time_sec": int(r.est_time_sec or 0),
         "gpus_required": int(r.gpus_required or 1),
         "depends_on": (r.depends_on if isinstance(r.depends_on, list) else []),
         "status": r.status,
-    } for r in rows]
-    out = _g.schedule(runs, n_gpus)
-    out["generated_at"] = _iso()
+    } for r in rows if r.status in sched_states]
+    out = _g.schedule(sched_in, n_gpus)
+    detail = {r.id: r for r in rows}
+    now = _dt.datetime.now(_dt.timezone.utc)
+
+    def _cmd(r):
+        return ((r.config or {}).get("cmd", "")
+                if r and isinstance(r.config, dict) else "")
+
+    tasks = list(out.get("tasks", []))
+    # append finished runs as zero-width "done" rows (no schedule slot)
+    scheduled_ids = {t["id"] for t in tasks}
+    for r in rows:
+        if r.id not in scheduled_ids:
+            tasks.append({"id": r.id, "name": r.run_name, "gpu": -1,
+                          "start_sec": 0, "end_sec": 0,
+                          "est_time_sec": int(r.est_time_sec or 0),
+                          "depends_on": [], "status": r.status})
+    # enrich every row + number runs per figure (by scheduled start order)
+    tasks.sort(key=lambda t: (t.get("start_sec", 0), t.get("id", "")))
+    per_fig: dict[str, int] = {}
+    for t in tasks:
+        r = detail.get(t["id"])
+        fid = (r.paper_figure_id if r else "") or ""
+        per_fig[fid] = per_fig.get(fid, 0) + 1
+        t["figure_id"] = fid
+        t["figure_label"] = fig_label.get(fid, "unassigned")
+        t["figure_title"] = (figs[fid].title if fid in figs else "")
+        t["run_number"] = per_fig[fid]
+        t["command"] = _cmd(r)
+        t["duration_sec"] = int(t.get("est_time_sec") or 0)
+        t["start_iso"] = (now + _dt.timedelta(
+            seconds=t.get("start_sec", 0))).isoformat()
+        t["end_iso"] = (now + _dt.timedelta(
+            seconds=t.get("end_sec", 0))).isoformat()
+    out["tasks"] = tasks
+    out["n_gpus"] = n_gpus
+    out["generated_at"] = now.isoformat()
     return out
 
 

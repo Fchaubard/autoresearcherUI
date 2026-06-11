@@ -6648,22 +6648,114 @@ function paintCriticalPath(b) {
     </table>`;
 
   b.innerHTML = `
-    <div class="cp-h">
-      <b>Milestones to ship</b>
-      <span style="color:var(--muted);font-size:12px;margin-left:8px">
-        ${milestones.filter(m=>m.status==='done').length}/${milestones.length} complete
-      </span>
+    <div class="cpg-head">
+      <b>Critical Path — ablation run schedule</b>
+      <span class="cpg-sub" id="cpg-sub">scheduling…</span>
     </div>
-    <div class="ms-list">${milestoneHTML}</div>
-    ${coverageHTML}
-    <details class="cp-gantt-details" style="margin-top:22px">
-      <summary>Per-run schedule (Gantt) — secondary view</summary>
-      <div id="cp-gantt-inner"></div>
+    <div id="cpg-table" class="cpg-table-wrap">
+      <div class="empty2">Loading the run schedule…</div>
+    </div>
+    <details class="cp-ms-details" style="margin-top:20px">
+      <summary>Milestones to ship — ${milestones.filter(m=>m.status==='done').length}/${milestones.length} complete</summary>
+      <div class="ms-list" style="margin-top:10px">${milestoneHTML}</div>
+      ${coverageHTML}
     </details>
   `;
-  // Render the gantt inside the collapsible <details>.
-  const gantt = b.querySelector('#cp-gantt-inner');
-  if (gantt) _paintGantt(gantt, runs, claims);
+  renderCriticalPathGantt('cpg-table', 'cpg-sub');
+}
+
+
+// The real Gantt: one row per ablation run, grouped + numbered per figure,
+// with command / duration / status / scheduled start+end and a timeline bar.
+// Data comes from the dependency- + GPU-constrained schedule (GET /paper/gantt).
+function _cpgFmtDur(sec) {
+  sec = Math.round(sec || 0);
+  if (sec < 60) return sec + 's';
+  const m = Math.round(sec / 60);
+  if (m < 60) return m + ' min';
+  const h = sec / 3600;
+  return (h >= 10 ? Math.round(h) : h.toFixed(1)) + ' h';
+}
+
+function _cpgInjectStyle() {
+  if (document.getElementById('cpg-style')) return;
+  const s = document.createElement('style');
+  s.id = 'cpg-style';
+  s.textContent = `
+    .cpg-head{display:flex;align-items:baseline;gap:10px;margin-bottom:10px}
+    .cpg-sub{color:var(--muted);font-size:12px}
+    .cpg-table-wrap{overflow-x:auto;border:1px solid var(--line,#222);border-radius:8px}
+    table.cpg-table{border-collapse:collapse;width:100%;font-size:12px;min-width:760px}
+    table.cpg-table th{position:sticky;top:0;background:var(--panel,#0e0f13);text-align:left;
+      padding:7px 10px;color:var(--muted);font-weight:600;border-bottom:1px solid var(--line,#222);white-space:nowrap}
+    table.cpg-table td{padding:5px 10px;border-bottom:1px solid var(--line,#1a1b20);vertical-align:middle}
+    .cpg-row:hover{background:rgba(255,255,255,.03)}
+    .cpg-fig{font-weight:600;white-space:nowrap}
+    .cpg-num{color:var(--muted);text-align:right;width:48px}
+    .cpg-cmd{font-family:ui-monospace,Menlo,monospace;color:var(--fg,#cdd);max-width:280px;
+      overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .cpg-dur,.cpg-time{white-space:nowrap;color:var(--muted)}
+    .cpg-pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:600;text-transform:lowercase}
+    .cpg-running{background:rgba(234,179,8,.18);color:#eab308}
+    .cpg-queued{background:rgba(99,102,241,.16);color:#818cf8}
+    .cpg-proposed{background:rgba(167,139,250,.16);color:#a78bfa}
+    .cpg-done{background:rgba(34,197,94,.16);color:#22c55e}
+    .cpg-failed{background:rgba(239,68,68,.16);color:#ef4444}
+    .cpg-gantt-h{width:38%}
+    .cpg-track{position:relative;height:14px;background:rgba(255,255,255,.04);border-radius:3px;min-width:160px}
+    .cpg-bar{position:absolute;top:1px;height:12px;border-radius:3px;min-width:3px}
+    .cpg-bar.cpg-running{background:#eab308}.cpg-bar.cpg-queued{background:#6366f1}
+    .cpg-bar.cpg-proposed{background:#a78bfa}.cpg-bar.cpg-done{background:#22c55e}
+    .cpg-bar.cpg-failed{background:#ef4444}
+  `;
+  document.head.appendChild(s);
+}
+
+async function renderCriticalPathGantt(tableId, subId) {
+  _cpgInjectStyle();
+  const host = document.getElementById(tableId);
+  if (!host) return;
+  let d;
+  try { d = await api('/paper/gantt'); }
+  catch (e) { host.innerHTML = '<div class="empty2">Could not load the run schedule.</div>'; return; }
+  const tasks = (d && d.tasks) || [];
+  const sub = subId ? document.getElementById(subId) : null;
+  if (sub) sub.textContent = `${tasks.length} runs · ${d.n_gpus || 1} GPUs · makespan ${_cpgFmtDur(d.makespan_sec || 0)}`;
+  if (!tasks.length) {
+    host.innerHTML = '<div class="empty2">No ablation runs planned yet. At the planning phase the author enumerates every run per figure (the LR × seed × model-size sweep) and queues them here.</div>';
+    return;
+  }
+  const span = Math.max(1, d.makespan_sec ||
+    Math.max.apply(null, tasks.map(t => t.end_sec || 0).concat([1])));
+  const cls = (s) => ({running:'cpg-running',queued:'cpg-queued',proposed:'cpg-proposed',
+    done:'cpg-done',kept:'cpg-done',kept_novel:'cpg-done',success:'cpg-done',
+    crashed:'cpg-failed',failed:'cpg-failed',error:'cpg-failed'}[s] || 'cpg-queued');
+  const fmtClock = (iso) => { try { return new Date(iso).toLocaleString([],
+    {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}); } catch (e) { return ''; } };
+  const rows = tasks.map(t => {
+    const left = 100 * (t.start_sec || 0) / span;
+    const width = Math.max(0.6, 100 * ((t.end_sec || 0) - (t.start_sec || 0)) / span);
+    const c = cls(t.status);
+    const shortCmd = (t.command || '').replace(/^cd .*?&&\s*/, '')
+      .replace(/^[A-Z0-9_]+=\S+\s+/g, '').slice(0, 90);
+    const isDone = ['done','kept','kept_novel','success','crashed','failed','error'].includes(t.status);
+    const bar = isDone ? '' :
+      `<div class="cpg-track"><i class="cpg-bar ${c}" style="left:${left.toFixed(2)}%;width:${width.toFixed(2)}%"></i></div>`;
+    return `<tr class="cpg-row">
+      <td class="cpg-fig">${esc(t.figure_label || 'unassigned')}</td>
+      <td class="cpg-num">${t.run_number || ''}</td>
+      <td class="cpg-cmd" title="${esc(t.command || '')}">${esc(shortCmd || t.name || '—')}</td>
+      <td class="cpg-dur">${_cpgFmtDur(t.duration_sec || 0)}</td>
+      <td><span class="cpg-pill ${c}">${esc(t.status)}</span></td>
+      <td class="cpg-time">${isDone ? '—' : fmtClock(t.start_iso)}</td>
+      <td class="cpg-time">${isDone ? '—' : fmtClock(t.end_iso)}</td>
+      <td class="cpg-gantt-cell">${bar}</td>
+    </tr>`;
+  }).join('');
+  host.innerHTML = `<table class="cpg-table">
+    <thead><tr><th>FigureID</th><th>Run #</th><th>Command</th><th>Duration</th>
+      <th>Status</th><th>Start</th><th>End</th><th class="cpg-gantt-h">Gantt</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
 }
 
 

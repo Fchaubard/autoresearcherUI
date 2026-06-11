@@ -88,11 +88,15 @@ submission-ready NeurIPS paper by walking through these phases IN ORDER:
                                   the bare TODO tables/<name>.tex +
                                   tikz/<name>.tikz(+.csv) skeleton for
                                   every claim; compile a v0 PDF
-   4) paper.plan_ablations     — derive the full ablation matrix any
-                                  NeurIPS/ICML reviewer would expect
-                                  (datasets × model sizes × seeds), one
-                                  run per empty table cell / figure point;
-                                  set est_time_sec + depends_on on each
+   4) paper.plan_ablations     — READ .author_plan_prompt.md and EXECUTE it
+                                  exactly: it is your meta-prompt for turning
+                                  each figure into the full training-run matrix
+                                  (register figures via POST /api/paper/figures
+                                  to get figure_id, then queue one run per grid
+                                  cell -- model_size x lr x seed -- each with
+                                  figure_id + train_args + est_time_sec +
+                                  gpus_required). This fills the Critical Path
+                                  Gantt.
    5) paper.build_gantt        — GET /api/paper/gantt for the real
                                   dependency- + GPU-constrained schedule
                                   (start/end, makespan, critical path) and
@@ -364,6 +368,56 @@ results → write sections → recompile → repeat.
 """
 
 
+# ── plan meta-prompt (run enumeration per figure) ──────────────────────────
+# Written to <latex>/.author_plan_prompt.md on setup. The author READS +
+# EXECUTES it at paper.plan_ablations (after draft_v0, once claims + a figure
+# list exist) to turn every figure into the exact training-run matrix and queue
+# it, so the Critical Path Gantt fills in.
+_PLAN_META_PROMPT = """# META-PROMPT: enumerate the run matrix per figure
+
+INVOKE THIS after draft_v0 (you have a first draft, a claims list, and a figure
+list). Goal: turn EACH figure into the exact set of training runs that produce
+it, and queue them ALL so the Critical Path Gantt populates.
+
+STEP 0 - read train.py to learn its EXACT flags (model size, lr, seed, dataset).
+
+STEP 1 - register each figure to get a figure_id:
+  curl -sS -X POST $ARUI_INGEST_URL/api/paper/figures \\
+    -H 'Content-Type: application/json' \\
+    -d '{"title":"Figure 1: Val Acc (best) vs. Model Size","kind":"line","claim_id":"pc-..."}'
+  # -> {"ok":true,"id":"pf-..."}  save each id.
+The figures to build (add more if a claim needs them):
+  Figure 1: Val Acc (best) vs. Model Size
+  Figure 2: Best LR vs. Model Size
+
+STEP 2 - enumerate EVERY run. A "vs model size" plot that takes the best over
+LR and the mean over seeds needs the FULL grid: model_sizes x learning_rates x
+seeds. Example: 5 sizes x 10 LRs x 3 seeds = 150 runs. A run that feeds BOTH
+figures counts ONCE: tag it to one figure_id (e.g. all sweep runs -> Figure 1;
+Figure 2 reads the same runs).
+
+STEP 3 - queue every run with figure_id + a reproducible command + duration +
+gpus. One run per grid cell; never collapse seeds or LRs.
+  curl -sS -X POST $ARUI_INGEST_URL/api/paper/runs/queue \\
+    -H 'Content-Type: application/json' \\
+    -d '{"name":"f1_sz70m_lr3e-4_s0","figure_id":"pf-...","claim_id":"pc-...",
+         "role":"ablation","est_time_sec":75600,"gpus_required":1,
+         "train_args":"--model_size 70m --lr 3e-4 --seed 0"}'
+  # est_time_sec = wall-clock per run (21 h = 75600 s). The scheduler packs all
+  # runs across the REAL GPU count, so the Gantt shows the true makespan.
+Tip: build the full list in a shell loop and use /api/paper/runs/queue_batch
+({"runs":[ ... ]}) to queue them in one call.
+
+RULES
+  - Always set figure_id, est_time_sec, gpus_required (1 unless model-parallel).
+  - train_args must be the EXACT flags train.py accepts.
+  - Queue them ALL up front (autopilot: no approval gate).
+Then POST /api/paper/phase {"phase":"paper.run_ablations"} and open the Critical
+Path tab to confirm the Gantt filled in. Poll /paper/runs/results and integrate
+results into the figures as runs finish.
+"""
+
+
 # ── lifecycle ─────────────────────────────────────────────────────────────
 
 
@@ -539,6 +593,12 @@ def start(proposal_id: str = "") -> dict:
     if not folder:
         return {"status": "error", "detail": "no paper folder"}
     paper.ensure_paper_repo(folder)
+    # Drop the run-enumeration meta-prompt so the author can read + execute it
+    # at the plan_ablations phase (after draft_v0).
+    try:
+        (folder / ".author_plan_prompt.md").write_text(_PLAN_META_PROMPT)
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[author] could not write plan meta-prompt: {e}", flush=True)
     # Bootstrap files the agent will read first.
     paper.write_projections()
     # Prompt the agent receives on first turn.
