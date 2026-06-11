@@ -4172,10 +4172,19 @@ async def paper_decision_resolve(did: str, request: Request):
 
 @router.post("/paper/recompile")
 async def paper_recompile(request: Request):
-    from . import paper_compile
+    from . import paper_compile, paper as _paper
     body = await _safe_json(request)
     force = bool(body.get("force"))
     status = paper_compile.build(force=force)
+    # Every recompile is the author's per-edit checkpoint: commit code + LaTeX
+    # and push to GitHub (dedicated branch). Best-effort, never blocks build.
+    try:
+        folder = _paper.paper_folder()
+        if folder:
+            msg = body.get("message") or "author: recompile"
+            _paper.commit_paper_changes(folder, str(msg)[:200])
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[recompile] autocommit failed: {e}", flush=True)
     return status
 
 

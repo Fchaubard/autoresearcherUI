@@ -132,20 +132,82 @@ def ensure_paper_repo(folder: Path) -> None:
             print(f"[paper] git init failed: {e}", flush=True)
 
 
+def _push_token() -> str:
+    """GitHub token used to push the project. From env ARUI_GIT_PUSH_TOKEN or
+    the Setting `git.push_token`. Empty disables push (local commits only)."""
+    t = os.environ.get("ARUI_GIT_PUSH_TOKEN", "").strip()
+    if t:
+        return t
+    try:
+        from .models import Setting
+        db = SessionLocal()
+        try:
+            row = (db.query(Setting)
+                   .filter(Setting.key == "git.push_token").first())
+            if row and isinstance(row.value, dict):
+                return (row.value.get("token") or "").strip()
+        finally:
+            db.close()
+    except Exception:                                      # noqa: BLE001
+        pass
+    return ""
+
+
+def _push_branch(root: Path) -> str:
+    # DEDICATED branch per project, NEVER main: pushing research+latex onto the
+    # origin's main would collide with the app's own main + pollute it.
+    return f"autoresearch/{root.name}"
+
+
 def commit_paper_changes(folder: Path, message: str,
                          author: str = "Author Agent") -> str:
-    """Stage all changes in paper/ and commit. Returns the new SHA, or ''."""
+    """Commit code + LaTeX into the PROJECT repo and push to origin on a
+    dedicated branch (autoresearch/<project>). Returns the new SHA, or ''.
+
+    Staging is scoped to already-tracked files (code edits) + the latex/ tree
+    so we never sweep huge untracked data/checkpoint blobs into the repo.
+    Push is best-effort: a missing token / non-GitHub origin / network error
+    degrades to a local commit (logged), never blocks the author."""
+    root = _enclosing_git_root(folder) or folder
+    tok = _push_token()
     try:
-        subprocess.run(["git", "-C", str(folder), "add", "-A"],
-                       capture_output=True, timeout=15)
+        branch = _push_branch(root) if tok else ""
+        if branch:
+            cur = _run_git(root, "rev-parse", "--abbrev-ref", "HEAD")
+            if cur != branch:
+                subprocess.run(["git", "-C", str(root), "checkout", "-B",
+                                branch], capture_output=True, timeout=15)
+        # stage tracked-file edits (code) + the whole latex/ subtree
+        subprocess.run(["git", "-C", str(root), "add", "-u"],
+                       capture_output=True, timeout=20)
+        try:
+            rel = str(folder.resolve().relative_to(root.resolve()))
+        except Exception:                                  # noqa: BLE001
+            rel = str(folder)
+        subprocess.run(["git", "-C", str(root), "add", "-A", "--", rel],
+                       capture_output=True, timeout=20)
         subprocess.run(
-            ["git", "-C", str(folder), "-c",
-             f"user.name={author}", "commit", "-q", "-m", message],
-            capture_output=True, timeout=15)
-        sha = _run_git(folder, "rev-parse", "HEAD")
+            ["git", "-C", str(root), "-c", f"user.name={author}", "-c",
+             "user.email=author-agent@autoresearcher.local",
+             "commit", "-q", "-m", message],
+            capture_output=True, timeout=20)
+        sha = _run_git(root, "rev-parse", "HEAD")
+        if branch:
+            origin = _run_git(root, "remote", "get-url", "origin")
+            if origin.startswith("https://github.com/"):
+                authed = origin.replace(
+                    "https://github.com/",
+                    f"https://x-access-token:{tok}@github.com/")
+                out = subprocess.run(
+                    ["git", "-C", str(root), "push", authed,
+                     f"HEAD:{branch}"], capture_output=True, text=True,
+                    timeout=90)
+                if out.returncode != 0:
+                    print(f"[paper] push failed: {out.stderr[-300:]}",
+                          flush=True)
         return sha
-    except Exception as e:
-        print(f"[paper] commit failed: {e}", flush=True)
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[paper] commit/push failed: {e}", flush=True)
         return ""
 
 
