@@ -6146,7 +6146,7 @@ function paintToday(b) {
   const ago_ = (iso) => iso ? ago(iso) : '—';
   b.innerHTML = `
     <div class="td-summary">
-      <h2>Today · ${esc(meta.venue || 'Paper')}</h2>
+      <h2>Today</h2>
       <div class="td-stats">
         <div class="td-stat"><b>${claims}</b><span>claims</span></div>
         <div class="td-stat"><b>${doneN}/${doneN+queued+running.length}</b><span>runs done</span><div class="td-bar td-bar-runs"><i style="width:${doneN+queued+running.length ? Math.round(100*doneN/(doneN+queued+running.length)) : 0}%"></i></div></div>
