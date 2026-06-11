@@ -295,6 +295,13 @@ def file_decision(*, source: str, kind: str, title: str, body_md: str = "",
         bus.publish("paper", "decision_added", {"id": did, "kind": kind})
     except Exception:
         pass
+    # AUTOPILOT (operator: no human approvals / no decision queue). Auto-resolve
+    # with the default action so the side-effects still apply (e.g. cite_paper
+    # -> PaperCitation) but nothing ever sits pending for a human to click.
+    try:
+        resolve_decision(did, default_action or "approve")
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[paper] auto-resolve decision failed: {e}", flush=True)
     return did
 
 
