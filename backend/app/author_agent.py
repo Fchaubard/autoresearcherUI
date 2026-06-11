@@ -16,6 +16,8 @@ import os
 import shlex
 import subprocess
 import textwrap
+import threading
+import time
 from pathlib import Path
 
 from . import paper
@@ -374,6 +376,152 @@ def is_running() -> bool:
     return _tmux_alive(SESSION)
 
 
+# ── robust brief-feed ──────────────────────────────────────────────────────
+# The author boots into the Claude Code welcome screen. A fixed-sleep
+# send-keys dance ("sleep 6 -> 2 -> Enter -> sleep 10 -> brief") is flaky with
+# newer Claude Code (the Fable announce screen / model picker intercepts), so
+# the author could end up alive-but-idle, parked at the prompt, never having
+# received its instructions. This feeds the brief by POLLING the pane for
+# readiness, dismissing the trust/consent prompt only if it actually appears,
+# then verifying the brief was accepted (retrying once if it sits queued).
+
+_AUTHOR_BRIEF = (
+    "Read .author_prompt.txt in this directory and carry out the "
+    "paper-writing work it describes. First read claims.md, paper_runs.md, "
+    "paper_figures.md, lessons.md. Report each phase via POST "
+    "/api/paper/phase. You are on AUTOPILOT: there are no human approval "
+    "gates, so do not stop and wait for anyone. Keep going until the PI and "
+    "council stop finding issues."
+)
+
+# Substrings that mean Claude Code is actively working (brief was accepted).
+_BUSY_MARKERS = ("cultivat", "waddl", "tokens", "running ", "thinking",
+                 "↑", "esc to interrupt to")
+
+
+def _pane_text(session: str) -> str:
+    out = subprocess.run(["tmux", "capture-pane", "-t", session, "-p"],
+                         capture_output=True, text=True)
+    return out.stdout if out.returncode == 0 else ""
+
+
+def _send_keys(session: str, *args, literal: str | None = None) -> None:
+    if literal is not None:
+        subprocess.run(["tmux", "send-keys", "-t", session, "-l", literal],
+                       capture_output=True)
+    else:
+        subprocess.run(["tmux", "send-keys", "-t", session, *args],
+                       capture_output=True)
+
+
+def _looks_busy(session: str) -> bool:
+    low = _pane_text(session).lower()
+    return any(m in low for m in _BUSY_MARKERS)
+
+
+def feed_brief(session: str = None, brief: str = None,
+               ready_timeout: int = 70) -> bool:
+    """Reliably hand the author its brief. Returns True if the agent looks
+    busy afterward. Safe to call again (re-feed) on an idle-but-alive author."""
+    session = session or SESSION
+    brief = brief or _AUTHOR_BRIEF
+    if not _tmux_alive(session):
+        return False
+    # 1) Wait for the REPL to be interactive; dismiss a consent prompt ONCE
+    #    if it actually shows (numeric "2" = "Yes, I accept").
+    consent_done = False
+    deadline = time.time() + ready_timeout
+    ready = False
+    while time.time() < deadline:
+        txt = _pane_text(session)
+        low = txt.lower()
+        if not consent_done and ("do you trust" in low
+                                 or "yes, i accept" in low
+                                 or ("bypass permissions" in low
+                                     and "accept" in low)):
+            _send_keys(session, literal="2")
+            time.sleep(0.5)
+            _send_keys(session, "Enter")
+            consent_done = True
+            time.sleep(3)
+            continue
+        # REPL prompt box "❯" or the tips line both mean it is ready for input.
+        if "❯" in txt or 'try "' in low or "/help" in low:
+            ready = True
+            break
+        time.sleep(2)
+    if not ready:
+        time.sleep(3)                       # last-ditch: feed anyway
+    # 2) Type the brief and submit.
+    time.sleep(1)
+    _send_keys(session, literal=brief)
+    time.sleep(0.7)
+    _send_keys(session, "Enter")
+    # 3) Verify it started; if it sits queued/idle, nudge Enter then re-type.
+    time.sleep(9)
+    if _looks_busy(session):
+        return True
+    _send_keys(session, "Enter")
+    time.sleep(4)
+    if _looks_busy(session):
+        return True
+    _send_keys(session, literal=brief)
+    time.sleep(0.7)
+    _send_keys(session, "Enter")
+    time.sleep(6)
+    return _looks_busy(session)
+
+
+def refeed_if_idle() -> bool:
+    """Supervisor hook: if the author is ALIVE but has not started working
+    (no phase reported and the pane is not busy), re-feed the brief. Returns
+    True if a re-feed was attempted."""
+    if not _tmux_alive(SESSION):
+        return False
+    if _looks_busy(SESSION):
+        return False
+    threading.Thread(target=feed_brief, daemon=True,
+                     name="author-refeed").start()
+    return True
+
+
+def _record_spawn() -> None:
+    from .models import Setting
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(
+            Setting.key == "paper.author_spawn_at").first()
+        now = dt.datetime.now(dt.timezone.utc).isoformat()
+        if row is None:
+            db.add(Setting(key="paper.author_spawn_at", value={"at": now}))
+        else:
+            row.value = {"at": now}
+        db.commit()
+    finally:
+        db.close()
+
+
+def spawn_age_sec() -> float:
+    """Seconds since the author tmux was last (re)spawned, or a large number
+    if unknown. Lets the supervisor wait out a normal boot before re-feeding."""
+    from .models import Setting
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(
+            Setting.key == "paper.author_spawn_at").first()
+        if not row or not isinstance(row.value, dict):
+            return 1e9
+        try:
+            t = dt.datetime.fromisoformat(row.value.get("at", ""))
+            if t.tzinfo is None:
+                t = t.replace(tzinfo=dt.timezone.utc)
+            return (dt.datetime.now(dt.timezone.utc) - t).total_seconds()
+        except Exception:
+            return 1e9
+    finally:
+        db.close()
+
+
 def start(proposal_id: str = "") -> dict:
     """Spawn the Author Agent in tmux 'author'. Idempotent."""
     if _tmux_alive(SESSION):
@@ -476,31 +624,16 @@ def start(proposal_id: str = "") -> dict:
                            preserve_history=False)
         # Restore any cached xterm dimensions (see RealAgent.start).
         pane_stream.apply_remembered_size(SESSION)
-        # Once Claude Code has booted, hand it the brief. Same dance as
-        # agent.py: first auto-accept the (possible) one-time Bypass
-        # Permissions consent by typing the literal "2" (the numeric
-        # shortcut for "Yes, I accept") then Enter, then send the brief.
-        # The numeric path avoids the arrow-key race where Down+Enter
-        # could land on the highlighted "No, exit" default.
+        # Record spawn time so the supervisor can tell "still booting" from
+        # "parked idle, never got the brief" (see refeed_if_idle).
+        _record_spawn()
+        # Once Claude Code has booted, hand it the brief via the robust,
+        # polling feeder (waits for readiness, dismisses consent only if it
+        # shows, verifies the brief was accepted, retries if it sits queued).
+        # Run in a background thread so start() returns immediately.
         if not cmd_override:
-            brief = ("Read the file .author_prompt.txt in this directory "
-                     "and carry out the paper-writing work it describes. "
-                     "Read claims.md, paper_runs.md, paper_figures.md, "
-                     "lessons.md FIRST. Then scaffold main.tex and "
-                     "sections/*. Do not stop.")
-            sess = shlex.quote(SESSION)
-            script = (
-                "sleep 6 && "
-                # accept via numeric shortcut: "2" = "Yes, I accept"
-                f"tmux send-keys -t {sess} '2' && sleep 0.5 && "
-                f"tmux send-keys -t {sess} Enter && "
-                # wait for REPL to actually be ready
-                "sleep 10 && "
-                # hand it the paper-writing brief
-                f"tmux send-keys -t {sess} -l {shlex.quote(brief)} && "
-                "sleep 1 && "
-                f"tmux send-keys -t {sess} Enter")
-            subprocess.Popen(["sh", "-c", script])
+            threading.Thread(target=feed_brief, daemon=True,
+                             name="author-feed").start()
     except Exception as e:
         return {"status": "error", "detail": str(e)}
     bus.publish("paper", "author_started", {})

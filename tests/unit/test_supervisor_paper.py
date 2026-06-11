@@ -37,3 +37,31 @@ def test_supervise_paper_mode_is_safe_when_no_paper(arui_env, fake_subprocess):
     # no paper phase set + tmux stubbed -> must not raise / not act
     S._supervise_paper_mode()
     S.tick()
+
+
+# ── boot-parking re-feed (author alive but never started) ──────────────────
+
+def test_refeed_when_parked_at_boot(arui_env):
+    # alive, idle pane, no phase reported, past the boot grace -> re-feed
+    assert S._should_refeed(fallback_used=True, alive=True, busy=False,
+                            spawn_age=300, feed_remediations=0) is True
+
+
+def test_no_refeed_while_still_booting(arui_env):
+    assert S._should_refeed(True, True, False, 30, 0) is False
+
+
+def test_no_refeed_once_phase_reported(arui_env):
+    assert S._should_refeed(False, True, False, 999, 0) is False
+
+
+def test_no_refeed_when_pane_busy(arui_env):
+    assert S._should_refeed(True, True, True, 999, 0) is False
+
+
+def test_no_refeed_when_author_dead(arui_env):
+    assert S._should_refeed(True, False, False, 999, 0) is False
+
+
+def test_refeed_circuit_breaker(arui_env):
+    assert S._should_refeed(True, True, False, 999, 3) is False

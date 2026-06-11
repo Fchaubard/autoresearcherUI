@@ -43,13 +43,35 @@ def tick() -> None:
 
 
 # Paper-mode phases where the Author Agent is supposed to be actively working
-# (so its tmux session dying is a stall). operator_review legitimately WAITS
-# for the human; submission_ready/error are terminal/manual.
+# (so its tmux session dying is a stall). submission_ready/error are
+# terminal/manual. (Autopilot: there is no operator_review wait phase anymore.)
 _PAPER_WORKING_PHASES = {
     "paper.whittle_claims", "paper.lit_review", "paper.draft_v0",
     "paper.plan_ablations", "paper.build_gantt", "paper.run_ablations",
     "paper.reviewer_simulator",
 }
+
+
+# How long to let a freshly (re)spawned author boot + report its first phase
+# before "alive but no phase + idle pane" counts as a parked boot needing the
+# brief re-fed. A normal boot + first phase report lands well under this.
+_AUTHOR_BOOT_GRACE_SEC = 180
+
+
+def _should_refeed(fallback_used: bool, alive: bool, busy: bool,
+                   spawn_age: float, feed_remediations: int,
+                   grace: float = _AUTHOR_BOOT_GRACE_SEC,
+                   max_rem: int = 3) -> bool:
+    """Pure decision (testable): is the author parked at boot (alive, idle
+    pane, never reported a phase, past the boot grace) so we should re-feed
+    its brief? Bounded by a 3-strike circuit breaker."""
+    if not alive or busy:
+        return False                 # dead (handled elsewhere) or working
+    if not fallback_used:
+        return False                 # it reported a phase -> it started fine
+    if spawn_age < grace:
+        return False                 # still within a normal boot window
+    return feed_remediations < max_rem
 
 
 def _paper_action(phase: str, fallback_used: bool, author_alive: bool,
@@ -80,6 +102,27 @@ def _supervise_paper_mode() -> None:
         alive = author_agent._tmux_alive("author")
     except Exception:                                   # noqa: BLE001
         alive = True                                    # can't tell -> don't act
+    # Boot-parking: author ALIVE but never started working (no phase reported,
+    # idle pane) past the boot grace -> re-feed the brief rather than leave it
+    # parked at the Claude Code welcome screen forever.
+    try:
+        busy = author_agent._looks_busy("author")
+    except Exception:                                   # noqa: BLE001
+        busy = True
+    if _should_refeed(bool(st.get("fallback_used", True)), alive, busy,
+                      author_agent.spawn_age_sec(),
+                      lifecycle.remediation_count("paper_author_feed")):
+        lifecycle.set_phase(lifecycle.PHASE_PAPER)
+        lifecycle.record_remediation(
+            "paper_author_feed",
+            "author booted but never started working -- re-feeding the brief")
+        try:
+            author_agent.refeed_if_idle()
+        except Exception as e:                          # noqa: BLE001
+            lifecycle.emit_event("supervisor_error",
+                                 f"author re-feed failed: {e}",
+                                 severity="warning")
+        return
     action, reason = _paper_action(
         phase, bool(st.get("fallback_used", True)), alive,
         lifecycle.remediation_count("paper_author"))
