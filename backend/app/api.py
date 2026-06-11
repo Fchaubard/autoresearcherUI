@@ -3796,6 +3796,38 @@ async def paper_decision_create(request: Request):
     return {"ok": True, "id": did}
 
 
+@router.post("/paper/claims")
+async def paper_claim_create(request: Request):
+    """Author Agent FILES a new claim it whittled from the runs. Body:
+    {title (required), summary_md?, evidence_strength?, novelty?,
+    rationale_md?, idx?}. Returns the new claim id.
+
+    Previously claims could only be SEEDED from a council proposal and then
+    updated, so an author that entered paper mode without a proposal had no way
+    to create the claims it whittled (claims stayed at 0 and the flow stalled)."""
+    body = await _safe_json(request)
+    title = (body.get("title") or "").strip()
+    if not title:
+        return {"ok": False, "detail": "title is required"}
+    db = SessionLocal()
+    try:
+        n = db.query(PaperClaim).count()
+        cid = "pc-" + os.urandom(5).hex()
+        db.add(PaperClaim(
+            id=cid, idx=int(body.get("idx") or n), title=title[:300],
+            summary_md=body.get("summary_md") or "",
+            evidence_strength=(body.get("evidence_strength") or "unclear"),
+            novelty=(body.get("novelty") or "unclear"),
+            rationale_md=body.get("rationale_md") or "",
+            council_provenance=body.get("council_provenance") or "author",
+            status="active"))
+        db.commit()
+    finally:
+        db.close()
+    bus.publish("paper", "claim_created", {"id": cid})
+    return {"ok": True, "id": cid}
+
+
 @router.put("/paper/claims/{cid}/update")
 async def paper_claim_update(cid: str, request: Request):
     """Author Agent updates a claim's status / evidence_strength / ready /

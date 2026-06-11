@@ -65,7 +65,15 @@ SYSTEM = """You are the AUTHOR AGENT. You must drive a research project to a
 submission-ready NeurIPS paper by walking through these phases IN ORDER:
 
    1) paper.whittle_claims     — read research-mode kept runs; pick the
-                                  2-3 tightest paper-worthy claims
+                                  2-3 tightest paper-worthy claims and FILE
+                                  each one:
+                                    curl -sS -X POST $ARUI_INGEST_URL/api/paper/claims \
+                                      -H 'Content-Type: application/json' \
+                                      -d '{"title":"...","summary_md":"...",
+                                           "evidence_strength":"strong|suggestive",
+                                           "novelty":"high|medium|low"}'
+                                  (claims.md is a READ-ONLY projection; you
+                                  cannot create a claim by editing it.)
    2) paper.lit_review         — REUSE the research-phase scoping lit
                                   review as your starting point (read it
                                   from GET /api/scope/status -> papers/
