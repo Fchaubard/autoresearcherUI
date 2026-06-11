@@ -4394,17 +4394,23 @@ def paper_tex(db: Session = Depends(get_session)):
     return {"files": files}
 
 
+_EDITABLE_TEX_EXT = (".tex", ".bib", ".tikz", ".csv", ".cls", ".sty")
+
+
 @router.post("/paper/section/save")
 async def paper_section_save(request: Request):
-    """Persist a *.user.tex override file (the only kind of LaTeX edit
-    we accept from the user in v1)."""
+    """Persist a user edit to a LaTeX source file (main.tex, sections/*.tex,
+    refs.bib, tikz/*, ...). Writes the file and commits + pushes it via
+    commit_paper_changes. Path is confined to the paper folder."""
     from . import paper as _paper
     body = await _safe_json(request)
-    path = body.get("path") or ""
-    content = body.get("content") or ""
-    if not path.endswith(".user.tex"):
+    path = (body.get("path") or "").strip()
+    content = body.get("content")
+    if content is None:
+        return {"ok": False, "detail": "content is required"}
+    if not path.endswith(_EDITABLE_TEX_EXT):
         return {"ok": False, "detail":
-                "only *.user.tex files are user-editable in v1"}
+                "editable files: " + ", ".join(_EDITABLE_TEX_EXT)}
     folder = _paper.paper_folder()
     if not folder:
         return {"ok": False, "detail": "no paper folder"}

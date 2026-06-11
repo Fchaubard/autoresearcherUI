@@ -497,9 +497,12 @@ function render() {
     // viewPane() renders Write-the-paper into the LEFT column. We use
     // .paper-left (NOT .left) so the paper-wrap can own its own flex
     // layout — .left has a fixed 3-row grid that clipped the sub-tabs.
+    // Same top bar as the dashboard: header + the consolidated status bar
+    // (full-width row under the header). The pollers below fill it by id.
+    app.classList.add('has-statusbar');
     const main = viewPane();
     main.classList.add('paper-left');
-    app.append(header(), main, rail(), el('button', 'fab', '✉'));
+    app.append(header(), statusBar(), main, rail(), el('button', 'fab', '✉'));
   } else {
     // Dashboard: header + consolidated status bar (full-width row under the
     // header) + main column + rail. has-statusbar adds the grid row.
@@ -1062,7 +1065,10 @@ function header() {
   h.append(burger);
   h.append(el('div', 'brand',
     `<div class="brand-mark">a</div><b>autoresearcher<span>UI</span></b>`));
-  if (S.view !== 'dashboard') {
+  // The Write-the-paper view gets the SAME top bar as the dashboard
+  // (brand · project · metric + status bar), so don't collapse to a title.
+  const isPaperView = (S.view === 'latex' && S.mode && S.mode.mode === 'paper');
+  if (S.view !== 'dashboard' && !isPaperView) {
     h.append(el('div', 'proj', esc(VIEW_TITLE[S.view] || '')));
     h.append(el('div', 'spacer'));
     return h;
@@ -1086,14 +1092,7 @@ function header() {
   // (Mode toggle moved to the Write-the-paper page itself — not in the global
   // header anymore. The paper meta pill stays in the header for at-a-glance
   // status while you're on any view.)
-  const mode = (S.mode && S.mode.mode) || 'research';
-  const meta = (S.mode && S.mode.meta) || null;
-  if (mode === 'paper' && meta) {
-    const days = (S.mode && S.mode.days_till_deadline);
-    h.append(el('div', 'paper-pill',
-      `📝 ${esc(meta.venue || 'Paper')}` +
-      (days != null ? ` · ${esc(days.toFixed ? days.toFixed(1) : days)}d` : '')));
-  }
+  // (Venue pill removed per Francois — no 'NeurIPS 2026' chip in the header.)
   h.append(el('div', 'spacer'));
   return h;
 }
@@ -6045,10 +6044,42 @@ async function paintPaperViewer(c, kind) {
           '<div class="empty2">Author Agent hasn\'t written any LaTeX yet.</div>';
         return;
       }
-      v.querySelector('.paper-tex').innerHTML = files.map(f =>
-        `<div class="tex-file"><div class="tex-h">${esc(f.path)}` +
-        (f.user_owned ? '<span class="tex-ow">USER OVERRIDE</span>' : '') +
-        `</div><pre class="tex-body">${esc(f.content)}</pre></div>`).join('');
+      const wrap = v.querySelector('.paper-tex');
+      wrap.innerHTML = files.map((f, i) =>
+        `<div class="tex-file"><div class="tex-h">` +
+          `<span class="tex-path">${esc(f.path)}</span>` +
+          (f.user_owned ? '<span class="tex-ow">USER OVERRIDE</span>' : '') +
+          `<span class="tex-actions">` +
+            `<span class="tex-msg" id="tex-msg-${i}"></span>` +
+            `<button class="btn xs tex-save" data-i="${i}" data-path="${esc(f.path)}">Save</button>` +
+            `<button class="btn xs pri tex-saverc" data-i="${i}" data-path="${esc(f.path)}">Save + recompile</button>` +
+          `</span>` +
+        `</div>` +
+        `<textarea class="tex-edit" id="tex-edit-${i}" spellcheck="false">${esc(f.content)}</textarea>` +
+        `</div>`).join('');
+      const save = async (path, i, recompile) => {
+        const ta = document.getElementById('tex-edit-' + i);
+        const msg = document.getElementById('tex-msg-' + i);
+        if (!ta) return;
+        if (msg) msg.textContent = 'saving…';
+        try {
+          const r = await post('/paper/section/save', { path, content: ta.value });
+          if (!r || r.ok === false) {
+            if (msg) msg.textContent = (r && r.detail) || 'save failed'; return;
+          }
+          if (msg) msg.textContent = 'saved ✓';
+          if (recompile) {
+            if (msg) msg.textContent = 'recompiling…';
+            await post('/paper/recompile', { force: true });
+            if (msg) msg.textContent = 'saved + recompiled ✓';
+          }
+          if (msg) setTimeout(() => { msg.textContent = ''; }, 4000);
+        } catch (e) { if (msg) msg.textContent = 'save failed'; }
+      };
+      wrap.querySelectorAll('.tex-save').forEach(b =>
+        b.onclick = () => save(b.dataset.path, b.dataset.i, false));
+      wrap.querySelectorAll('.tex-saverc').forEach(b =>
+        b.onclick = () => save(b.dataset.path, b.dataset.i, true));
     } catch (e) {
       v.querySelector('.paper-tex').innerHTML =
         '<div class="empty2">Could not load LaTeX.</div>';

@@ -102,3 +102,35 @@ def test_enumerate_proposed_status_for_dry_run(client, make_project):
         "figure_id": f, "arg_template": "--seed {seed}",
         "axes": {"seed": [0, 1]}, "status": "proposed"})
     assert r.json()["status"] == "proposed"
+
+
+# ── LaTeX edit/save (main.tex + sections, not just *.user.tex) ─────────────
+
+def test_save_allows_main_tex(client, make_project):
+    make_project()
+    r = client.post("/api/paper/section/save",
+                    json={"path": "main.tex",
+                          "content": "\\documentclass{article}\\begin{document}x\\end{document}"})
+    assert r.json()["ok"] is True
+
+
+def test_save_allows_section(client, make_project):
+    make_project()
+    r = client.post("/api/paper/section/save",
+                    json={"path": "sections/01_introduction.tex",
+                          "content": "intro"})
+    assert r.json()["ok"] is True
+
+
+def test_save_rejects_non_tex_extension(client, make_project):
+    make_project()
+    assert client.post("/api/paper/section/save",
+                       json={"path": "evil.sh", "content": "rm -rf /"}
+                       ).json()["ok"] is False
+
+
+def test_save_rejects_path_traversal(client, make_project):
+    make_project()
+    assert client.post("/api/paper/section/save",
+                       json={"path": "../../etc/passwd.tex", "content": "x"}
+                       ).json()["ok"] is False

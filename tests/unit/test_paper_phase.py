@@ -51,22 +51,18 @@ def test_request_and_approve_plan(arui_env, db_session, make_project,
 
 
 def test_plan_approved_helper(arui_env, db_session):
+    # AUTOPILOT: the plan is always auto-approved (no operator GPU gate).
     from backend.app import paper_phase as pp
-    assert pp.plan_approved() is False
-    pp.request_plan_approval()
-    assert pp.plan_approved() is False
-    pp.approve_plan()
     assert pp.plan_approved() is True
 
 
-def test_status_overview_includes_phase_and_issues_when_pending_approval(
+def test_status_overview_has_no_operator_gate(
         arui_env, db_session, make_project, make_run):
+    # AUTOPILOT: there is no operator_review phase / approval issue anymore.
     from backend.app import paper_phase as pp
     make_project()
     make_run(id="ab1", status="proposed", context="paper")
-    pp.set_phase("paper.operator_review", actor="author")
-    pp.request_plan_approval(note="please review")
+    pp.set_phase("paper.draft_v0", actor="author")
     snap = pp.get_status_overview()
-    assert snap["phase"]["phase"] == "paper.operator_review"
     codes = [i["code"] for i in (snap["issues"] or [])]
-    assert "operator_approval_required" in codes
+    assert "operator_approval_required" not in codes

@@ -31,7 +31,7 @@ def test_paper_folder_creates_path(arui_env, make_project, setting_setter):
     p = paper.paper_folder()
     assert p is not None
     assert p.exists()
-    assert p.name == "paper"
+    assert p.name == "latex"          # LaTeX lives under <repo>/latex/
 
 
 def test_paper_folder_no_project(arui_env):
@@ -40,7 +40,9 @@ def test_paper_folder_no_project(arui_env):
     assert paper.paper_folder() is None
 
 
-def test_file_decision_creates_pending_row(arui_env, db_session):
+def test_file_decision_autoresolves_under_autopilot(arui_env, db_session):
+    # AUTOPILOT: filed decisions auto-resolve (default action) so the human
+    # decision queue never sits pending.
     from backend.app import paper
     from backend.app.models import PaperDecision
     did = paper.file_decision(
@@ -50,7 +52,7 @@ def test_file_decision_creates_pending_row(arui_env, db_session):
     row = db_session.query(PaperDecision).filter(
         PaperDecision.id == did).first()
     assert row is not None
-    assert row.status == "pending"
+    assert row.status != "pending"           # auto-resolved, not queued
     assert row.kind == "cite_paper"
     assert row.priority == 3
 
@@ -107,16 +109,18 @@ def test_resolve_decision_reject_doesnt_side_effect(arui_env, db_session):
     from backend.app import paper
     from backend.app.models import PaperClaim, PaperDecision
     db_session.add(PaperClaim(id="c1", title="claim", status="active"))
+    # Create the decision DIRECTLY (file_decision auto-resolves under
+    # autopilot) so we can exercise resolve_decision's reject path in isolation.
+    db_session.add(PaperDecision(id="pd-x", source="agent", kind="kill_claim",
+                                 title="kill", linked_claim_id="c1",
+                                 status="pending"))
     db_session.commit()
-    did = paper.file_decision(
-        source="agent", kind="kill_claim",
-        title="kill", linked_claim_id="c1")
-    paper.resolve_decision(did, "reject")
+    paper.resolve_decision("pd-x", "reject")
     c = db_session.query(PaperClaim).filter(
         PaperClaim.id == "c1").first()
     assert c.status == "active"
     d = db_session.query(PaperDecision).filter(
-        PaperDecision.id == did).first()
+        PaperDecision.id == "pd-x").first()
     assert d.status == "rejected"
 
 
@@ -303,28 +307,15 @@ def test_days_till_deadline_none_when_no_meta(arui_env):
     assert paper.days_till_deadline() is None
 
 
-def test_days_till_deadline_basic(arui_env, db_session):
+def test_days_till_deadline_always_none(arui_env, db_session):
+    # Paper mode is quality-gated, not time-gated: no deadline concept, ever.
     from backend.app import paper
     from backend.app.models import PaperMeta
     future = (dt.datetime.now(dt.timezone.utc)
               + dt.timedelta(days=5)).isoformat()
     db_session.add(PaperMeta(id="pm1", deadline_iso=future))
     db_session.commit()
-    d = paper.days_till_deadline()
-    assert d is not None
-    # rounded to 2dp; should be ~5
-    assert 4.5 < d < 5.5
-
-
-def test_days_till_deadline_negative_past(arui_env, db_session):
-    from backend.app import paper
-    from backend.app.models import PaperMeta
-    past = (dt.datetime.now(dt.timezone.utc)
-            - dt.timedelta(days=2)).isoformat()
-    db_session.add(PaperMeta(id="pm1", deadline_iso=past))
-    db_session.commit()
-    d = paper.days_till_deadline()
-    assert d is not None and d < 0
+    assert paper.days_till_deadline() is None
 
 
 def test_list_commits_empty_when_no_git(arui_env, make_project,

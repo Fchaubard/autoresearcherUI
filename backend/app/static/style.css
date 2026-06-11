@@ -470,13 +470,24 @@ body.resizing{user-select:none}
 .tex-file{margin-bottom:18px}
 .tex-h{font-family:var(--mono);font-size:11px;color:var(--accent);
   font-weight:700;padding:6px 9px;background:var(--panel-2);border-radius:5px 5px 0 0;
-  border:1px solid var(--border)}
+  border:1px solid var(--border);display:flex;align-items:center;gap:8px}
+.tex-path{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tex-actions{margin-left:auto;display:flex;align-items:center;gap:6px;flex:0 0 auto}
+.tex-msg{color:var(--muted);font-size:10.5px;font-weight:600}
 .tex-ow{margin-left:8px;background:#FBBF2420;color:var(--warn);
   padding:1px 6px;border-radius:3px;font-size:9.5px;font-weight:600;letter-spacing:.4px}
 .tex-body{background:#0a0a0a;border:1px solid var(--border);border-top:0;
   border-radius:0 0 5px 5px;padding:10px 12px;font-family:var(--mono);
   font-size:11px;line-height:1.55;color:var(--text-2);overflow-x:auto;
   white-space:pre-wrap;margin:0;max-height:340px;overflow-y:auto}
+.tex-edit{display:block;width:100%;box-sizing:border-box;background:#0a0a0a;
+  border:1px solid var(--border);border-top:0;border-radius:0 0 5px 5px;
+  padding:10px 12px;font-family:var(--mono);font-size:11px;line-height:1.55;
+  color:var(--text);min-height:200px;height:340px;resize:vertical;outline:none;
+  white-space:pre;overflow:auto;tab-size:2}
+.tex-edit:focus{border-color:var(--accent)}
+/* paper view gets the same full-width status bar row as the dashboard */
+.app.has-statusbar .paper-left{grid-row:3}
 
 .paper-tabs{display:flex;gap:4px;border-bottom:1px solid var(--border);
   padding:0 4px}
@@ -1558,8 +1569,16 @@ body.resizing{user-select:none}
 @media(max-width:880px){
   .app{grid-template-columns:1fr;grid-template-rows:50px 1fr}
   .app.has-statusbar{grid-template-rows:50px auto 1fr}
-  .app.has-statusbar .left,.app.has-statusbar .rail{grid-row:3}
+  .app.has-statusbar .left,.app.has-statusbar .rail,
+  .app.has-statusbar .paper-left{grid-row:3}
+  .paper-left{grid-row:2}
   .left{grid-row:2;grid-template-rows:minmax(240px,40%) auto 1fr}
+  /* top bar: don't overflow the viewport, let it scroll horizontally */
+  .hdr{gap:10px;overflow-x:auto}
+  .hdr .metric{display:none}
+  .statusbar{overflow-x:auto;gap:8px;white-space:nowrap}
+  .statusbar .sb-spacer{flex:0 0 0}
+  .tex-edit{height:260px}
   .rail{display:none}
   .rail.show{display:grid;position:fixed;top:50px;left:0;right:0;bottom:0;z-index:30}
   .stats{grid-template-columns:repeat(3,1fr)}

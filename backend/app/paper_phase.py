@@ -33,7 +33,7 @@ from typing import Any
 
 from .db import SessionLocal
 from .models import Event, PaperClaim, PaperCitation, PaperDecision, \
-    PaperMeta, Run, Setting
+    PaperFigure, PaperMeta, Run, Setting
 
 
 # AUTOPILOT flow — no human gate. operator_review is removed: the author goes
@@ -73,6 +73,31 @@ def _iso(seconds_ago: float = 0) -> str:
 # ─────────────────────────── phase API ────────────────────────────────
 
 
+# Phases the author may NOT enter until the figure run-matrix is queued. This
+# makes enumeration a HARD step the author cannot skip (no PI needed): if
+# figures are planned but no run is tagged to any of them, advancing into
+# run_ablations / reviewer_simulator / submission_ready is rejected.
+_REQUIRES_RUNS = {"paper.run_ablations", "paper.reviewer_simulator",
+                  "paper.submission_ready"}
+
+
+def _run_matrix_missing(db=None) -> bool:
+    own = db is None
+    if own:
+        db = SessionLocal()
+    try:
+        if db.query(PaperFigure).count() == 0:
+            return False                 # no figures planned yet -> no gate
+        tagged = (db.query(Run)
+                  .filter(Run.context == "paper",
+                          Run.paper_figure_id != None,          # noqa: E711
+                          Run.paper_figure_id != "").count())
+        return tagged == 0
+    finally:
+        if own:
+            db.close()
+
+
 def set_phase(phase: str, *, actor: str = "author",
               progress: dict | None = None,
               detail: dict | None = None) -> dict:
@@ -80,7 +105,17 @@ def set_phase(phase: str, *, actor: str = "author",
     ``paper.phase`` and emits a ``phase_changed`` Event only on a real
     transition. The progress payload is shallow-merged into
     ``paper.progress`` for the UI status strip.
+
+    HARD GATE: refuses to advance into run_ablations / reviewer_simulator /
+    submission_ready while figures exist but no run is tagged to them -- the
+    author must enumerate the run matrix first.
     """
+    if phase in _REQUIRES_RUNS and _run_matrix_missing():
+        return {"ok": False, "blocked": True, "phase": phase,
+                "detail": ("Queue the figure run-matrix FIRST: call POST "
+                           "/api/paper/runs/enumerate once per figure "
+                           "(arg_template + axes). You cannot enter "
+                           f"{phase} with 0 runs tagged to your figures.")}
     db = SessionLocal()
     try:
         row = (db.query(Setting)
