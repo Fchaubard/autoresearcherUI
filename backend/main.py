@@ -67,6 +67,11 @@ async def lifespan(app: FastAPI):
         agent_watcher.start()
     except Exception as e:                              # noqa: BLE001
         print(f"[main] agent_watcher start failed: {e}", flush=True)
+    try:                              # anonymous, opt-out usage telemetry
+        from .app import telemetry
+        telemetry.capture("app_started")
+    except Exception:                                   # noqa: BLE001
+        pass
     if AUTORUN:
         db = SessionLocal()
         has_project = db.query(Project).first() is not None

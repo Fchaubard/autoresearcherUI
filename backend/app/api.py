@@ -2463,6 +2463,11 @@ async def post_onboarding(request: Request):
             status="awaiting agent", gpu_count=0, created_at=_iso()))
         db.commit()
     db.close()
+    try:
+        from . import telemetry
+        telemetry.capture("onboarding_completed")
+    except Exception:                                   # noqa: BLE001
+        pass
     return _maybe_set_cookie(JSONResponse({"status": "configured"}))
 
 
@@ -3524,6 +3529,11 @@ async def paper_enter(request: Request):
     finally:
         db.close()
     _paper.set_project_mode("paper")
+    try:
+        from . import telemetry
+        telemetry.capture("paper_mode_entered")
+    except Exception:                                   # noqa: BLE001
+        pass
     # Convert council claims → PaperClaim. The Author Agent then OWNS
     # the ablation queue — we do not seed default ablations here.
     claims_added = _paper.populate_claims_from_proposal(proposal_id)

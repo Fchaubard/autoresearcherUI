@@ -405,6 +405,38 @@ in System Stats if you need:
 
 A disk warning auto-appears in both email digests when free space is low.
 
+## Telemetry
+
+autoresearcherUI collects anonymous usage telemetry to understand which
+features are used. It uses raw PostHog HTTP capture (no SDK, no autocapture,
+no session replay, no cookies, no `identify()`, no stable user ID, no person
+profiles) — just anonymous event counts.
+
+We collect:
+
+- event name (e.g. `app_started`, `paper_mode_entered`, `onboarding_completed`)
+- app version
+- OS / platform / arch
+- Python runtime version
+- success/failure status and a coarse anonymous `error_type`
+
+We do **not** collect:
+
+- source code, prompts, file contents, or file paths
+- repo names, usernames, emails, or hostnames
+- environment variables, API keys, or tokens
+- stack traces or any other PII
+
+Disable telemetry with any of:
+
+```bash
+ARUI_TELEMETRY_DISABLED=1
+DO_NOT_TRACK=1
+CI=true
+```
+
+(`CI=true` opts out automatically.) See `backend/app/telemetry.py`.
+
 ## Architecture
 
 One FastAPI process (`backend/main.py`) serves REST, SSE, the `arui` ingest,
