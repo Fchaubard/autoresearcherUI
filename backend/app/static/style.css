@@ -470,11 +470,16 @@ body.resizing{user-select:none}
 /* Overleaf-like LaTeX editor (Monaco) — fills the viewer full-width/height */
 .paper-viewer.paper-viewer-tex{height:74vh}
 .ptex{display:flex;flex-direction:column;height:100%;background:#1e1e1e}
-.ptex-tabs{display:flex;gap:1px;overflow-x:auto;background:#181818;border-bottom:1px solid #2a2a2a;flex:0 0 auto}
-.ptex-tab{background:transparent;border:0;border-right:1px solid #2a2a2a;color:#9aa6b2;
-  padding:6px 13px;font-size:11px;cursor:pointer;white-space:nowrap;font-family:var(--mono)}
-.ptex-tab:hover{color:#fff}
-.ptex-tab.on{background:#1e1e1e;color:#fff;box-shadow:inset 0 -2px 0 var(--accent)}
+/* split layout: left file list + editor pane on the right */
+.ptex.ptex-split{flex-direction:row}
+.ptex-side{flex:0 0 210px;overflow-y:auto;background:#181818;border-right:1px solid #2a2a2a;
+  padding:6px 0}
+.ptex-fitem{display:block;width:100%;text-align:left;background:transparent;border:0;
+  color:#9aa6b2;padding:5px 12px;font-size:11px;font-family:var(--mono);cursor:pointer;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ptex-fitem:hover{background:rgba(255,255,255,.04);color:#fff}
+.ptex-fitem.on{background:rgba(99,102,241,.16);color:#fff;box-shadow:inset 2px 0 0 var(--accent)}
+.ptex-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column}
 .ptex-bar{display:flex;align-items:center;gap:8px;padding:5px 10px;background:#181818;
   border-bottom:1px solid #2a2a2a;flex:0 0 auto}
 .ptex-path{font-family:var(--mono);font-size:11px;color:var(--accent);white-space:nowrap;

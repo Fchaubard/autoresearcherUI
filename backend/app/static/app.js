@@ -3088,7 +3088,7 @@ function pollGpus() {
 }
 
 /* ── drawer ───────────────────────────────────────────────────────────── */
-async function openDrawer(runId) {
+async function openDrawer(runId, extra) {
   S.sel = runId;
   let d = document.querySelector('.drawer'), sc = document.querySelector('.scrim');
   if (!d) { sc = el('div', 'scrim'); d = el('div', 'drawer');
@@ -3120,6 +3120,20 @@ async function openDrawer(runId) {
   const x = el('button', 'iconbtn', '✕'); x.onclick = closeDrawer;
   hd.append(x); d.append(hd);
   const bd = el('div', 'dr-bd');
+  // Planned start/end from the Gantt schedule (shown in the operator's LOCAL
+  // time) when the drawer is opened by clicking a Critical-Path bar.
+  if (extra && (extra.start_iso || extra.end_iso)) {
+    const fmtLocal = (iso) => {
+      try { return new Date(iso).toLocaleString([],
+        { weekday: 'short', month: 'short', day: 'numeric',
+          hour: 'numeric', minute: '2-digit' }); }
+      catch (e) { return '—'; }
+    };
+    bd.append(el('div', 'dr-h2', 'Planned schedule'));
+    bd.append(el('dl', 'kv',
+      '<dt>Planned start</dt><dd>' + esc(fmtLocal(extra.start_iso)) + '</dd>' +
+      '<dt>Planned end</dt><dd>' + esc(fmtLocal(extra.end_iso)) + '</dd>'));
+  }
   if ((idea.description || '').trim()) {
     bd.append(el('div', 'dr-h2', 'Hypothesis'));
     bd.append(el('div', 'prose', esc(idea.description)));
@@ -6161,15 +6175,17 @@ async function paintPaperLatex(v) {
   Object.values(_ptex.models).forEach(m => { try { m.dispose(); } catch (e) {} });
   _ptex.editor = null; _ptex.models = {}; _ptex.active = null;
   v.innerHTML =
-    '<div class="ptex">' +
-      '<div class="ptex-tabs" id="ptex-tabs"></div>' +
-      '<div class="ptex-bar">' +
-        '<span class="ptex-path" id="ptex-path"></span><span class="ptex-spacer"></span>' +
-        '<span class="ptex-msg" id="ptex-msg"></span>' +
-        '<button class="btn xs" id="ptex-save">Save</button>' +
-        '<button class="btn xs pri" id="ptex-saverc">Save + recompile</button>' +
+    '<div class="ptex ptex-split">' +
+      '<div class="ptex-side" id="ptex-side"></div>' +
+      '<div class="ptex-main">' +
+        '<div class="ptex-bar">' +
+          '<span class="ptex-path" id="ptex-path"></span><span class="ptex-spacer"></span>' +
+          '<span class="ptex-msg" id="ptex-msg"></span>' +
+          '<button class="btn xs" id="ptex-save">Save</button>' +
+          '<button class="btn xs pri" id="ptex-saverc">Save + recompile</button>' +
+        '</div>' +
+        '<div class="ptex-ed" id="ptex-ed"><div class="ptex-empty">loading editor…</div></div>' +
       '</div>' +
-      '<div class="ptex-ed" id="ptex-ed"><div class="ptex-empty">loading editor…</div></div>' +
     '</div>';
   let monaco;
   try { monaco = await loadMonaco(); }
@@ -6193,14 +6209,14 @@ async function paintPaperLatex(v) {
     _ptex.active = path;
     _ptex.editor.setModel(_ptex.models[path]);
     const pe = document.getElementById('ptex-path'); if (pe) pe.textContent = path;
-    document.querySelectorAll('.ptex-tab').forEach(t =>
+    document.querySelectorAll('.ptex-fitem').forEach(t =>
       t.classList.toggle('on', t.dataset.p === path));
     _ptex.editor.focus();
   };
-  const tabs = document.getElementById('ptex-tabs');
-  tabs.innerHTML = files.map(f =>
-    `<button class="ptex-tab" data-p="${esc(f.path)}">${esc(f.path.split('/').pop())}</button>`).join('');
-  tabs.querySelectorAll('.ptex-tab').forEach(t => t.onclick = () => activate(t.dataset.p));
+  const side = document.getElementById('ptex-side');
+  side.innerHTML = files.map(f =>
+    `<button class="ptex-fitem" data-p="${esc(f.path)}" title="${esc(f.path)}">${esc(f.path)}</button>`).join('');
+  side.querySelectorAll('.ptex-fitem').forEach(t => t.onclick = () => activate(t.dataset.p));
   document.getElementById('ptex-save').onclick = () => _ptexSave(false);
   document.getElementById('ptex-saverc').onclick = () => _ptexSave(true);
   activate(files[0].path);
@@ -6986,8 +7002,9 @@ function _cpgPaint(tableId, subId) {
       const x = Math.round((t.start_sec || 0) / 3600 * pph);
       const w = Math.max(8, Math.round(((t.end_sec || 0) - (t.start_sec || 0)) / 3600 * pph));
       inner = `${grl}<button class="cpg-bar ${c}" data-run="${rid}" ` +
+        `data-start="${esc(t.start_iso || '')}" data-end="${esc(t.end_iso || '')}" ` +
         `style="left:${x}px;width:${w}px" ` +
-        `title="${enm} · click for plots + details">${enm}</button>`;
+        `title="${enm} · click for plots + planned times">${enm}</button>`;
     } else {
       inner = `${grl}<button class="cpg-doneb" data-run="${rid}" ` +
         `title="${enm} · click for plots + details">✓ ${enm}</button>`;
@@ -6996,7 +7013,7 @@ function _cpgPaint(tableId, subId) {
       <div class="cpg-left">
         <span class="cpg-c cpg-fig">${esc(t.figure_label || '—')}</span>
         <span class="cpg-c cpg-num">${t.run_number || ''}</span>
-        <span class="cpg-c cpg-cmd"><button class="cpg-copy" data-i="${idx}" title="copy run name: ${enm}">⧉ name</button></span>
+        <span class="cpg-c cpg-cmd"><button class="cpg-copy" data-i="${idx}" title="copy run name: ${enm}">(copy)</button></span>
         <span class="cpg-c cpg-dur">${_cpgFmtDur(t.duration_sec || 0)}</span>
         <span class="cpg-c cpg-st"><span class="cpg-pill ${c}">${esc(t.status)}</span></span>
       </div>
@@ -7030,7 +7047,7 @@ function _cpgPaint(tableId, subId) {
     btn.onclick = (ev) => {
       ev.stopPropagation();
       const nm = _cpgCmds[+btn.dataset.i] || '';
-      const done = () => { btn.textContent = '✓ copied'; setTimeout(() => { btn.textContent = '⧉ name'; }, 1400); };
+      const done = () => { btn.textContent = '✓ copied'; setTimeout(() => { btn.textContent = '(copy)'; }, 1400); };
       try {
         if (navigator.clipboard && navigator.clipboard.writeText) {
           navigator.clipboard.writeText(nm).then(done, () => {});
@@ -7047,7 +7064,10 @@ function _cpgPaint(tableId, subId) {
   host.querySelectorAll('.cpg-bar[data-run],.cpg-doneb[data-run]').forEach(b => {
     b.onclick = () => {
       const id = b.dataset.run;
-      if (id && typeof openDrawer === 'function') openDrawer(id);
+      if (id && typeof openDrawer === 'function') {
+        openDrawer(id, (b.dataset.start || b.dataset.end)
+          ? { start_iso: b.dataset.start, end_iso: b.dataset.end } : null);
+      }
     };
   });
   // wire zoom controls (repaint from cache — never refetch)
