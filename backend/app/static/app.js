@@ -452,16 +452,33 @@ function pushView(viewId) {
     try { history.pushState({ view: viewId }, '', path); } catch (e) {}
   }
 }
+// Anonymous, opt-out frontend telemetry. Fire-and-forget POST through the
+// backend (which adds the standard props + honors the env opt-out). Respects
+// the browser Do-Not-Track signal too. Never throws, never blocks.
+function track(event, props) {
+  try {
+    if (navigator.doNotTrack === '1' || window.doNotTrack === '1' ||
+        navigator.msDoNotTrack === '1') return;
+    fetch('/api/telemetry/event', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event: event, properties: props || {} }),
+      keepalive: true,
+    }).catch(() => {});
+  } catch (e) { /* telemetry must never break the app */ }
+}
+
 // Public helper used everywhere a view changes — replaces S.view = X; render();
 function setView(viewId) {
   if (S.view === viewId) return;
   S.view = viewId;
+  track('page_view', { view: viewId });
   pushView(viewId);
   render();
 }
 window.addEventListener('popstate', () => {
   const v = viewFromPath(window.location.pathname);
-  if (v && S.view !== v) { S.view = v; render(); }
+  if (v && S.view !== v) { S.view = v; track('page_view', { view: v }); render(); }
 });
 
 function render() {
@@ -9353,6 +9370,7 @@ async function boot() {
     const pc = await fetch('/api/passcode/check').then(r => r.json());
     if (pc && pc.enabled && !pc.authed) { renderLogin(); return; }
   } catch (e) { /* gate down → fall through */ }
+  try { track('app_loaded', { view: viewFromPath(window.location.pathname) || 'dashboard' }); } catch (e) {}
   // Fetch the project FIRST. A running project ALWAYS wins: a stale
   // 'awaiting_user' scope_state must NEVER hijack the dashboard of live
   // research (a leftover scope preview once stranded a 156-run session on the

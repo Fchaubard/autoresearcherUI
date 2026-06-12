@@ -414,7 +414,8 @@ profiles) — just anonymous event counts.
 
 We collect:
 
-- event name (e.g. `app_started`, `paper_mode_entered`, `onboarding_completed`)
+- event name (e.g. `app_started`, `paper_mode_entered`, `onboarding_completed`,
+  and anonymous frontend `app_loaded` / `page_view` with the view id)
 - app version
 - OS / platform / arch
 - Python runtime version

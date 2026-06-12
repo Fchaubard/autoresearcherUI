@@ -2471,6 +2471,35 @@ async def post_onboarding(request: Request):
     return _maybe_set_cookie(JSONResponse({"status": "configured"}))
 
 
+@router.post("/telemetry/event")
+async def telemetry_event(request: Request):
+    """Frontend (browser) page/usage events -> anonymous PostHog capture.
+
+    Public-facing + heavily SANITIZED so it can't be used to exfiltrate PII or
+    spam: only a short ``[A-Za-z0-9_]`` event name plus up to 10 small scalar
+    properties are forwarded. Honors the same opt-out as the backend (capture()
+    checks ARUI_TELEMETRY_DISABLED / DO_NOT_TRACK / CI)."""
+    from . import telemetry
+    if telemetry.telemetry_disabled():
+        return {"ok": True, "disabled": True}
+    body = await _safe_json(request)
+    event = str(body.get("event") or "").strip()[:60]
+    if not event or not re.match(r"^[A-Za-z0-9_]+$", event):
+        return {"ok": False, "detail": "bad event name"}
+    props = {"client": "browser"}
+    raw = body.get("properties")
+    if isinstance(raw, dict):
+        for k, v in list(raw.items())[:10]:
+            if not isinstance(k, str) or len(k) > 40:
+                continue
+            if isinstance(v, bool) or isinstance(v, (int, float)):
+                props[k] = v
+            elif isinstance(v, str):
+                props[k] = v[:120]
+    telemetry.capture(event, props)
+    return {"ok": True}
+
+
 # ──────────── scoping gate (Phase 0: lit review + direction confirm) ────────
 @router.get("/scope/status")
 def scope_status():

@@ -61,3 +61,49 @@ def test_send_swallows_network_errors(monkeypatch):
         raise OSError("network down")
     monkeypatch.setattr(telemetry.urllib.request, "urlopen", _boom)
     telemetry._send("evt", {})                 # must not raise
+
+
+# ── frontend event endpoint (browser page views) ──────────────────────────
+import pytest
+
+
+@pytest.fixture
+def client(arui_env, fake_subprocess):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from backend.app.api import router
+    app = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as c:
+        yield c
+
+
+def test_event_endpoint_forwards_and_sanitizes(client, monkeypatch):
+    from backend.app import telemetry
+    for v in ("CI", "DO_NOT_TRACK", "ARUI_TELEMETRY_DISABLED"):
+        monkeypatch.delenv(v, raising=False)
+    rec = []
+    monkeypatch.setattr(telemetry, "capture",
+                        lambda e, p=None: rec.append((e, p)))
+    r = client.post("/api/telemetry/event", json={
+        "event": "page_view",
+        "properties": {"view": "dashboard", "n": 3, "ok": True,
+                       "nested": {"a": 1}, "big": "x" * 500}})
+    assert r.json()["ok"] is True
+    assert rec and rec[0][0] == "page_view"
+    props = rec[0][1]
+    assert props["view"] == "dashboard" and props["client"] == "browser"
+    assert props["n"] == 3 and props["ok"] is True
+    assert "nested" not in props               # non-scalar dropped
+    assert len(props["big"]) <= 120            # strings capped
+
+
+def test_event_endpoint_rejects_bad_event_name(client):
+    assert client.post("/api/telemetry/event",
+                       json={"event": "bad name!"}).json()["ok"] is False
+
+
+def test_event_endpoint_respects_optout(client, monkeypatch):
+    monkeypatch.setenv("DO_NOT_TRACK", "1")
+    r = client.post("/api/telemetry/event", json={"event": "page_view"})
+    assert r.json().get("disabled") is True
