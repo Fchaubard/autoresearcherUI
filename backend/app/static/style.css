@@ -467,6 +467,24 @@ body.resizing{user-select:none}
   border-radius:6px;padding:10px 12px;font-family:var(--mono);font-size:10.5px;
   color:var(--text-2);text-align:left;white-space:pre-wrap}
 .paper-tex{height:100%;overflow-y:auto;padding:14px}
+/* Overleaf-like LaTeX editor (Monaco) — fills the viewer full-width/height */
+.paper-viewer.paper-viewer-tex{height:74vh}
+.ptex{display:flex;flex-direction:column;height:100%;background:#1e1e1e}
+.ptex-tabs{display:flex;gap:1px;overflow-x:auto;background:#181818;border-bottom:1px solid #2a2a2a;flex:0 0 auto}
+.ptex-tab{background:transparent;border:0;border-right:1px solid #2a2a2a;color:#9aa6b2;
+  padding:6px 13px;font-size:11px;cursor:pointer;white-space:nowrap;font-family:var(--mono)}
+.ptex-tab:hover{color:#fff}
+.ptex-tab.on{background:#1e1e1e;color:#fff;box-shadow:inset 0 -2px 0 var(--accent)}
+.ptex-bar{display:flex;align-items:center;gap:8px;padding:5px 10px;background:#181818;
+  border-bottom:1px solid #2a2a2a;flex:0 0 auto}
+.ptex-path{font-family:var(--mono);font-size:11px;color:var(--accent);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.ptex-spacer{flex:1}
+.ptex-msg{color:var(--muted);font-size:11px;white-space:nowrap}
+.ptex-ed{flex:1 1 auto;min-height:0;width:100%}
+.ptex-empty{padding:24px;color:var(--muted)}
+.ptex-fb{width:100%;height:64vh;box-sizing:border-box;background:#0a0a0a;color:#cdd;
+  font-family:var(--mono);font-size:12px;border:0;padding:10px;outline:none}
 .tex-file{margin-bottom:18px}
 .tex-h{font-family:var(--mono);font-size:11px;color:var(--accent);
   font-weight:700;padding:6px 9px;background:var(--panel-2);border-radius:5px 5px 0 0;

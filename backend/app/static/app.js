@@ -6034,6 +6034,7 @@ async function paintPaperViewer(c, kind) {
   const v = c.querySelector('#paper-viewer');
   if (!v) return;
   if (kind === 'pdf') {
+    v.classList.remove('paper-viewer-tex');
     // Check build status first — only render an iframe if there's actually
     // a PDF to show. Otherwise the iframe ends up displaying the raw
     // JSON error response, which looks broken.
@@ -6082,56 +6083,156 @@ async function paintPaperViewer(c, kind) {
     // Always try a recompile so the next paint picks up new artifacts.
     try { await post('/paper/recompile', {}); paintBuildStatus(c); } catch(e) {}
   } else {
-    v.innerHTML = '<div class="paper-tex"><div class="empty2">loading…</div></div>';
-    try {
-      const d = await api('/paper/tex');
-      const files = d && d.files || [];
-      if (!files.length) {
-        v.querySelector('.paper-tex').innerHTML =
-          '<div class="empty2">Author Agent hasn\'t written any LaTeX yet.</div>';
-        return;
-      }
-      const wrap = v.querySelector('.paper-tex');
-      wrap.innerHTML = files.map((f, i) =>
-        `<div class="tex-file"><div class="tex-h">` +
-          `<span class="tex-path">${esc(f.path)}</span>` +
-          (f.user_owned ? '<span class="tex-ow">USER OVERRIDE</span>' : '') +
-          `<span class="tex-actions">` +
-            `<span class="tex-msg" id="tex-msg-${i}"></span>` +
-            `<button class="btn xs tex-save" data-i="${i}" data-path="${esc(f.path)}">Save</button>` +
-            `<button class="btn xs pri tex-saverc" data-i="${i}" data-path="${esc(f.path)}">Save + recompile</button>` +
-          `</span>` +
-        `</div>` +
-        `<textarea class="tex-edit" id="tex-edit-${i}" spellcheck="false">${esc(f.content)}</textarea>` +
-        `</div>`).join('');
-      const save = async (path, i, recompile) => {
-        const ta = document.getElementById('tex-edit-' + i);
-        const msg = document.getElementById('tex-msg-' + i);
-        if (!ta) return;
-        if (msg) msg.textContent = 'saving…';
-        try {
-          const r = await post('/paper/section/save', { path, content: ta.value });
-          if (!r || r.ok === false) {
-            if (msg) msg.textContent = (r && r.detail) || 'save failed'; return;
-          }
-          if (msg) msg.textContent = 'saved ✓';
-          if (recompile) {
-            if (msg) msg.textContent = 'recompiling…';
-            await post('/paper/recompile', { force: true });
-            if (msg) msg.textContent = 'saved + recompiled ✓';
-          }
-          if (msg) setTimeout(() => { msg.textContent = ''; }, 4000);
-        } catch (e) { if (msg) msg.textContent = 'save failed'; }
-      };
-      wrap.querySelectorAll('.tex-save').forEach(b =>
-        b.onclick = () => save(b.dataset.path, b.dataset.i, false));
-      wrap.querySelectorAll('.tex-saverc').forEach(b =>
-        b.onclick = () => save(b.dataset.path, b.dataset.i, true));
-    } catch (e) {
-      v.querySelector('.paper-tex').innerHTML =
-        '<div class="empty2">Could not load LaTeX.</div>';
-    }
+    await paintPaperLatex(v);
   }
+}
+
+/* ── Overleaf-like LaTeX editor (Monaco + a latex language) ───────────── */
+const _ptex = { editor: null, models: {}, active: null };
+let _ptexLangReady = false;
+
+function _ptexRegisterLatex(monaco) {
+  if (_ptexLangReady) return;
+  _ptexLangReady = true;
+  try {
+    monaco.languages.register({ id: 'latex' });
+    monaco.languages.setMonarchTokensProvider('latex', { tokenizer: { root: [
+      [/%.*$/, 'comment'],
+      [/\\(begin|end)\b/, 'keyword'],
+      [/\\[a-zA-Z@]+/, 'type.identifier'],
+      [/\\[^a-zA-Z]/, 'type.identifier'],
+      [/\$[^$]*\$/, 'string'],
+      [/[{}]/, 'delimiter.bracket'],
+      [/[\[\]]/, 'delimiter.square'],
+    ] } });
+    monaco.languages.setLanguageConfiguration('latex', {
+      comments: { lineComment: '%' },
+      brackets: [['{', '}'], ['[', ']'], ['(', ')']],
+      autoClosingPairs: [{ open: '{', close: '}' }, { open: '[', close: ']' },
+                         { open: '$', close: '$' }],
+    });
+    const K = monaco.languages.CompletionItemKind.Snippet;
+    const R = monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet;
+    const snips = [
+      ['\\section', '\\section{$1}'], ['\\subsection', '\\subsection{$1}'],
+      ['\\subsubsection', '\\subsubsection{$1}'], ['\\paragraph', '\\paragraph{$1}'],
+      ['\\textbf', '\\textbf{$1}'], ['\\textit', '\\textit{$1}'], ['\\emph', '\\emph{$1}'],
+      ['\\texttt', '\\texttt{$1}'], ['\\cite', '\\cite{$1}'], ['\\citep', '\\citep{$1}'],
+      ['\\citet', '\\citet{$1}'], ['\\ref', '\\ref{$1}'], ['\\eqref', '\\eqref{$1}'],
+      ['\\label', '\\label{$1}'], ['\\footnote', '\\footnote{$1}'], ['\\url', '\\url{$1}'],
+      ['\\includegraphics', '\\includegraphics[width=$1\\linewidth]{$2}'],
+      ['\\input', '\\input{$1}'], ['\\item', '\\item $0'], ['\\frac', '\\frac{$1}{$2}'],
+      ['\\begin{} … \\end{}', '\\begin{$1}\n\t$0\n\\end{$1}'],
+      ['figure (env)', '\\begin{figure}[t]\n\t\\centering\n\t\\input{tikz/$1.tikz}\n\t\\caption{$2}\n\t\\label{fig:$3}\n\\end{figure}'],
+      ['table (env)', '\\begin{table}[t]\n\t\\centering\n\t\\input{tables/$1.tex}\n\t\\caption{$2}\n\t\\label{tab:$3}\n\\end{table}'],
+      ['itemize (env)', '\\begin{itemize}\n\t\\item $0\n\\end{itemize}'],
+      ['enumerate (env)', '\\begin{enumerate}\n\t\\item $0\n\\end{enumerate}'],
+      ['equation (env)', '\\begin{equation}\n\t$1\n\t\\label{eq:$2}\n\\end{equation}'],
+      ['align (env)', '\\begin{align}\n\t$1\n\\end{align}'],
+      ['tabular (env)', '\\begin{tabular}{$1}\n\t$0\n\\end{tabular}'],
+    ];
+    monaco.languages.registerCompletionItemProvider('latex', {
+      triggerCharacters: ['\\', '{'],
+      provideCompletionItems: (model, pos) => {
+        const w = model.getWordUntilPosition(pos);
+        const line = model.getLineContent(pos.lineNumber);
+        let startCol = w.startColumn;
+        if (startCol > 1 && line[startCol - 2] === '\\') startCol -= 1;
+        const range = { startLineNumber: pos.lineNumber, endLineNumber: pos.lineNumber,
+                        startColumn: startCol, endColumn: w.endColumn };
+        return { suggestions: snips.map(([label, txt]) => ({
+          label, kind: K, insertText: txt, insertTextRules: R, range, detail: 'LaTeX' })) };
+      },
+    });
+  } catch (e) { /* best-effort */ }
+}
+
+async function paintPaperLatex(v) {
+  v.classList.add('paper-viewer-tex');
+  v.innerHTML = '<div class="ptex-empty">loading…</div>';
+  let files;
+  try { files = (await api('/paper/tex')).files || []; }
+  catch (e) { v.innerHTML = '<div class="ptex-empty">Could not load LaTeX.</div>'; return; }
+  if (!files.length) {
+    v.innerHTML = '<div class="ptex-empty">No LaTeX yet — the Author Agent will scaffold main.tex shortly.</div>';
+    return;
+  }
+  try { if (_ptex.editor) _ptex.editor.dispose(); } catch (e) {}
+  Object.values(_ptex.models).forEach(m => { try { m.dispose(); } catch (e) {} });
+  _ptex.editor = null; _ptex.models = {}; _ptex.active = null;
+  v.innerHTML =
+    '<div class="ptex">' +
+      '<div class="ptex-tabs" id="ptex-tabs"></div>' +
+      '<div class="ptex-bar">' +
+        '<span class="ptex-path" id="ptex-path"></span><span class="ptex-spacer"></span>' +
+        '<span class="ptex-msg" id="ptex-msg"></span>' +
+        '<button class="btn xs" id="ptex-save">Save</button>' +
+        '<button class="btn xs pri" id="ptex-saverc">Save + recompile</button>' +
+      '</div>' +
+      '<div class="ptex-ed" id="ptex-ed"><div class="ptex-empty">loading editor…</div></div>' +
+    '</div>';
+  let monaco;
+  try { monaco = await loadMonaco(); }
+  catch (e) { _ptexFallback(v, files); return; }
+  _ptexRegisterLatex(monaco);
+  const langFor = (p) => p.endsWith('.bib') ? 'plaintext' : 'latex';
+  files.forEach(f => {
+    _ptex.models[f.path] = monaco.editor.createModel(f.content || '', langFor(f.path));
+  });
+  const host = document.getElementById('ptex-ed');
+  if (!host) return;
+  host.innerHTML = '';
+  _ptex.editor = monaco.editor.create(host, {
+    model: _ptex.models[files[0].path], theme: 'vs-dark', automaticLayout: true,
+    fontSize: 13, minimap: { enabled: true }, wordWrap: 'on',
+    scrollBeyondLastLine: false, tabSize: 2, quickSuggestions: true,
+  });
+  _ptex.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => _ptexSave(false));
+  const activate = (path) => {
+    if (!_ptex.models[path]) return;
+    _ptex.active = path;
+    _ptex.editor.setModel(_ptex.models[path]);
+    const pe = document.getElementById('ptex-path'); if (pe) pe.textContent = path;
+    document.querySelectorAll('.ptex-tab').forEach(t =>
+      t.classList.toggle('on', t.dataset.p === path));
+    _ptex.editor.focus();
+  };
+  const tabs = document.getElementById('ptex-tabs');
+  tabs.innerHTML = files.map(f =>
+    `<button class="ptex-tab" data-p="${esc(f.path)}">${esc(f.path.split('/').pop())}</button>`).join('');
+  tabs.querySelectorAll('.ptex-tab').forEach(t => t.onclick = () => activate(t.dataset.p));
+  document.getElementById('ptex-save').onclick = () => _ptexSave(false);
+  document.getElementById('ptex-saverc').onclick = () => _ptexSave(true);
+  activate(files[0].path);
+}
+
+async function _ptexSave(recompile) {
+  const msg = document.getElementById('ptex-msg');
+  const path = _ptex.active, model = _ptex.models[path];
+  if (!path || !model) return;
+  if (msg) msg.textContent = 'saving…';
+  try {
+    const r = await post('/paper/section/save', { path, content: model.getValue() });
+    if (!r || r.ok === false) { if (msg) msg.textContent = (r && r.detail) || 'save failed'; return; }
+    if (msg) msg.textContent = 'saved ✓';
+    if (recompile) {
+      if (msg) msg.textContent = 'recompiling…';
+      await post('/paper/recompile', { force: true });
+      if (msg) msg.textContent = 'saved + recompiled ✓';
+    }
+    if (msg) setTimeout(() => { msg.textContent = ''; }, 4000);
+  } catch (e) { if (msg) msg.textContent = 'save failed'; }
+}
+
+function _ptexFallback(v, files) {
+  const f0 = files[0];
+  v.innerHTML = '<div class="ptex"><div class="ptex-bar"><span class="ptex-path">' +
+    esc(f0.path) + '</span><span class="ptex-spacer"></span>' +
+    '<button class="btn xs pri" id="ptex-fbsave">Save</button></div>' +
+    '<textarea class="ptex-fb" id="ptex-fbta" spellcheck="false">' + esc(f0.content || '') +
+    '</textarea></div>';
+  document.getElementById('ptex-fbsave').onclick = () =>
+    post('/paper/section/save', { path: f0.path, content: document.getElementById('ptex-fbta').value });
 }
 
 function paintPaperTab(c) {

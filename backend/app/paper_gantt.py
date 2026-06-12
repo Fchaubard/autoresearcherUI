@@ -44,6 +44,42 @@ def schedule(runs: list[dict], n_gpus: int, now_sec: float = 0.0) -> dict:
     remaining = set(by_id)
     done: set = set()
 
+    def _place(rid, start, chosen, dur):
+        end = start + dur
+        for i in chosen:
+            gpu_free[i] = max(gpu_free[i], end)
+        finish[rid] = end
+        r = by_id[rid]
+        placed[rid] = {
+            "id": rid, "name": r.get("name") or rid,
+            "gpu": chosen[0], "gpus": chosen,
+            "start_sec": start, "end_sec": end, "est_time_sec": dur,
+            "depends_on": [d for d in (r.get("depends_on") or [])
+                           if d in by_id],
+            "status": r.get("status", ""),
+        }
+        order.append(rid)
+        remaining.discard(rid)
+        done.add(rid)
+
+    # RUNNING runs are already executing — they occupy a GPU RIGHT NOW. Pin
+    # each to start=now (one per GPU) so the N running runs overlap at the
+    # current time instead of being bin-packed into future slots. Use the
+    # remaining time when known so the bar reflects time left, not full length.
+    running = [rid for rid in by_id if by_id[rid].get("status") == "running"]
+    running.sort(key=lambda rid: (
+        -int(by_id[rid].get("remaining_sec")
+             if by_id[rid].get("remaining_sec") is not None
+             else (by_id[rid].get("est_time_sec") or 0)), str(rid)))
+    for rid in running:
+        r = by_id[rid]
+        g = max(1, min(int(r.get("gpus_required") or 1), n_gpus))
+        chosen = sorted(range(n_gpus), key=lambda i: gpu_free[i])[:g]
+        rem = r.get("remaining_sec")
+        dur = max(0, int(rem if rem is not None
+                         else (r.get("est_time_sec") or 0)))
+        _place(rid, float(now_sec), chosen, dur)   # start pinned to now
+
     def plan(rid):
         r = by_id[rid]
         deps = [d for d in (r.get("depends_on") or []) if d in by_id]
@@ -64,21 +100,7 @@ def schedule(runs: list[dict], n_gpus: int, now_sec: float = 0.0) -> dict:
                                            str(rid)))
         start, chosen, _g = plan(best)
         dur = max(0, int(by_id[best].get("est_time_sec") or 0))
-        end = start + dur
-        for i in chosen:
-            gpu_free[i] = end
-        finish[best] = end
-        placed[best] = {
-            "id": best, "name": by_id[best].get("name") or best,
-            "gpu": chosen[0], "gpus": chosen,
-            "start_sec": start, "end_sec": end, "est_time_sec": dur,
-            "depends_on": [d for d in (by_id[best].get("depends_on") or [])
-                           if d in by_id],
-            "status": by_id[best].get("status", ""),
-        }
-        order.append(best)
-        remaining.discard(best)
-        done.add(best)
+        _place(best, start, chosen, dur)
 
     makespan = (max(finish.values()) - now_sec) if finish else 0.0
     return {

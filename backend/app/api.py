@@ -3888,17 +3888,34 @@ def paper_gantt(db: Session = Depends(get_session)):
     fig_label = {fid: f"Figure {i}" for i, fid in enumerate(fig_order, 1)}
     # Only the schedulable runs go through the GPU scheduler; finished runs are
     # appended afterward (so they still appear as completed rows).
+    now = _dt.datetime.now(_dt.timezone.utc)
+
+    def _remaining_sec(r):
+        # For a RUNNING run, how much wall-clock is left (so the scheduler pins
+        # it to now and the bar shows time remaining, not full duration).
+        if r.status != "running" or not r.started_at:
+            return None
+        try:
+            st = _dt.datetime.fromisoformat(
+                r.started_at.replace("Z", "+00:00"))
+            if st.tzinfo is None:
+                st = st.replace(tzinfo=_dt.timezone.utc)
+            elapsed = (now - st).total_seconds()
+            return max(60, int((r.est_time_sec or 0) - elapsed))
+        except Exception:
+            return None
+
     sched_states = ("proposed", "queued", "running")
     sched_in = [{
         "id": r.id, "name": r.run_name,
         "est_time_sec": int(r.est_time_sec or 0),
+        "remaining_sec": _remaining_sec(r),
         "gpus_required": int(r.gpus_required or 1),
         "depends_on": (r.depends_on if isinstance(r.depends_on, list) else []),
         "status": r.status,
     } for r in rows if r.status in sched_states]
     out = _g.schedule(sched_in, n_gpus)
     detail = {r.id: r for r in rows}
-    now = _dt.datetime.now(_dt.timezone.utc)
 
     def _cmd(r):
         return ((r.config or {}).get("cmd", "")
