@@ -6803,10 +6803,18 @@ function _cpgInjectStyle() {
     .cpg-grl{position:absolute;top:0;bottom:0;width:1px;background:rgba(255,255,255,.05)}
     .cpg-hd .cpg-grl{bottom:-9999px}
     .cpg-tk{position:absolute;top:7px;font-size:10px;color:var(--muted);transform:translateX(-50%);white-space:nowrap}
-    .cpg-bar{position:absolute;top:6px;height:13px;border-radius:3px;min-width:3px}
+    .cpg-tk.cpg-tk-first{transform:translateX(0)}
+    .cpg-tk.cpg-tk-last{transform:translateX(-100%)}
+    .cpg-bar{position:absolute;top:3px;height:19px;border-radius:3px;min-width:6px;border:0;
+      cursor:pointer;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.45);font-size:10px;font-weight:600;
+      padding:0 6px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;text-align:left;line-height:19px}
+    .cpg-bar:hover{filter:brightness(1.12);outline:1px solid rgba(255,255,255,.5)}
     .cpg-bar.cpg-running{background:#eab308}.cpg-bar.cpg-queued{background:#6366f1}
     .cpg-bar.cpg-proposed{background:#a78bfa}.cpg-bar.cpg-failed{background:#ef4444}
-    .cpg-done2{position:absolute;left:5px;top:6px;font-size:10px;color:#22c55e}
+    .cpg-doneb{position:absolute;left:4px;top:3px;height:19px;line-height:17px;border-radius:3px;
+      background:transparent;border:1px solid rgba(34,197,94,.45);color:#22c55e;cursor:pointer;
+      font-size:10px;font-weight:600;padding:0 7px;max-width:96%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+    .cpg-doneb:hover{background:rgba(34,197,94,.12)}
   `;
   document.head.appendChild(s);
 }
@@ -6859,28 +6867,35 @@ function _cpgPaint(tableId, subId) {
   let axis = '', grl = '';
   for (let h = 0; h <= spanH + 1e-6; h += stepH) {
     const x = Math.round(h * pph);
-    axis += `<span class="cpg-tk" style="left:${x}px">${esc(fmtAxis(now + h * 3600 * 1000))}</span>`;
+    const tcl = h < 1e-6 ? ' cpg-tk-first'
+      : (h + stepH > spanH + 1e-6 ? ' cpg-tk-last' : '');
+    axis += `<span class="cpg-tk${tcl}" style="left:${x}px">${esc(fmtAxis(now + h * 3600 * 1000))}</span>`;
     grl += `<i class="cpg-grl" style="left:${x}px"></i>`;
   }
-  _cpgCmds = [];
+  _cpgCmds = [];                         // run NAMES, referenced by index (copy)
   const rowHtml = (t) => {
     const c = cls(t.status);
-    _cpgCmds.push(t.command || t.name || '');
+    const nm = t.name || t.figure_label || '';
+    _cpgCmds.push(nm);
     const idx = _cpgCmds.length - 1;
+    const rid = esc(t.id || '');
+    const enm = esc(nm);
     let inner;
     if (isSched(t)) {
       const x = Math.round((t.start_sec || 0) / 3600 * pph);
-      const w = Math.max(3, Math.round(((t.end_sec || 0) - (t.start_sec || 0)) / 3600 * pph));
-      inner = `${grl}<i class="cpg-bar ${c}" style="left:${x}px;width:${w}px" ` +
-        `title="${esc(t.start_iso || '')} → ${esc(t.end_iso || '')}"></i>`;
+      const w = Math.max(8, Math.round(((t.end_sec || 0) - (t.start_sec || 0)) / 3600 * pph));
+      inner = `${grl}<button class="cpg-bar ${c}" data-run="${rid}" ` +
+        `style="left:${x}px;width:${w}px" ` +
+        `title="${enm} · click for plots + details">${enm}</button>`;
     } else {
-      inner = `${grl}<span class="cpg-done2">✓ done</span>`;
+      inner = `${grl}<button class="cpg-doneb" data-run="${rid}" ` +
+        `title="${enm} · click for plots + details">✓ ${enm}</button>`;
     }
     return `<div class="cpg-r">
       <div class="cpg-left">
         <span class="cpg-c cpg-fig">${esc(t.figure_label || '—')}</span>
         <span class="cpg-c cpg-num">${t.run_number || ''}</span>
-        <span class="cpg-c cpg-cmd"><button class="cpg-copy" data-i="${idx}">⧉ copy</button></span>
+        <span class="cpg-c cpg-cmd"><button class="cpg-copy" data-i="${idx}" title="copy run name: ${enm}">⧉ name</button></span>
         <span class="cpg-c cpg-dur">${_cpgFmtDur(t.duration_sec || 0)}</span>
         <span class="cpg-c cpg-st"><span class="cpg-pill ${c}">${esc(t.status)}</span></span>
       </div>
@@ -6909,20 +6924,29 @@ function _cpgPaint(tableId, subId) {
       `<button class="cpg-zbtn" data-z="in">+</button></span></div>` +
     `<div class="cpg-wrap" id="cpg-wrap"><div class="cpg-grid2">` +
       header + ordered.map(rowHtml).join('') + `</div></div>`;
-  // wire copy buttons (read full command by index — no attribute-escaping risk)
+  // wire copy buttons — copy the run NAME (paste it into the Analysis search)
   host.querySelectorAll('.cpg-copy').forEach(btn => {
-    btn.onclick = () => {
-      const cmd = _cpgCmds[+btn.dataset.i] || '';
-      const done = () => { btn.textContent = '✓ copied'; setTimeout(() => { btn.textContent = '⧉ copy'; }, 1400); };
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      const nm = _cpgCmds[+btn.dataset.i] || '';
+      const done = () => { btn.textContent = '✓ copied'; setTimeout(() => { btn.textContent = '⧉ name'; }, 1400); };
       try {
         if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(cmd).then(done, () => {});
+          navigator.clipboard.writeText(nm).then(done, () => {});
         } else {
-          const ta = document.createElement('textarea'); ta.value = cmd;
+          const ta = document.createElement('textarea'); ta.value = nm;
           document.body.appendChild(ta); ta.select();
           document.execCommand('copy'); ta.remove(); done();
         }
       } catch (e) {}
+    };
+  });
+  // wire run bars/markers -> open the run drawer (plots + details; closes on
+  // click-off), the same drawer used from the dashboard run table.
+  host.querySelectorAll('.cpg-bar[data-run],.cpg-doneb[data-run]').forEach(b => {
+    b.onclick = () => {
+      const id = b.dataset.run;
+      if (id && typeof openDrawer === 'function') openDrawer(id);
     };
   });
   // wire zoom controls (repaint from cache — never refetch)
