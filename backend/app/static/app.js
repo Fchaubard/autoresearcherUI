@@ -2172,19 +2172,28 @@ function createRailTerm(session) {
   if (WebLinksAddon) t.loadAddon(new WebLinksAddon((e, uri) =>
     window.open(uri, '_blank', 'noopener')));
   t.open(container);
-  // Mouse-wheel ALWAYS scrolls xterm's own 8000-line scrollback, even when the
-  // program (Claude Code) has mouse tracking enabled. Without this, xterm
-  // reports the wheel to the agent and the user can never scroll up to read
-  // history — the terminal "feels frozen". Capture-phase + stopPropagation so
-  // this wins over xterm's internal mouse-report handler.
+  // Scrolling the author/agent terminal: Claude Code runs as a full-screen TUI
+  // in the ALTERNATE screen, so xterm has no scrollback of its own. If there IS
+  // scrollback (a plain program), scroll xterm; otherwise forward the wheel as
+  // SGR mouse-wheel reports so the TUI scrolls its own transcript (verified: it
+  // responds to \x1b[<64/65;..M). Capture-phase + stopPropagation so this wins
+  // over xterm's default mouse-report handler.
   container.addEventListener('wheel', (ev) => {
     try {
-      let lines;
-      if (ev.deltaMode === 1) lines = ev.deltaY;                    // lines
-      else if (ev.deltaMode === 2) lines = ev.deltaY * (t.rows || 24); // pages
-      else lines = ev.deltaY / 16;                                  // px -> lines
-      lines = Math.trunc(lines) || (ev.deltaY > 0 ? 1 : -1);
-      t.scrollLines(lines);
+      const buf = t.buffer && t.buffer.active;
+      const hasScrollback = buf && buf.type === 'normal' &&
+        (buf.length > t.rows);
+      if (hasScrollback) {
+        let lines = ev.deltaMode === 1 ? ev.deltaY
+          : ev.deltaMode === 2 ? ev.deltaY * (t.rows || 24) : ev.deltaY / 16;
+        t.scrollLines(Math.trunc(lines) || (ev.deltaY > 0 ? 1 : -1));
+      } else {
+        const btn = ev.deltaY < 0 ? 64 : 65;   // 64 wheel-up, 65 wheel-down
+        const n = Math.min(6, Math.max(1, Math.round(Math.abs(ev.deltaY) / 40)));
+        let seq = '';
+        for (let i = 0; i < n; i++) seq += '\x1b[<' + btn + ';20;20M';
+        post('/agent/keys', { session, data: seq }).catch(() => {});
+      }
       ev.preventDefault();
       ev.stopPropagation();
     } catch (e) {}
