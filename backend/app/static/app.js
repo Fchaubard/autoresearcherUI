@@ -6755,46 +6755,58 @@ function _cpgFmtDur(sec) {
   return (h >= 10 ? Math.round(h) : h.toFixed(1)) + ' h';
 }
 
+// Left task-column total width (sticky). Sum of the cell widths below.
+const _CPG_LEFTW = 64 + 40 + 58 + 58 + 84;   // figure+num+cmd+dur+status
+let _cpgData = null;        // last /paper/gantt payload (so zoom never refetches)
+let _cpgPxPerHour = 0;      // 0 = auto-fit on first paint
+let _cpgSpanH = 1;
+let _cpgCmds = [];          // full commands, referenced by index (copy buttons)
+
 function _cpgInjectStyle() {
   if (document.getElementById('cpg-style')) return;
   const s = document.createElement('style');
   s.id = 'cpg-style';
   s.textContent = `
-    .cpg-head{display:flex;align-items:baseline;gap:10px;margin-bottom:10px}
+    .cpg-head{display:flex;align-items:baseline;gap:10px;margin-bottom:8px;flex-wrap:wrap}
     .cpg-sub{color:var(--muted);font-size:12px}
-    .cpg-table-wrap{overflow-x:auto;border:1px solid var(--line,#222);border-radius:8px}
-    table.cpg-table{border-collapse:collapse;width:100%;font-size:12px;min-width:860px;table-layout:fixed}
-    table.cpg-table th{position:sticky;top:0;z-index:2;background:var(--panel,#0e0f13);text-align:left;
-      padding:7px 10px;color:var(--muted);font-weight:600;border-bottom:1px solid var(--line,#222);white-space:nowrap}
-    table.cpg-table td{padding:5px 10px;border-bottom:1px solid var(--line,#1a1b20);vertical-align:middle}
-    .cpg-row:hover{background:rgba(255,255,255,.03)}
-    .cpg-fig{font-weight:600;white-space:nowrap;width:70px}
-    .cpg-num{color:var(--muted);text-align:right;width:44px}
-    .cpg-cmd{font-family:ui-monospace,Menlo,monospace;color:var(--fg,#cdd);width:240px;
-      overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .cpg-dur{white-space:nowrap;color:var(--muted);width:60px}
-    .cpg-st{width:90px}
-    .cpg-pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:600;text-transform:lowercase}
+    .cpg-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+    .cpg-zoom{margin-left:auto;display:flex;align-items:center;gap:5px;color:var(--muted);font-size:11px}
+    .cpg-zbtn{background:var(--panel-2,#15171c);border:1px solid var(--line,#2a2c33);color:var(--fg,#cdd);
+      min-width:24px;height:22px;border-radius:5px;cursor:pointer;font-size:12px;line-height:1;padding:0 6px}
+    .cpg-zbtn:hover{border-color:var(--accent,#6366f1);color:var(--text,#fff)}
+    .cpg-wrap{overflow:auto;max-height:64vh;border:1px solid var(--line,#222);border-radius:8px}
+    .cpg-grid2{display:inline-block;min-width:100%;font-size:11.5px}
+    .cpg-r{display:flex;align-items:stretch;height:26px;border-bottom:1px solid var(--line,#1a1b20)}
+    .cpg-r:hover{background:rgba(255,255,255,.025)}
+    .cpg-hd{position:sticky;top:0;z-index:3;height:28px;background:var(--panel,#0e0f13)}
+    .cpg-left{position:sticky;left:0;z-index:2;display:flex;align-items:center;
+      background:var(--panel,#0e0f13);box-shadow:1px 0 0 var(--line,#2a2c33)}
+    .cpg-r:hover .cpg-left{background:#14161b}
+    .cpg-hd .cpg-left{z-index:4;background:var(--panel,#0e0f13)}
+    .cpg-c{padding:0 8px;white-space:nowrap;overflow:hidden;display:flex;align-items:center;box-sizing:border-box}
+    .cpg-hd .cpg-c{color:var(--muted);font-weight:600;text-transform:none}
+    .cpg-fig{width:64px;font-weight:600}
+    .cpg-num{width:40px;justify-content:flex-end;color:var(--muted)}
+    .cpg-cmd{width:58px;justify-content:center}
+    .cpg-dur{width:58px;color:var(--muted)}
+    .cpg-st{width:84px}
+    .cpg-copy{background:var(--panel-2,#15171c);border:1px solid var(--line,#333);color:var(--fg,#9aa6b2);
+      border-radius:5px;font-size:10.5px;padding:1px 6px;cursor:pointer;white-space:nowrap}
+    .cpg-copy:hover{border-color:var(--accent,#6366f1);color:var(--text,#fff)}
+    .cpg-pill{display:inline-block;padding:1px 7px;border-radius:10px;font-size:10.5px;font-weight:600;text-transform:lowercase}
     .cpg-running{background:rgba(234,179,8,.18);color:#eab308}
     .cpg-queued{background:rgba(99,102,241,.16);color:#818cf8}
     .cpg-proposed{background:rgba(167,139,250,.16);color:#a78bfa}
     .cpg-done{background:rgba(34,197,94,.16);color:#22c55e}
     .cpg-failed{background:rgba(239,68,68,.16);color:#ef4444}
-    /* time-axis gantt */
-    .cpg-gantt-h{min-width:380px;padding-bottom:2px !important}
-    .cpg-axis{position:relative;height:16px}
-    .cpg-tick{position:absolute;top:0;font-size:10px;color:var(--muted);
-      transform:translateX(-50%);white-space:nowrap}
-    .cpg-tick.cpg-tick-first{transform:translateX(0)}
-    .cpg-tick.cpg-tick-last{transform:translateX(-100%)}
-    .cpg-track{position:relative;height:16px;background:rgba(255,255,255,.035);border-radius:3px}
-    .cpg-grid{position:absolute;top:0;bottom:0;width:1px;background:rgba(255,255,255,.07)}
-    .cpg-bar{position:absolute;top:2px;height:12px;border-radius:3px;min-width:4px}
+    .cpg-time{position:relative;flex:0 0 auto}
+    .cpg-grl{position:absolute;top:0;bottom:0;width:1px;background:rgba(255,255,255,.05)}
+    .cpg-hd .cpg-grl{bottom:-9999px}
+    .cpg-tk{position:absolute;top:7px;font-size:10px;color:var(--muted);transform:translateX(-50%);white-space:nowrap}
+    .cpg-bar{position:absolute;top:6px;height:13px;border-radius:3px;min-width:3px}
     .cpg-bar.cpg-running{background:#eab308}.cpg-bar.cpg-queued{background:#6366f1}
     .cpg-bar.cpg-proposed{background:#a78bfa}.cpg-bar.cpg-failed{background:#ef4444}
-    .cpg-doneflag{position:absolute;left:6px;top:0;font-size:10px;color:#22c55e;font-weight:600}
-    .cpg-now{position:absolute;top:-2px;bottom:-2px;width:2px;background:#f87171;z-index:1}
-    .cpg-nowlbl{position:absolute;top:-15px;font-size:9px;color:#f87171;transform:translateX(-50%)}
+    .cpg-done2{position:absolute;left:5px;top:6px;font-size:10px;color:#22c55e}
   `;
   document.head.appendChild(s);
 }
@@ -6803,76 +6815,130 @@ async function renderCriticalPathGantt(tableId, subId) {
   _cpgInjectStyle();
   const host = document.getElementById(tableId);
   if (!host) return;
-  let d;
-  try { d = await api('/paper/gantt'); }
+  try { _cpgData = await api('/paper/gantt'); }
   catch (e) { host.innerHTML = '<div class="empty2">Could not load the run schedule.</div>'; return; }
-  const tasks = (d && d.tasks) || [];
+  _cpgPxPerHour = 0;               // recompute the fit each fresh load
+  _cpgPaint(tableId, subId);
+}
+
+function _cpgPaint(tableId, subId) {
+  const host = document.getElementById(tableId);
+  const d = _cpgData;
+  if (!host || !d) return;
+  const tasks = d.tasks || [];
   const sub = subId ? document.getElementById(subId) : null;
   if (!tasks.length) {
     if (sub) sub.textContent = '';
-    host.innerHTML = '<div class="empty2">No ablation runs planned yet. At the planning phase the author enumerates every run per figure (the LR × seed × model-size sweep) and queues them here.</div>';
+    host.innerHTML = '<div class="empty2">No ablation runs planned yet. At the planning phase the author enumerates every run per figure (model size × LR × seed) and queues them here.</div>';
     return;
   }
   const cls = (s) => ({running:'cpg-running',queued:'cpg-queued',proposed:'cpg-proposed',
     done:'cpg-done',kept:'cpg-done',kept_novel:'cpg-done',success:'cpg-done',
     crashed:'cpg-failed',failed:'cpg-failed',error:'cpg-failed'}[s] || 'cpg-queued');
-  const isScheduled = (t) => (t.end_sec || 0) > (t.start_sec || 0);
-  const scheduled = tasks.filter(isScheduled);
-  const finished = tasks.filter(t => !isScheduled(t));
-  // Time window for the axis: NOW → the last scheduled finish (the makespan).
+  const isSched = (t) => (t.end_sec || 0) > (t.start_sec || 0);
+  const scheduled = tasks.filter(isSched);
+  const finished = tasks.filter(t => !isSched(t));
   const now = Date.now();
-  const spanSec = Math.max(60, d.makespan_sec ||
-    Math.max.apply(null, scheduled.map(t => t.end_sec || 0).concat([60])));
-  // absolute clock label, e.g. "Wed 6:15 PM" (drops weekday if span < 12h)
+  const spanSec = Math.max(300, d.makespan_sec ||
+    Math.max.apply(null, scheduled.map(t => t.end_sec || 0).concat([300])));
+  const spanH = spanSec / 3600;
+  _cpgSpanH = spanH;
   const longSpan = spanSec > 12 * 3600;
   const fmtAxis = (ms) => new Date(ms).toLocaleString([], longSpan
     ? {month:'short', day:'numeric', hour:'numeric'}
     : {hour:'numeric', minute:'2-digit'});
-  const NT = 6;
-  let axis = '';
-  let grid = '';
-  for (let i = 0; i <= NT; i++) {
-    const frac = i / NT, pct = (frac * 100).toFixed(2);
-    const cl = i === 0 ? ' cpg-tick-first' : i === NT ? ' cpg-tick-last' : '';
-    axis += `<span class="cpg-tick${cl}" style="left:${pct}%">${esc(fmtAxis(now + frac * spanSec * 1000))}</span>`;
-    grid += `<i class="cpg-grid" style="left:${pct}%"></i>`;
+  // Auto-fit on first paint: make the timeline fill the visible width.
+  if (!_cpgPxPerHour) {
+    let avail = 700;
+    try { const w = host.clientWidth || host.offsetWidth || 0; if (w > 0) avail = w - _CPG_LEFTW - 24; } catch (e) {}
+    _cpgPxPerHour = Math.min(600, Math.max(36, avail / Math.max(0.25, spanH)));
   }
+  const pph = _cpgPxPerHour;
+  const tlW = Math.max(120, Math.round(spanH * pph));
+  const stepH = spanH <= 6 ? 1 : spanH <= 16 ? 2 : Math.ceil(spanH / 8);
+  let axis = '', grl = '';
+  for (let h = 0; h <= spanH + 1e-6; h += stepH) {
+    const x = Math.round(h * pph);
+    axis += `<span class="cpg-tk" style="left:${x}px">${esc(fmtAxis(now + h * 3600 * 1000))}</span>`;
+    grl += `<i class="cpg-grl" style="left:${x}px"></i>`;
+  }
+  _cpgCmds = [];
   const rowHtml = (t) => {
     const c = cls(t.status);
-    const shortCmd = (t.command || '').replace(/^cd .*?&&\s*/, '')
-      .replace(/^[A-Z0-9_]+=\S+\s+/g, '').replace(/^bash -c\s*/, '').slice(0, 80);
-    let gcell;
-    if (isScheduled(t)) {
-      const left = 100 * (t.start_sec || 0) / spanSec;
-      const width = Math.max(0.8, 100 * ((t.end_sec || 0) - (t.start_sec || 0)) / spanSec);
-      gcell = `<div class="cpg-track">${grid}` +
-        `<i class="cpg-bar ${c}" style="left:${left.toFixed(2)}%;width:${width.toFixed(2)}%" ` +
-        `title="${esc(t.start_iso || '')} → ${esc(t.end_iso || '')}"></i></div>`;
+    _cpgCmds.push(t.command || t.name || '');
+    const idx = _cpgCmds.length - 1;
+    let inner;
+    if (isSched(t)) {
+      const x = Math.round((t.start_sec || 0) / 3600 * pph);
+      const w = Math.max(3, Math.round(((t.end_sec || 0) - (t.start_sec || 0)) / 3600 * pph));
+      inner = `${grl}<i class="cpg-bar ${c}" style="left:${x}px;width:${w}px" ` +
+        `title="${esc(t.start_iso || '')} → ${esc(t.end_iso || '')}"></i>`;
     } else {
-      gcell = `<div class="cpg-track">${grid}<span class="cpg-doneflag">✓ done</span></div>`;
+      inner = `${grl}<span class="cpg-done2">✓ done</span>`;
     }
-    return `<tr class="cpg-row">
-      <td class="cpg-fig">${esc(t.figure_label || '—')}</td>
-      <td class="cpg-num">${t.run_number || ''}</td>
-      <td class="cpg-cmd" title="${esc(t.command || '')}">${esc(shortCmd || t.name || '—')}</td>
-      <td class="cpg-dur">${_cpgFmtDur(t.duration_sec || 0)}</td>
-      <td class="cpg-st"><span class="cpg-pill ${c}">${esc(t.status)}</span></td>
-      <td class="cpg-gantt-cell">${gcell}</td>
-    </tr>`;
+    return `<div class="cpg-r">
+      <div class="cpg-left">
+        <span class="cpg-c cpg-fig">${esc(t.figure_label || '—')}</span>
+        <span class="cpg-c cpg-num">${t.run_number || ''}</span>
+        <span class="cpg-c cpg-cmd"><button class="cpg-copy" data-i="${idx}">⧉ copy</button></span>
+        <span class="cpg-c cpg-dur">${_cpgFmtDur(t.duration_sec || 0)}</span>
+        <span class="cpg-c cpg-st"><span class="cpg-pill ${c}">${esc(t.status)}</span></span>
+      </div>
+      <div class="cpg-time" style="width:${tlW}px">${inner}</div>
+    </div>`;
   };
   scheduled.sort((a, b) => (a.start_sec || 0) - (b.start_sec || 0));
   const ordered = scheduled.concat(finished);
-  const finishMs = now + spanSec * 1000;
   if (sub) {
     sub.textContent = scheduled.length
-      ? `${scheduled.length} scheduled · ${finished.length} done · ${d.n_gpus || 1} GPUs · finishes ${fmtAxis(finishMs)} (${_cpgFmtDur(spanSec)} out)`
+      ? `${scheduled.length} scheduled · ${finished.length} done · ${d.n_gpus || 1} GPUs · finishes ${fmtAxis(now + spanSec * 1000)} (${_cpgFmtDur(spanSec)} out)`
       : `${finished.length} runs done · nothing scheduled`;
   }
-  host.innerHTML = `<table class="cpg-table">
-    <thead><tr><th>FigureID</th><th>Run #</th><th>Command</th><th>Duration</th>
-      <th class="cpg-st">Status</th>
-      <th class="cpg-gantt-h"><div class="cpg-axis">${axis}</div></th></tr></thead>
-    <tbody>${ordered.map(rowHtml).join('')}</tbody></table>`;
+  const header = `<div class="cpg-r cpg-hd">
+    <div class="cpg-left">
+      <span class="cpg-c cpg-fig">Figure</span><span class="cpg-c cpg-num">#</span>
+      <span class="cpg-c cpg-cmd">cmd</span><span class="cpg-c cpg-dur">dur</span>
+      <span class="cpg-c cpg-st">status</span>
+    </div>
+    <div class="cpg-time" style="width:${tlW}px">${axis}</div>
+  </div>`;
+  host.innerHTML =
+    `<div class="cpg-toolbar"><span class="cpg-zoom">timeline zoom` +
+      `<button class="cpg-zbtn" data-z="out">−</button>` +
+      `<button class="cpg-zbtn" data-z="fit">fit</button>` +
+      `<button class="cpg-zbtn" data-z="in">+</button></span></div>` +
+    `<div class="cpg-wrap" id="cpg-wrap"><div class="cpg-grid2">` +
+      header + ordered.map(rowHtml).join('') + `</div></div>`;
+  // wire copy buttons (read full command by index — no attribute-escaping risk)
+  host.querySelectorAll('.cpg-copy').forEach(btn => {
+    btn.onclick = () => {
+      const cmd = _cpgCmds[+btn.dataset.i] || '';
+      const done = () => { btn.textContent = '✓ copied'; setTimeout(() => { btn.textContent = '⧉ copy'; }, 1400); };
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(cmd).then(done, () => {});
+        } else {
+          const ta = document.createElement('textarea'); ta.value = cmd;
+          document.body.appendChild(ta); ta.select();
+          document.execCommand('copy'); ta.remove(); done();
+        }
+      } catch (e) {}
+    };
+  });
+  // wire zoom controls (repaint from cache — never refetch)
+  host.querySelectorAll('.cpg-zbtn').forEach(btn => {
+    btn.onclick = () => {
+      const z = btn.dataset.z;
+      if (z === 'in') _cpgPxPerHour = Math.min(800, (_cpgPxPerHour || 100) * 1.5);
+      else if (z === 'out') _cpgPxPerHour = Math.max(18, (_cpgPxPerHour || 100) / 1.5);
+      else { // fit
+        const wrap = document.getElementById('cpg-wrap');
+        const avail = (wrap ? wrap.clientWidth : 700) - _CPG_LEFTW - 24;
+        _cpgPxPerHour = Math.min(600, Math.max(18, avail / Math.max(0.25, _cpgSpanH)));
+      }
+      _cpgPaint(tableId, subId);
+    };
+  });
 }
 
 
