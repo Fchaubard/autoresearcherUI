@@ -2172,6 +2172,23 @@ function createRailTerm(session) {
   if (WebLinksAddon) t.loadAddon(new WebLinksAddon((e, uri) =>
     window.open(uri, '_blank', 'noopener')));
   t.open(container);
+  // Mouse-wheel ALWAYS scrolls xterm's own 8000-line scrollback, even when the
+  // program (Claude Code) has mouse tracking enabled. Without this, xterm
+  // reports the wheel to the agent and the user can never scroll up to read
+  // history — the terminal "feels frozen". Capture-phase + stopPropagation so
+  // this wins over xterm's internal mouse-report handler.
+  container.addEventListener('wheel', (ev) => {
+    try {
+      let lines;
+      if (ev.deltaMode === 1) lines = ev.deltaY;                    // lines
+      else if (ev.deltaMode === 2) lines = ev.deltaY * (t.rows || 24); // pages
+      else lines = ev.deltaY / 16;                                  // px -> lines
+      lines = Math.trunc(lines) || (ev.deltaY > 0 ? 1 : -1);
+      t.scrollLines(lines);
+      ev.preventDefault();
+      ev.stopPropagation();
+    } catch (e) {}
+  }, { passive: false, capture: true });
   const refit = () => { try { fitAddon && fitAddon.fit(); } catch (e) {} };
   setTimeout(refit, 50);
   let ro = null;
