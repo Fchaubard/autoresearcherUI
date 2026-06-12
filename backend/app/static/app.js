@@ -6204,6 +6204,10 @@ async function paintPaperLatex(v) {
     scrollBeyondLastLine: false, tabSize: 2, quickSuggestions: true,
   });
   _ptex.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => _ptexSave(false));
+  // Force a relayout once the flex container has its final width (automaticLayout
+  // can measure too early on first mount and wrap text at a narrow width).
+  setTimeout(() => { try { _ptex.editor.layout(); } catch (e) {} }, 60);
+  setTimeout(() => { try { _ptex.editor.layout(); } catch (e) {} }, 350);
   const activate = (path) => {
     if (!_ptex.models[path]) return;
     _ptex.active = path;
