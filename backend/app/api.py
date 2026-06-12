@@ -1809,16 +1809,7 @@ def agent_raw_stream(session: str = "agent", offset: int = 0):
         return {"error": "bad session"}
     pre_size = pane_stream.size(session)
     rotated = bool(offset and offset > pre_size)
-    # FRESH MOUNT (offset 0): don't replay the whole multi-MB byte log — for a
-    # full-screen TUI (Claude Code) that's wasteful and can leave xterm on a
-    # blank frame. Start from the last ~512KB (plenty of full redraws) and tell
-    # the client to reset first, so the terminal shows the CURRENT screen.
-    start = offset
-    _TAIL = 512 * 1024
-    if offset == 0 and pre_size > _TAIL:
-        start = pre_size - _TAIL
-        rotated = True
-    chunk, new_off, size = pane_stream.read_range(session, start)
+    chunk, new_off, size = pane_stream.read_range(session, offset)
     return {
         "chunk": base64.b64encode(chunk).decode("ascii"),
         "offset": new_off,
