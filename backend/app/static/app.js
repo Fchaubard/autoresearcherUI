@@ -1109,6 +1109,36 @@ function header() {
  * #preflight-pills + #bless-inline. */
 function statusBar() {
   const sb = el('div', 'statusbar'); sb.id = 'statusbar';
+  // PAPER MODE: the research SOP (health / pre-flight / bless) is irrelevant
+  // and confusing here, so show a clear "Paper mode · <phase>" bar instead.
+  if (S.mode && S.mode.mode === 'paper') {
+    const ps = (typeof PaperState !== 'undefined' && PaperState) ? PaperState : {};
+    const phRaw = (ps.state && ps.state.phase &&
+                   (ps.state.phase.phase || ps.state.phase)) || ps.phase || '';
+    let phLabel = '';
+    try { phLabel = (_PHASE_LABELS && _PHASE_LABELS[phRaw]) ||
+      (typeof phRaw === 'string' ? phRaw.replace('paper.', '').replace(/_/g, ' ') : ''); }
+    catch (e) { phLabel = ''; }
+    const pill = el('div', 'pill rh-pill',
+      `<span class="dot"></span>📝 Paper mode${phLabel ? ' · ' + esc(phLabel) : ''}`);
+    pill.style.background = 'rgba(167,139,250,.16)';
+    pill.style.color = '#a78bfa';
+    pill.title = 'Writing the paper — the research loop is paused';
+    sb.append(pill);
+    sb.append(el('div', 'sb-alert',
+      '<span style="color:var(--muted)">Research paused — the Author Agent is writing the paper.</span>'));
+    sb.append(el('div', 'sb-spacer'));
+    const pr = (ps.state && ps.state.paper_runs) || [];
+    const run = pr.filter(r => r.status === 'running').length;
+    const q = pr.filter(r => r.status === 'queued' || r.status === 'proposed').length;
+    const done = pr.filter(r => ['kept', 'kept_novel', 'success', 'done'].includes(r.status)).length;
+    sb.append(el('div', 'counts',
+      `<span class="c-run">runs running <b>${run}</b></span>` +
+      `<span>queued <b>${q}</b></span><span>done <b>${done}</b></span>`));
+    const gstrip = el('div', 'gpu-strip'); gstrip.id = 'gpus';
+    sb.append(gstrip);
+    return sb;
+  }
   // health / phase pill (filled by pollResearchHealth)
   const hp = el('div', 'pill rh-pill rh-healthy', `<span class="dot"></span>Healthy`);
   hp.id = 'research-health';
@@ -6716,28 +6746,38 @@ function _cpgInjectStyle() {
     .cpg-head{display:flex;align-items:baseline;gap:10px;margin-bottom:10px}
     .cpg-sub{color:var(--muted);font-size:12px}
     .cpg-table-wrap{overflow-x:auto;border:1px solid var(--line,#222);border-radius:8px}
-    table.cpg-table{border-collapse:collapse;width:100%;font-size:12px;min-width:760px}
-    table.cpg-table th{position:sticky;top:0;background:var(--panel,#0e0f13);text-align:left;
+    table.cpg-table{border-collapse:collapse;width:100%;font-size:12px;min-width:860px;table-layout:fixed}
+    table.cpg-table th{position:sticky;top:0;z-index:2;background:var(--panel,#0e0f13);text-align:left;
       padding:7px 10px;color:var(--muted);font-weight:600;border-bottom:1px solid var(--line,#222);white-space:nowrap}
     table.cpg-table td{padding:5px 10px;border-bottom:1px solid var(--line,#1a1b20);vertical-align:middle}
     .cpg-row:hover{background:rgba(255,255,255,.03)}
-    .cpg-fig{font-weight:600;white-space:nowrap}
-    .cpg-num{color:var(--muted);text-align:right;width:48px}
-    .cpg-cmd{font-family:ui-monospace,Menlo,monospace;color:var(--fg,#cdd);max-width:280px;
+    .cpg-fig{font-weight:600;white-space:nowrap;width:70px}
+    .cpg-num{color:var(--muted);text-align:right;width:44px}
+    .cpg-cmd{font-family:ui-monospace,Menlo,monospace;color:var(--fg,#cdd);width:240px;
       overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .cpg-dur,.cpg-time{white-space:nowrap;color:var(--muted)}
+    .cpg-dur{white-space:nowrap;color:var(--muted);width:60px}
+    .cpg-st{width:90px}
     .cpg-pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:600;text-transform:lowercase}
     .cpg-running{background:rgba(234,179,8,.18);color:#eab308}
     .cpg-queued{background:rgba(99,102,241,.16);color:#818cf8}
     .cpg-proposed{background:rgba(167,139,250,.16);color:#a78bfa}
     .cpg-done{background:rgba(34,197,94,.16);color:#22c55e}
     .cpg-failed{background:rgba(239,68,68,.16);color:#ef4444}
-    .cpg-gantt-h{width:38%}
-    .cpg-track{position:relative;height:14px;background:rgba(255,255,255,.04);border-radius:3px;min-width:160px}
-    .cpg-bar{position:absolute;top:1px;height:12px;border-radius:3px;min-width:3px}
+    /* time-axis gantt */
+    .cpg-gantt-h{min-width:380px;padding-bottom:2px !important}
+    .cpg-axis{position:relative;height:16px}
+    .cpg-tick{position:absolute;top:0;font-size:10px;color:var(--muted);
+      transform:translateX(-50%);white-space:nowrap}
+    .cpg-tick.cpg-tick-first{transform:translateX(0)}
+    .cpg-tick.cpg-tick-last{transform:translateX(-100%)}
+    .cpg-track{position:relative;height:16px;background:rgba(255,255,255,.035);border-radius:3px}
+    .cpg-grid{position:absolute;top:0;bottom:0;width:1px;background:rgba(255,255,255,.07)}
+    .cpg-bar{position:absolute;top:2px;height:12px;border-radius:3px;min-width:4px}
     .cpg-bar.cpg-running{background:#eab308}.cpg-bar.cpg-queued{background:#6366f1}
-    .cpg-bar.cpg-proposed{background:#a78bfa}.cpg-bar.cpg-done{background:#22c55e}
-    .cpg-bar.cpg-failed{background:#ef4444}
+    .cpg-bar.cpg-proposed{background:#a78bfa}.cpg-bar.cpg-failed{background:#ef4444}
+    .cpg-doneflag{position:absolute;left:6px;top:0;font-size:10px;color:#22c55e;font-weight:600}
+    .cpg-now{position:absolute;top:-2px;bottom:-2px;width:2px;background:#f87171;z-index:1}
+    .cpg-nowlbl{position:absolute;top:-15px;font-size:9px;color:#f87171;transform:translateX(-50%)}
   `;
   document.head.appendChild(s);
 }
@@ -6751,42 +6791,71 @@ async function renderCriticalPathGantt(tableId, subId) {
   catch (e) { host.innerHTML = '<div class="empty2">Could not load the run schedule.</div>'; return; }
   const tasks = (d && d.tasks) || [];
   const sub = subId ? document.getElementById(subId) : null;
-  if (sub) sub.textContent = `${tasks.length} runs · ${d.n_gpus || 1} GPUs · makespan ${_cpgFmtDur(d.makespan_sec || 0)}`;
   if (!tasks.length) {
+    if (sub) sub.textContent = '';
     host.innerHTML = '<div class="empty2">No ablation runs planned yet. At the planning phase the author enumerates every run per figure (the LR × seed × model-size sweep) and queues them here.</div>';
     return;
   }
-  const span = Math.max(1, d.makespan_sec ||
-    Math.max.apply(null, tasks.map(t => t.end_sec || 0).concat([1])));
   const cls = (s) => ({running:'cpg-running',queued:'cpg-queued',proposed:'cpg-proposed',
     done:'cpg-done',kept:'cpg-done',kept_novel:'cpg-done',success:'cpg-done',
     crashed:'cpg-failed',failed:'cpg-failed',error:'cpg-failed'}[s] || 'cpg-queued');
-  const fmtClock = (iso) => { try { return new Date(iso).toLocaleString([],
-    {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}); } catch (e) { return ''; } };
-  const rows = tasks.map(t => {
-    const left = 100 * (t.start_sec || 0) / span;
-    const width = Math.max(0.6, 100 * ((t.end_sec || 0) - (t.start_sec || 0)) / span);
+  const isScheduled = (t) => (t.end_sec || 0) > (t.start_sec || 0);
+  const scheduled = tasks.filter(isScheduled);
+  const finished = tasks.filter(t => !isScheduled(t));
+  // Time window for the axis: NOW → the last scheduled finish (the makespan).
+  const now = Date.now();
+  const spanSec = Math.max(60, d.makespan_sec ||
+    Math.max.apply(null, scheduled.map(t => t.end_sec || 0).concat([60])));
+  // absolute clock label, e.g. "Wed 6:15 PM" (drops weekday if span < 12h)
+  const longSpan = spanSec > 12 * 3600;
+  const fmtAxis = (ms) => new Date(ms).toLocaleString([], longSpan
+    ? {month:'short', day:'numeric', hour:'numeric'}
+    : {hour:'numeric', minute:'2-digit'});
+  const NT = 6;
+  let axis = '';
+  let grid = '';
+  for (let i = 0; i <= NT; i++) {
+    const frac = i / NT, pct = (frac * 100).toFixed(2);
+    const cl = i === 0 ? ' cpg-tick-first' : i === NT ? ' cpg-tick-last' : '';
+    axis += `<span class="cpg-tick${cl}" style="left:${pct}%">${esc(fmtAxis(now + frac * spanSec * 1000))}</span>`;
+    grid += `<i class="cpg-grid" style="left:${pct}%"></i>`;
+  }
+  const rowHtml = (t) => {
     const c = cls(t.status);
     const shortCmd = (t.command || '').replace(/^cd .*?&&\s*/, '')
-      .replace(/^[A-Z0-9_]+=\S+\s+/g, '').slice(0, 90);
-    const isDone = ['done','kept','kept_novel','success','crashed','failed','error'].includes(t.status);
-    const bar = isDone ? '' :
-      `<div class="cpg-track"><i class="cpg-bar ${c}" style="left:${left.toFixed(2)}%;width:${width.toFixed(2)}%"></i></div>`;
+      .replace(/^[A-Z0-9_]+=\S+\s+/g, '').replace(/^bash -c\s*/, '').slice(0, 80);
+    let gcell;
+    if (isScheduled(t)) {
+      const left = 100 * (t.start_sec || 0) / spanSec;
+      const width = Math.max(0.8, 100 * ((t.end_sec || 0) - (t.start_sec || 0)) / spanSec);
+      gcell = `<div class="cpg-track">${grid}` +
+        `<i class="cpg-bar ${c}" style="left:${left.toFixed(2)}%;width:${width.toFixed(2)}%" ` +
+        `title="${esc(t.start_iso || '')} → ${esc(t.end_iso || '')}"></i></div>`;
+    } else {
+      gcell = `<div class="cpg-track">${grid}<span class="cpg-doneflag">✓ done</span></div>`;
+    }
     return `<tr class="cpg-row">
-      <td class="cpg-fig">${esc(t.figure_label || 'unassigned')}</td>
+      <td class="cpg-fig">${esc(t.figure_label || '—')}</td>
       <td class="cpg-num">${t.run_number || ''}</td>
       <td class="cpg-cmd" title="${esc(t.command || '')}">${esc(shortCmd || t.name || '—')}</td>
       <td class="cpg-dur">${_cpgFmtDur(t.duration_sec || 0)}</td>
-      <td><span class="cpg-pill ${c}">${esc(t.status)}</span></td>
-      <td class="cpg-time">${isDone ? '—' : fmtClock(t.start_iso)}</td>
-      <td class="cpg-time">${isDone ? '—' : fmtClock(t.end_iso)}</td>
-      <td class="cpg-gantt-cell">${bar}</td>
+      <td class="cpg-st"><span class="cpg-pill ${c}">${esc(t.status)}</span></td>
+      <td class="cpg-gantt-cell">${gcell}</td>
     </tr>`;
-  }).join('');
+  };
+  scheduled.sort((a, b) => (a.start_sec || 0) - (b.start_sec || 0));
+  const ordered = scheduled.concat(finished);
+  const finishMs = now + spanSec * 1000;
+  if (sub) {
+    sub.textContent = scheduled.length
+      ? `${scheduled.length} scheduled · ${finished.length} done · ${d.n_gpus || 1} GPUs · finishes ${fmtAxis(finishMs)} (${_cpgFmtDur(spanSec)} out)`
+      : `${finished.length} runs done · nothing scheduled`;
+  }
   host.innerHTML = `<table class="cpg-table">
     <thead><tr><th>FigureID</th><th>Run #</th><th>Command</th><th>Duration</th>
-      <th>Status</th><th>Start</th><th>End</th><th class="cpg-gantt-h">Gantt</th></tr></thead>
-    <tbody>${rows}</tbody></table>`;
+      <th class="cpg-st">Status</th>
+      <th class="cpg-gantt-h"><div class="cpg-axis">${axis}</div></th></tr></thead>
+    <tbody>${ordered.map(rowHtml).join('')}</tbody></table>`;
 }
 
 
