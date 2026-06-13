@@ -2767,6 +2767,30 @@ def bless_async(workspace: str, bless_meta: dict | None = None) -> dict:
             "verdicts": {},
         })
         return bless_status()
+    # ─── seed-task gate (RESEARCH_IMPROVEMENT_PLAN #7) ─────────────────
+    # Deterministic — needs no LLM, so decide it SYNCHRONOUSLY here (before
+    # spawning the worker). This both saves council tokens and makes the
+    # verdict visible the instant bless_async returns, rather than racing
+    # the worker thread (which previously left status='pending' for callers
+    # that read bless_status() immediately).
+    seed_blockers = seed_task_blockers(bless_meta)
+    if seed_blockers:
+        _bless_state_set({
+            "status": "rejected",
+            "summary": ("Seed-task gate blocked the bless — agent must "
+                        "scale the dataset / build a real training "
+                        "pipeline first."),
+            "blockers": seed_blockers,
+            "suggestions": [
+                "Mark program.md with `dataset_kind: smoke` if you "
+                "deliberately want to evaluate on a tiny set.",
+                "Otherwise scale val_set_size >= 100 examples and "
+                "ensure train.py takes >= 30s on a single CPU.",
+            ],
+            "verdicts": {},
+            "seed_task_gate": True,
+        })
+        return bless_status()
     _bless_state_set({"status": "pending",
                       "summary": "Council is reviewing the codebase…",
                       "blockers": [], "suggestions": [], "verdicts": {}})
