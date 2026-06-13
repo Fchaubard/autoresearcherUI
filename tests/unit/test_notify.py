@@ -41,6 +41,50 @@ def test_recipients_empty(arui_env):
     assert _recipients({}) == []
 
 
+# ── dashboard link survives a pod relaunch (cloudflare tunnel rotation) ──────
+#
+# The quick-tunnel hostname changes every relaunch, so the dashboard_url saved
+# at onboarding goes stale and the email button used to vanish. _dashboard_url
+# must fall back to the LIVE tunnel URL parsed from data/cloudflared.log.
+
+def _write_cf_log(*urls: str) -> None:
+    from backend.app import notify
+    log = notify.DATA_DIR / "cloudflared.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("\n".join(
+        f"2026-01-01 INF |  {u}  |" for u in urls) + "\n")
+
+
+def test_dashboard_url_uses_live_tunnel_when_unset(arui_env):
+    from backend.app.notify import _dashboard_url
+    _write_cf_log("https://alpha-beta-gamma-delta.trycloudflare.com")
+    assert (_dashboard_url({}) ==
+            "https://alpha-beta-gamma-delta.trycloudflare.com")
+
+
+def test_dashboard_url_replaces_stale_trycloudflare(arui_env):
+    from backend.app.notify import _dashboard_url
+    _write_cf_log("https://old-one-two-three.trycloudflare.com",
+                  "https://new-four-five-six.trycloudflare.com")
+    # configured value is a now-dead tunnel URL — the LIVE (last) one wins
+    cfg = {"dashboard_url": "https://old-one-two-three.trycloudflare.com"}
+    assert (_dashboard_url(cfg) ==
+            "https://new-four-five-six.trycloudflare.com")
+
+
+def test_dashboard_url_keeps_stable_custom_domain(arui_env):
+    from backend.app.notify import _dashboard_url
+    _write_cf_log("https://some-live-tunnel.trycloudflare.com")
+    # a real domain is trusted and NOT overridden by the ephemeral tunnel
+    cfg = {"dashboard_url": "https://arui.mylab.dev/"}
+    assert _dashboard_url(cfg) == "https://arui.mylab.dev"
+
+
+def test_dashboard_url_empty_when_no_tunnel(arui_env):
+    from backend.app.notify import _dashboard_url
+    assert _dashboard_url({}) == ""
+
+
 def test_email_state_get_set_roundtrip(arui_env):
     from backend.app.notify import _email_state_get, _email_state_set
     assert _email_state_get() == {}
