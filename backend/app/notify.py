@@ -46,8 +46,37 @@ def _cadence(cfg: dict) -> str:
     return str(cfg.get("cadence") or "off").strip().lower()
 
 
+def _live_tunnel_url() -> str:
+    """The cloudflare quick-tunnel URL the pod is CURRENTLY serving on.
+
+    The quick-tunnel hostname rotates on every relaunch, so the
+    ``dashboard_url`` captured at onboarding goes stale and the email button
+    silently disappears. We tail ``data/cloudflared.log`` (the same source as
+    ``GET /api/url``) for the most recent ``https://*.trycloudflare.com`` line.
+    Returns '' if there's no tunnel / log. Never raises."""
+    import re as _re
+    try:
+        log = DATA_DIR / "cloudflared.log"
+        txt = log.read_text(errors="ignore") if log.exists() else ""
+        urls = _re.findall(r"https://[a-z0-9-]+\.trycloudflare\.com", txt)
+        return urls[-1] if urls else ""
+    except Exception:                                       # noqa: BLE001
+        return ""
+
+
 def _dashboard_url(cfg: dict) -> str:
-    return (cfg.get("dashboard_url") or "").strip().rstrip("/")
+    """Link for the 'Open the dashboard' button in EVERY email.
+
+    A stable configured ``dashboard_url`` (e.g. a custom domain) always wins.
+    But a cloudflare quick-tunnel rotates its hostname every relaunch, so a
+    configured-but-stale ``*.trycloudflare.com`` URL — or no URL at all — is
+    replaced with the live tunnel URL parsed from ``data/cloudflared.log``.
+    This keeps the link present and correct across pod relaunches, which is
+    exactly when the saved URL would otherwise be wrong."""
+    configured = (cfg.get("dashboard_url") or "").strip().rstrip("/")
+    if configured and "trycloudflare.com" not in configured:
+        return configured                  # stable custom domain — trust it
+    return _live_tunnel_url().rstrip("/") or configured
 
 
 def _cadence_hours(cad: str) -> float | None:
