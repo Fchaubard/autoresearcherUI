@@ -1375,16 +1375,15 @@ def public_url():
     Local-only access: this is only useful from inside the pod — the
     cloudflared tunnel itself would have to be UP for an external
     caller to reach this endpoint in the first place. Doubles as a
-    debug ping ("is the backend alive and can I read the log?")."""
-    import re as _re
-    log = DATA_DIR / "cloudflared.log"
-    try:
-        txt = log.read_text(errors="ignore") if log.exists() else ""
-    except OSError:
-        txt = ""
-    urls = _re.findall(r"https://[a-z0-9-]+\.trycloudflare\.com", txt)
-    return {"url": urls[-1] if urls else "",
-            "all_urls": list(dict.fromkeys(urls[-10:]))}
+    debug ping ("is the backend alive and can I read the log?").
+
+    Uses the same resolver as the email link (notify._live_tunnel_url),
+    which falls back to scraping the live ``arui-cf`` tmux pane when the
+    log file was never written — so this stays correct on pods where
+    cloudflared's output didn't land in data/cloudflared.log."""
+    from . import notify
+    url = notify._live_tunnel_url()
+    return {"url": url, "all_urls": [url] if url else []}
 
 
 @router.get("/emails/status")
