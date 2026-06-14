@@ -751,10 +751,18 @@ def _baseline_metric(db, proj) -> float | None:
     return b.headline_metric if b else None
 
 
+# Statuses that count as a real, kept result with a trustworthy metric.
+# The taxonomy moved from a single "kept" to "kept_novel"/"kept_replicate";
+# "success" is the legacy name. "success_smoke" is excluded on purpose — a
+# smoke test is not a research result. Without this, the digest's Best card
+# filtered on the now-unused "kept" and always rendered "—".
+_KEPT_STATUSES = ("kept_novel", "kept_replicate", "kept", "success")
+
+
 def _best_run(db, proj):
     maximize = proj.metric_direction == "maximize"
     kept = [r for r in db.query(Run).all()
-            if r.status == "kept" and r.headline_metric is not None]
+            if r.status in _KEPT_STATUSES and r.headline_metric is not None]
     if not kept:
         return None
     return (max if maximize else min)(kept, key=lambda r: r.headline_metric)
