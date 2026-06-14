@@ -3150,6 +3150,7 @@ def _completion_review_worker_inner(evidence_run_ids: list[str], summary: str,
         _emit_completion_event(
             "research_completion_auto_approved",
             "Research conclusion auto-approved (no reviewers).")
+        _auto_enter_paper_after_approval(recommendation, summary)
         return
     ctx = _build_completion_review_context(
         evidence_run_ids, summary, answer_to_purpose, recommendation)
@@ -3240,6 +3241,38 @@ def _completion_review_worker_inner(evidence_run_ids: list[str], summary: str,
            f"{len(missing_agg)} missing-evidence item(s) returned.")
     _emit_completion_event(
         "research_completion_reviewed", msg, severity=sev)
+    if final_verdict == "APPROVED":
+        _auto_enter_paper_after_approval(recommendation,
+                                         "\n".join(summaries))
+
+
+def _auto_enter_paper_after_approval(recommendation: str,
+                                      summary: str = "") -> None:
+    """Fully-autonomous handoff (operator chose 'auto-conclude + enter Paper').
+
+    When a research conclusion is APPROVED and the recommendation is to write
+    the paper, flip into paper mode + spawn the Author Agent with NO human
+    step. Guarded so it never fires for a 'keep researching' style approval,
+    never double-enters, and never raises into the review worker."""
+    rec = (recommendation or "").strip().upper()
+    if rec in ("NEED_ORTHOGONAL_DIRECTION", "NEED_MORE_DATA"):
+        return                     # approval of a non-WRITE_PAPER conclusion
+    try:
+        from . import paper as _paper
+        if _paper.project_mode() == "paper":
+            return
+        res = _paper.enter_paper_mode(
+            meta={}, proposal_id="",
+            reason="auto-handoff: council APPROVED the research conclusion")
+        _emit_completion_event(
+            "paper_mode_auto_entered",
+            ("Research conclusion APPROVED — auto-entered paper mode and "
+             "spawned the Author Agent. " + (summary[:160] if summary else "")),
+            severity="info")
+        print("[council/conclude] auto-entered paper mode: "
+              f"{res.get('status')}", flush=True)
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[council/conclude] auto-enter paper failed: {e}", flush=True)
 
 
 def _emit_completion_event(ev_type: str, message: str,
