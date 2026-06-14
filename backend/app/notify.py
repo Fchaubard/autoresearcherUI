@@ -51,17 +51,39 @@ def _live_tunnel_url() -> str:
 
     The quick-tunnel hostname rotates on every relaunch, so the
     ``dashboard_url`` captured at onboarding goes stale and the email button
-    silently disappears. We tail ``data/cloudflared.log`` (the same source as
-    ``GET /api/url``) for the most recent ``https://*.trycloudflare.com`` line.
-    Returns '' if there's no tunnel / log. Never raises."""
+    silently disappears. We recover the live URL from, in order:
+
+      1. ``data/cloudflared.log`` — where setup.sh / the watchdog tee
+         cloudflared's output (the same source as ``GET /api/url``).
+      2. the live ``arui-cf`` tmux pane — cloudflared prints the URL there at
+         startup and echoes it in ongoing log lines, so it is recoverable even
+         when the file log was never wired up (observed on real pods).
+
+    Returns the most recent match, or '' if no tunnel is found. Never raises.
+    """
     import re as _re
+    pat = r"https://[a-z0-9-]+\.trycloudflare\.com"
+    # 1. the cloudflared log file
     try:
         log = DATA_DIR / "cloudflared.log"
-        txt = log.read_text(errors="ignore") if log.exists() else ""
-        urls = _re.findall(r"https://[a-z0-9-]+\.trycloudflare\.com", txt)
-        return urls[-1] if urls else ""
+        if log.exists():
+            urls = _re.findall(pat, log.read_text(errors="ignore"))
+            if urls:
+                return urls[-1]
     except Exception:                                       # noqa: BLE001
-        return ""
+        pass
+    # 2. fall back to scraping the live cloudflared tmux pane
+    try:
+        import subprocess as _sp
+        out = _sp.run(
+            ["tmux", "capture-pane", "-t", "arui-cf", "-p", "-S", "-5000"],
+            capture_output=True, text=True, timeout=5).stdout or ""
+        urls = _re.findall(pat, out)
+        if urls:
+            return urls[-1]
+    except Exception:                                       # noqa: BLE001
+        pass
+    return ""
 
 
 def _dashboard_url(cfg: dict) -> str:
