@@ -81,6 +81,145 @@ def set_project_mode(mode: str) -> None:
         db.close()
 
 
+def _set_onboarding_key(key: str, value) -> None:
+    """Best-effort write of a single key on the onboarding Setting row."""
+    from sqlalchemy.orm.attributes import flag_modified
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(Setting.key == "onboarding").first()
+        if not row:
+            row = Setting(key="onboarding", value={})
+            db.add(row)
+        cur = dict(row.value) if isinstance(row.value, dict) else {}
+        cur[key] = value
+        row.value = cur
+        flag_modified(row, "value")
+        db.commit()
+    finally:
+        db.close()
+
+
+def enter_paper_mode(meta: dict | None = None, proposal_id: str = "",
+                     reason: str = "user accepted paper proposal") -> dict:
+    """Flip the project into paper mode and spin up the writing pipeline.
+
+    This is the single source of truth for "enter paper mode": the
+    POST /api/paper/enter route delegates here, AND the council's
+    completion-review worker calls it directly when a research conclusion is
+    APPROVED with a WRITE_PAPER recommendation (the fully-autonomous handoff).
+    Idempotent — returns ``already_in_paper_mode`` without side effects if we
+    are already there.
+
+    Side effects mirror the original route exactly: write/patch PaperMeta,
+    record a ModeHistory snapshot, mark the chosen proposal accepted (others
+    superseded), flip project_mode, populate claims from the proposal, kill
+    the research agent/coord tmux (in-flight runs finish naturally), keep PI
+    enabled, switch the email cadence to daily, spawn the Author Agent +
+    Paper Runner, kick off lit discovery, and seed the paper phase machine.
+    """
+    from .models import ModeHistory
+    meta = meta or {}
+    proposal_id = proposal_id or ""
+    if project_mode() == "paper":
+        return {"status": "already_in_paper_mode"}
+    db = SessionLocal()
+    try:
+        m = db.query(PaperMeta).first()
+        if not m:
+            m = PaperMeta(
+                id="pm-" + os.urandom(4).hex(),
+                venue=meta.get("venue") or "NeurIPS 2026",
+                style_id=meta.get("style_id") or "neurips_2025",
+                deadline_iso=meta.get("deadline_iso") or "",
+                anonymize=bool(meta.get("anonymize", True)),
+                authors_json=meta.get("authors") or [],
+                gpu_budget_hours=float(meta.get("gpu_budget_hours") or 800),
+                llm_budget_daily_usd=float(
+                    meta.get("llm_budget_daily_usd") or 20),
+                title_preference=meta.get("title_preference") or "auto",
+                phase="scaffold")
+            db.add(m)
+        else:
+            for k, v in meta.items():
+                if v is None:
+                    continue
+                if hasattr(m, k):
+                    setattr(m, k, v)
+            m.phase = "scaffold"
+        db.add(ModeHistory(
+            id="mh-" + os.urandom(4).hex(),
+            from_mode="research", to_mode="paper",
+            reason_md=reason,
+            snapshot_json={"proposal_id": proposal_id}))
+        now_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+        if proposal_id:
+            chosen = db.query(PaperProposal).filter(
+                PaperProposal.id == proposal_id).first()
+            if chosen:
+                chosen.status = "accepted"
+                chosen.accepted_at = now_iso
+            for other in (db.query(PaperProposal)
+                          .filter(PaperProposal.id != proposal_id)
+                          .filter(PaperProposal.status.in_(
+                              ("ready", "in_progress"))).all()):
+                other.status = "superseded"
+                other.rejected_at = now_iso
+        db.commit()
+    finally:
+        db.close()
+    set_project_mode("paper")
+    try:
+        from . import telemetry
+        telemetry.capture("paper_mode_entered")
+    except Exception:                                   # noqa: BLE001
+        pass
+    claims_added = populate_claims_from_proposal(proposal_id)
+    # Pause the research loop so it stops launching experiments and starving
+    # the Paper Runner. In-flight training runs are NOT killed.
+    for sess in ("agent", "coord"):
+        try:
+            subprocess.run(["tmux", "kill-session", "-t", sess],
+                           capture_output=True, timeout=5)
+        except Exception:                               # noqa: BLE001
+            pass
+    _set_onboarding_key("pi_agent_enabled", True)
+    # Paper mode → daily digest by default (hourly is too noisy for writing).
+    try:
+        db2 = SessionLocal()
+        try:
+            row = db2.query(Setting).filter(
+                Setting.key == "onboarding").first()
+            cfg2 = dict(row.value) if row and isinstance(row.value, dict) \
+                else {}
+            cur_cad = str(cfg2.get("cadence") or "").strip().lower()
+        finally:
+            db2.close()
+        if cur_cad in ("", "immediate", "1h", "4h", "12h"):
+            _set_onboarding_key("cadence", "24h")
+            print(f"[paper] auto-switched cadence {cur_cad!r} → '24h' "
+                  "for paper mode", flush=True)
+    except Exception as e:                              # noqa: BLE001
+        print(f"[paper] cadence auto-switch skipped: {e}", flush=True)
+    # Spawn the writing pipeline.
+    from . import author_agent
+    from . import paper_runner
+    ar = author_agent.start(proposal_id=proposal_id)
+    paper_runner.start()
+    threading.Thread(target=kickoff_lit_discover, daemon=True,
+                     name="lit-discover-initial").start()
+    try:
+        from . import paper_phase as _pp
+        _pp.set_phase("paper.whittle_claims", actor="system",
+                      progress={"claims": {"active": claims_added},
+                                "lit": {"citations": 0, "approved": 0,
+                                        "pending": 0}},
+                      detail={"trigger": reason})
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[paper] phase seed failed: {e}", flush=True)
+    return {"status": "entered_paper_mode", "author_agent": ar,
+            "claims_added": claims_added, "runs_added": 0}
+
+
 # ── git in paper/ ────────────────────────────────────────────────────────
 
 
