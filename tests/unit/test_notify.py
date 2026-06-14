@@ -85,6 +85,37 @@ def test_dashboard_url_empty_when_no_tunnel(arui_env):
     assert _dashboard_url({}) == ""
 
 
+# ── Best card must recognise the current kept-run taxonomy ──────────────────
+#
+# Runs are now kept_novel / kept_replicate, not plain "kept". The digest's
+# Best card filtered on "kept" only, so best=None and the email rendered "—".
+
+def test_best_run_recognises_kept_novel_and_replicate(db_session, make_project,
+                                                       make_run):
+    from backend.app.notify import _best_run
+    make_project(metric_direction="minimize", validation_metric="val_loss")
+    make_run(status="kept_novel", headline_metric=0.50)
+    make_run(status="kept_replicate", headline_metric=0.30)   # the best (min)
+    make_run(status="discarded", headline_metric=0.10)        # ignored
+    make_run(status="success_smoke", headline_metric=0.01)    # smoke, ignored
+    from backend.app.models import Project
+    proj = db_session.query(Project).first()
+    best = _best_run(db_session, proj)
+    assert best is not None, "kept_novel/kept_replicate runs were ignored"
+    assert best.headline_metric == 0.30
+
+
+def test_best_run_none_when_only_smoke_or_discarded(db_session, make_project,
+                                                    make_run):
+    from backend.app.notify import _best_run
+    from backend.app.models import Project
+    make_project()
+    make_run(status="success_smoke", headline_metric=0.01)
+    make_run(status="discarded", headline_metric=0.02)
+    proj = db_session.query(Project).first()
+    assert _best_run(db_session, proj) is None
+
+
 def test_email_state_get_set_roundtrip(arui_env):
     from backend.app.notify import _email_state_get, _email_state_set
     assert _email_state_get() == {}
