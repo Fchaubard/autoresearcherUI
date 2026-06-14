@@ -716,6 +716,18 @@ _IDLE_PROPOSE_THRESHOLD_SEC = 15 * 60
 # long before considering another, even if needs_direction persists.
 _AUTO_PROPOSE_COOLDOWN_SEC = 30 * 60
 
+# Fully-autonomous conclusion (operator chose "auto-conclude + enter Paper").
+# When the agent has sat idle WELL past the propose-next-move window — i.e.
+# proposing more work didn't restart it (it believes it's done) — the PI
+# FILES the formal completion review itself. The DEMANDING completion council
+# is the gate: a premature conclusion is REJECTED with missing_evidence and
+# research resumes; a genuine one is APPROVED and auto-enters paper mode. The
+# threshold is deliberately well beyond _IDLE_PROPOSE_THRESHOLD_SEC so the
+# "keep working" nudge always gets first crack.
+_LAST_AUTO_CONCLUDE_KEY = "pi_last_auto_conclude_at"
+_AUTO_CONCLUDE_IDLE_SEC = 45 * 60
+_AUTO_CONCLUDE_COOLDOWN_SEC = 6 * 60 * 60
+
 
 def _last_auto_propose_at() -> dt.datetime | None:
     try:
@@ -904,6 +916,154 @@ def _maybe_propose_next_move() -> bool:
     return True
 
 
+def _last_auto_conclude_at() -> dt.datetime | None:
+    try:
+        db = SessionLocal()
+        try:
+            row = (db.query(Setting)
+                   .filter(Setting.key == _LAST_AUTO_CONCLUDE_KEY).first())
+            v = row.value if row else None
+            if isinstance(v, dict) and v.get("at"):
+                return dt.datetime.fromisoformat(
+                    str(v["at"]).replace("Z", "+00:00"))
+            return None
+        finally:
+            db.close()
+    except Exception:                                       # noqa: BLE001
+        return None
+
+
+def _mark_auto_conclude_now() -> None:
+    try:
+        db = SessionLocal()
+        try:
+            row = (db.query(Setting)
+                   .filter(Setting.key == _LAST_AUTO_CONCLUDE_KEY).first())
+            if row:
+                row.value = {"at": _iso()}
+            else:
+                db.add(Setting(key=_LAST_AUTO_CONCLUDE_KEY,
+                               value={"at": _iso()}))
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[pi] mark_auto_conclude_now failed: {e}", flush=True)
+
+
+def _auto_conclude_payload() -> tuple | None:
+    """Build (summary, evidence_run_ids, answer, recommendation) for an
+    auto-filed completion review, or None if there's no real evidence on
+    file yet (in which case we must NOT conclude — there's nothing to ship)."""
+    from .models import Project
+    db = SessionLocal()
+    try:
+        proj = db.query(Project).first()
+        if not proj:
+            return None
+        maximize = proj.metric_direction == "maximize"
+        kept = [r for r in db.query(Run).all()
+                if r.status in ("kept_novel", "kept_replicate", "kept",
+                                "success") and r.headline_metric is not None]
+        if not kept:
+            return None
+        kept.sort(key=lambda r: r.headline_metric, reverse=maximize)
+        top = kept[:6]
+        best = top[0]
+        metric = proj.validation_metric or "metric"
+        summary = (
+            "Auto-submitted by the PI: the research agent went idle with an "
+            "empty queue and stopped launching work. "
+            f"{len(kept)} kept run(s) are on file; best {metric}="
+            f"{best.headline_metric:.4f} on "
+            f"{best.run_name or best.id}. Submitting for completion review to "
+            "decide whether the project Purpose is conclusively answered.")
+        return summary, [r.id for r in top], "YES_PARTIAL", "WRITE_PAPER"
+    finally:
+        db.close()
+
+
+def _maybe_auto_conclude() -> bool:
+    """File the formal completion review when the agent has gone idle and
+    appears done (operator opted into the fully-autonomous handoff). Returns
+    True if it fired (caller short-circuits the LLM cycle). Safe + idempotent:
+    a conclusion in flight, a recent fire, no evidence, or a paused/halted
+    project all early-return False; the completion council is the real gate."""
+    try:
+        from . import notify as _notify
+        if _notify.research_paused():
+            return False
+        halted, _ = _notify.research_halted()
+        if halted:
+            return False
+    except Exception:                                       # noqa: BLE001
+        pass
+    # Don't double-file: a pending/approved conclusion is already in the path.
+    try:
+        from . import council as _c
+        st = (_c.conclusion_state().get("status") or "none").lower()
+        if st in ("pending", "approved"):
+            return False
+    except Exception:                                       # noqa: BLE001
+        pass
+    # Must be idle (needs_direction) WELL past the propose-next-move window.
+    if _last_stuck_state().get("state") != "needs_direction":
+        return False
+    since = _needs_direction_since()
+    if since is None:
+        return False
+    age_sec = (dt.datetime.now(dt.timezone.utc) - since).total_seconds()
+    if age_sec < _AUTO_CONCLUDE_IDLE_SEC:
+        return False
+    last = _last_auto_conclude_at()
+    if last is not None and (dt.datetime.now(dt.timezone.utc)
+                             - last).total_seconds() < _AUTO_CONCLUDE_COOLDOWN_SEC:
+        return False
+    payload = _auto_conclude_payload()
+    if not payload:
+        return False
+    summary, evidence_ids, answer, rec = payload
+    try:
+        from . import council as _c
+        _c.review_completion_async(evidence_run_ids=evidence_ids,
+                                   summary=summary,
+                                   answer_to_purpose=answer,
+                                   recommendation=rec)
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[pi] auto-conclude review_completion_async failed: {e}",
+              flush=True)
+        return False
+    _mark_auto_conclude_now()
+    try:
+        db = SessionLocal()
+        try:
+            db.add(ChatMessage(
+                id="cm-" + os.urandom(4).hex(), role="agent",
+                content=("[PI agent: research has been idle "
+                         f"{int(age_sec // 60)}m with an empty queue — "
+                         "auto-filing a completion review. The council will "
+                         "decide: conclude + write the paper, or hand back "
+                         "concrete experiments to run next.]"),
+                created_at=_iso()))
+            db.add(Event(
+                id="ev-" + os.urandom(4).hex(),
+                type="pi_auto_concluded", severity="info", actor="pi",
+                message=(f"PI auto-filed completion review after "
+                         f"{int(age_sec // 60)}m idle.")[:280],
+                created_at=_iso()))
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[pi] auto-conclude audit failed: {e}", flush=True)
+    try:
+        bus.publish("events", "research_health", {})
+    except Exception:                                       # noqa: BLE001
+        pass
+    print(f"[pi] auto-conclude fired (idle {int(age_sec // 60)}m)", flush=True)
+    return True
+
+
 def _escalation_halt_seen_recently(window_minutes: int = 60) -> bool:
     """True iff an ``escalation_halt`` Event was emitted in the last
     ``window_minutes``. Used by the PI cycle to auto-halt — once the
@@ -972,6 +1132,16 @@ def cycle(force: bool = False) -> dict | None:
                     "messages_sent": 0, "model": ""}
     except Exception as e:                                  # noqa: BLE001
         print(f"[pi] auto-propose failed: {e}", flush=True)
+    # Fully-autonomous conclusion: if proposing more work didn't restart the
+    # agent and it's been idle well past that window, file the completion
+    # review ourselves so the project concludes + hands off to paper instead
+    # of sitting idle (the overnight-waste bug). Council gates it.
+    try:
+        if _maybe_auto_conclude():
+            return {"concerns": "auto-filed research conclusion for "
+                    "council review", "messages_sent": 0, "model": ""}
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[pi] auto-conclude failed: {e}", flush=True)
     cfg = _settings()
     if not cfg.get("pi_agent_enabled", True) and not force:
         return None
