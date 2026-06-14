@@ -476,6 +476,22 @@ function setView(viewId) {
   pushView(viewId);
   render();
 }
+
+// Land on the Write-the-paper view and FORCE a repaint, even when the user
+// is already on it. Entering paper mode does not change the view id ('latex'
+// either way), so setView('latex')/popstate would early-return and leave the
+// research-mode intro CTA on screen until a manual refresh — the bug Francois
+// hit after accepting a proposal. We refresh S.mode FIRST so render() paints
+// the paper mission-control instead of the CTA, and reset the rail default so
+// the Author Agent shows.
+async function enterPaperView() {
+  try { S.mode = await api('/mode'); } catch (e) {}
+  S.view = 'latex';
+  S._railTabSetForPaper = false;
+  track('page_view', { view: 'latex' });
+  pushView('latex');
+  render();
+}
 window.addEventListener('popstate', () => {
   const v = viewFromPath(window.location.pathname);
   if (v && S.view !== v) { S.view = v; track('page_view', { view: v }); render(); }
@@ -735,26 +751,17 @@ function escapeHtml(s) {
 }
 
 async function onWriteThePaperClick() {
-  // Enter paper mode + jump to the write-paper view. Hardened
-  // 2026-06-05 after Francois reported the click "doesnt take you
-  // anywhere": (a) navigate FIRST so the user always lands on the
-  // paper view even if /paper/enter stalls, (b) use a real URL change
-  // (history pushState) instead of just location.hash so the route
-  // dispatcher reliably fires, (c) keep the POST in flight so the
-  // backend spawns the Author Agent.
-  try {
-    history.pushState(null, '', '/write-paper');
-  } catch (e) {
-    try { location.hash = '#/write-paper'; } catch (_) {}
-  }
-  // Dispatch a popstate so the SPA router repaints with the new path.
-  try { window.dispatchEvent(new PopStateEvent('popstate')); }
-  catch (e) {}
-  // Fire-and-forget paper-mode entry — the page will repaint as soon
-  // as /api/paper/status changes (the renderLatex polling picks it up).
+  // Enter paper mode + jump to the write-paper view. We POST /paper/enter
+  // first so the mode has actually flipped, THEN force the paper view to
+  // paint via enterPaperView() — which refreshes S.mode and re-renders even
+  // if we're already on the 'latex' view (the old pushState+popstate dance
+  // no-opped in that case and left the research CTA up until a refresh).
+  const btn = document.getElementById('cb-write');
+  if (btn) { btn.disabled = true; btn.textContent = 'Entering paper mode…'; }
   try {
     await post('/paper/enter', {});
-  } catch (e) { /* idempotent; the view will reflect state on poll */ }
+  } catch (e) { /* idempotent; enterPaperView still repaints from /mode */ }
+  await enterPaperView();
 }
 
 async function openNoveltyModal() {
@@ -1575,9 +1582,9 @@ async function openPaperOnboard(proposalId) {
     const r = await post('/paper/enter', { meta, proposal_id: proposalId });
     if (r.status === 'entered_paper_mode' || r.status === 'already_in_paper_mode') {
       sc.remove();
-      // Reload to pick up new mode + paper tab
-      try { S.mode = await api('/mode'); } catch (e) {}
-      setView('latex');
+      // Force the paper mission-control to paint now (setView would no-op
+      // here because we're already on the 'latex' view).
+      await enterPaperView();
     } else {
       await aruiAlert('Could not enter paper mode: ' + (r.detail || ''));
     }
