@@ -32,8 +32,7 @@ ROOT="${ARUI_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 PORT="${ARUI_PORT:-8000}"
 LOG="$ROOT/data/arui.log"
 CFLOG="$ROOT/data/cloudflared.log"
-LHRLOG="$ROOT/data/lhr.log"
-LHRKEY="$ROOT/.deploy/lhr_key"
+NGLOG="$ROOT/data/ngrok.log"
 STRIKE="$ROOT/data/.watchdog_healthz_strike"
 mkdir -p "$ROOT/data"
 
@@ -57,13 +56,13 @@ launch_tunnel() {
   echo "[watchdog $(date -u +%FT%TZ)] relaunched tunnel session 'arui-cf'" >>"$CFLOG"
 }
 
-launch_stable_tunnel() {
-  # localhost.run reverse tunnel — STABLE hostname pinned to a persisted key.
-  mkdir -p "$ROOT/.deploy"
-  [ -f "$LHRKEY" ] || ssh-keygen -t ed25519 -N "" -f "$LHRKEY" >/dev/null 2>&1
-  tmux new-session -d -s arui-lt \
-    "while true; do ssh -i $LHRKEY -o StrictHostKeyChecking=no -o ServerAliveInterval=20 -o ExitOnForwardFailure=yes -R 80:localhost:$PORT localhost.run 2>&1 | tee -a $LHRLOG; echo '[arui-lt] localhost.run exited; respawning in 3s' >>$LHRLOG; sleep 3; done"
-  echo "[watchdog $(date -u +%FT%TZ)] relaunched stable tunnel 'arui-lt'" >>"$LHRLOG"
+launch_ngrok() {
+  # ngrok free static domain — STABLE hostname that never rotates.
+  ngrok config add-authtoken "$NGROK_AUTHTOKEN" >/dev/null 2>&1 || true
+  echo "https://$NGROK_DOMAIN" > "$ROOT/data/ngrok.url"
+  tmux new-session -d -s arui-ng \
+    "while true; do ngrok http --domain=$NGROK_DOMAIN $PORT --log=stdout >>$NGLOG 2>&1; echo '[arui-ng] ngrok exited; respawning in 3s' >>$NGLOG; sleep 3; done"
+  echo "[watchdog $(date -u +%FT%TZ)] relaunched stable tunnel 'arui-ng'" >>"$NGLOG"
 }
 
 # ── backend ──────────────────────────────────────────────────────────────
@@ -85,11 +84,18 @@ else
 fi
 
 # ── tunnels ──────────────────────────────────────────────────────────────
-# STABLE localhost.run tunnel (the bookmarkable URL) — resurrect if gone.
-if ! have_session arui-lt; then
-  launch_stable_tunnel
+# STABLE ngrok tunnel (the bookmarkable URL) — only if configured. Resurrect
+# if its session died. Needs a free authtoken + static domain in
+# $ROOT/.deploy/ngrok.env (NGROK_AUTHTOKEN, NGROK_DOMAIN).
+if [ -f "$ROOT/.deploy/ngrok.env" ]; then
+  # shellcheck disable=SC1091
+  . "$ROOT/.deploy/ngrok.env"
+  if [ -n "${NGROK_AUTHTOKEN:-}" ] && [ -n "${NGROK_DOMAIN:-}" ] \
+     && command -v ngrok >/dev/null 2>&1 && ! have_session arui-ng; then
+    launch_ngrok
+  fi
 fi
-# cloudflare quick-tunnel (secondary / fallback) — resurrect if gone.
+# cloudflare quick-tunnel (fallback when ngrok isn't configured) — resurrect.
 if command -v cloudflared >/dev/null 2>&1 && ! have_session arui-cf; then
   launch_tunnel
 fi
