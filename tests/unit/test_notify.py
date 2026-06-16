@@ -85,6 +85,75 @@ def test_dashboard_url_empty_when_no_tunnel(arui_env):
     assert _dashboard_url({}) == ""
 
 
+# ── tunnel-URL-change watcher: email the operator when the URL rotates ───────
+
+def test_tunnel_change_emails_once_per_distinct_url(arui_env, setting_setter,
+                                                    monkeypatch):
+    from backend.app import notify
+    # a configured recipient so send() has somewhere to go
+    setting_setter("onboarding", {"email": "me@x.com", "gmail_app_pw": "pw"})
+    for v in ("CI", "DO_NOT_TRACK", "ARUI_TELEMETRY_DISABLED"):
+        monkeypatch.delenv(v, raising=False)
+    sent = []
+    monkeypatch.setattr(notify, "_deliver",
+                        lambda subj, text, cfg, html=None, images=None:
+                        sent.append(subj) or True)
+
+    urls = ["https://aaa-first.trycloudflare.com"]
+    monkeypatch.setattr(notify, "_live_tunnel_url", lambda: urls[-1])
+
+    # first detection → email (here's your URL)
+    assert notify.maybe_email_tunnel_change() is True
+    # same URL again → no email
+    assert notify.maybe_email_tunnel_change() is False
+    # URL rotates → email again
+    urls.append("https://bbb-rotated.trycloudflare.com")
+    assert notify.maybe_email_tunnel_change() is True
+    assert len(sent) == 2
+
+
+def test_tunnel_change_silent_when_no_tunnel(arui_env, monkeypatch):
+    from backend.app import notify
+    monkeypatch.setattr(notify, "_live_tunnel_url", lambda: "")
+    assert notify.maybe_email_tunnel_change() is False
+
+
+def test_tunnel_change_respects_email_pause(arui_env, setting_setter,
+                                            monkeypatch):
+    from backend.app import notify
+    setting_setter("onboarding", {"email": "me@x.com", "gmail_app_pw": "pw",
+                                  "emails_paused": True})
+    monkeypatch.setattr(notify, "_live_tunnel_url",
+                        lambda: "https://x-paused.trycloudflare.com")
+    sent = []
+    monkeypatch.setattr(notify, "_deliver",
+                        lambda *a, **k: sent.append(1) or True)
+    # records the URL but sends nothing while paused
+    assert notify.maybe_email_tunnel_change() is False
+    assert sent == []
+
+
+def _write_ngrok_url(url: str) -> None:
+    from backend.app import notify
+    f = notify.DATA_DIR / "ngrok.url"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(url + "\n")
+
+
+def test_prefers_stable_ngrok_over_cloudflare(arui_env):
+    from backend.app.notify import _live_tunnel_url
+    _write_ngrok_url("https://francois.ngrok-free.app")
+    _write_cf_log("https://rotating-quick-tunnel.trycloudflare.com")
+    # the pinned ngrok domain wins even though a cloudflare URL is present
+    assert _live_tunnel_url() == "https://francois.ngrok-free.app"
+
+
+def test_falls_back_to_cloudflare_when_no_ngrok(arui_env):
+    from backend.app.notify import _live_tunnel_url
+    _write_cf_log("https://only-quick-tunnel.trycloudflare.com")
+    assert _live_tunnel_url() == "https://only-quick-tunnel.trycloudflare.com"
+
+
 # ── Best card must recognise the current kept-run taxonomy ──────────────────
 #
 # Runs are now kept_novel / kept_replicate, not plain "kept". The digest's
