@@ -49,38 +49,54 @@ def _cadence(cfg: dict) -> str:
 def _live_tunnel_url() -> str:
     """The cloudflare quick-tunnel URL the pod is CURRENTLY serving on.
 
-    The quick-tunnel hostname rotates on every relaunch, so the
-    ``dashboard_url`` captured at onboarding goes stale and the email button
-    silently disappears. We recover the live URL from, in order:
+    We PREFER a stable tunnel (ngrok's free static domain) — its hostname never
+    rotates — and only fall back to the ephemeral cloudflare quick-tunnel
+    (``*.trycloudflare.com``), whose hostname changes on every reconnect.
+    Sources, in order:
 
-      1. ``data/cloudflared.log`` — where setup.sh / the watchdog tee
-         cloudflared's output (the same source as ``GET /api/url``).
-      2. the live ``arui-cf`` tmux pane — cloudflared prints the URL there at
-         startup and echoes it in ongoing log lines, so it is recoverable even
+      1. ``data/ngrok.url`` — the pinned ngrok static domain (STABLE), written
+         by setup.sh / the watchdog when ngrok is configured.
+      2. ``data/cloudflared.log`` — the cloudflare quick-tunnel (rotates).
+      3. the live ``arui-cf`` tmux pane — cloudflared echoes its URL there even
          when the file log was never wired up (observed on real pods).
 
     Returns the most recent match, or '' if no tunnel is found. Never raises.
     """
     import re as _re
-    pat = r"https://[a-z0-9-]+\.trycloudflare\.com"
-    # 1. the cloudflared log file
+    _ansi = _re.compile(r"\x1b\[[0-9;]*m")
+
+    def _scan(text: str, pat: str) -> str:
+        urls = _re.findall(pat, _ansi.sub("", text or ""))
+        return urls[-1] if urls else ""
+
+    cf = r"https://[a-z0-9-]+\.trycloudflare\.com"
+    # 1. stable ngrok static domain
+    try:
+        f = DATA_DIR / "ngrok.url"
+        if f.exists():
+            u = f.read_text(errors="ignore").strip()
+            if u.startswith("https://"):
+                return u
+    except Exception:                                       # noqa: BLE001
+        pass
+    # 2. cloudflare quick-tunnel log
     try:
         log = DATA_DIR / "cloudflared.log"
         if log.exists():
-            urls = _re.findall(pat, log.read_text(errors="ignore"))
-            if urls:
-                return urls[-1]
+            u = _scan(log.read_text(errors="ignore"), cf)
+            if u:
+                return u
     except Exception:                                       # noqa: BLE001
         pass
-    # 2. fall back to scraping the live cloudflared tmux pane
+    # 3. fall back to scraping the live cloudflared tmux pane
     try:
         import subprocess as _sp
         out = _sp.run(
             ["tmux", "capture-pane", "-t", "arui-cf", "-p", "-S", "-5000"],
             capture_output=True, text=True, timeout=5).stdout or ""
-        urls = _re.findall(pat, out)
-        if urls:
-            return urls[-1]
+        u = _scan(out, cf)
+        if u:
+            return u
     except Exception:                                       # noqa: BLE001
         pass
     return ""
@@ -1806,6 +1822,64 @@ _started = False
 _lock = threading.Lock()
 
 
+_TUNNEL_URL_KEY = "tunnel_url_state"
+
+
+def maybe_email_tunnel_change() -> bool:
+    """Email the operator whenever the public dashboard URL changes.
+
+    The cloudflare quick-tunnel rotates its hostname on every reconnect, so a
+    bookmarked link keeps dying. Rather than chase an (impossible, sign-up-free)
+    stable URL, we simply WATCH the live URL and email the new one the moment it
+    changes — so the current link is always one click away in the inbox. Polled
+    from the 60s digest loop. Returns True iff an email was sent. Never raises.
+    """
+    try:
+        cur = _live_tunnel_url()
+        if not cur:
+            return False
+        db = SessionLocal()
+        try:
+            row = (db.query(Setting)
+                   .filter(Setting.key == _TUNNEL_URL_KEY).first())
+            prev = ((row.value or {}).get("url")
+                    if row and isinstance(row.value, dict) else "")
+            if prev == cur:
+                return False
+            if row:
+                row.value = {"url": cur, "at": _dt_now_iso()}
+            else:
+                db.add(Setting(key=_TUNNEL_URL_KEY,
+                               value={"url": cur, "at": _dt_now_iso()}))
+            db.commit()
+        finally:
+            db.close()
+        if emails_paused():
+            return False
+        first = not prev
+        subject = ("[autoresearcherUI] dashboard URL"
+                   if first else
+                   "[autoresearcherUI] dashboard URL changed")
+        headline = ("Your dashboard is live — here's the public link."
+                    if first else
+                    "Heads up: the dashboard's public URL just changed.")
+        bullets = [f"New URL: {cur}"]
+        if not first:
+            bullets.append("The previous link stopped working — cloudflare's "
+                           "quick-tunnel rotated its hostname on reconnect.")
+        bullets.append("Bookmark this one; I'll email again if it ever rotates.")
+        return send_alert(subject, headline, bullets=bullets,
+                          action_text="Open the dashboard with the button "
+                                      "below.", severity="info")
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[notify] tunnel-change check failed: {e}", flush=True)
+        return False
+
+
+def _dt_now_iso() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat()
+
+
 def start_scheduler() -> None:
     """Start the once-per-process background digest scheduler."""
     global _started
@@ -1841,6 +1915,12 @@ def _loop() -> None:
     last_stalled_send = 0.0        # debounce stalled override pings
     while True:
         time.sleep(60)
+        try:
+            # Watch the cloudflare quick-tunnel URL and email the operator the
+            # moment it rotates, so the current link is always in their inbox.
+            maybe_email_tunnel_change()
+        except Exception as e:                       # noqa: BLE001
+            print(f"[notify] tunnel watch error: {e}", flush=True)
         try:
             cfg = _cfg()
             cad = _cadence(cfg)
