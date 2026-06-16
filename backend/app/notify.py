@@ -49,38 +49,55 @@ def _cadence(cfg: dict) -> str:
 def _live_tunnel_url() -> str:
     """The cloudflare quick-tunnel URL the pod is CURRENTLY serving on.
 
-    The quick-tunnel hostname rotates on every relaunch, so the
-    ``dashboard_url`` captured at onboarding goes stale and the email button
-    silently disappears. We recover the live URL from, in order:
+    We PREFER a stable tunnel (localhost.run, ``*.lhr.life``) — its hostname is
+    pinned to a persisted SSH key so it does NOT rotate — and only fall back to
+    the ephemeral cloudflare quick-tunnel (``*.trycloudflare.com``), whose
+    hostname changes on every reconnect. Sources, in order:
 
-      1. ``data/cloudflared.log`` — where setup.sh / the watchdog tee
-         cloudflared's output (the same source as ``GET /api/url``).
-      2. the live ``arui-cf`` tmux pane — cloudflared prints the URL there at
-         startup and echoes it in ongoing log lines, so it is recoverable even
+      1. ``data/lhr.log`` — the supervised localhost.run tunnel (STABLE url).
+      2. ``data/cloudflared.log`` — the cloudflare quick-tunnel (rotates).
+      3. the live ``arui-cf`` tmux pane — cloudflared echoes its URL there even
          when the file log was never wired up (observed on real pods).
 
     Returns the most recent match, or '' if no tunnel is found. Never raises.
     """
     import re as _re
-    pat = r"https://[a-z0-9-]+\.trycloudflare\.com"
-    # 1. the cloudflared log file
+    _ansi = _re.compile(r"\x1b\[[0-9;]*m")
+
+    def _scan(text: str, pat: str) -> str:
+        urls = _re.findall(pat, _ansi.sub("", text or ""))
+        return urls[-1] if urls else ""
+
+    lhr = r"https://[a-z0-9]+\.lhr\.life"
+    cf = r"https://[a-z0-9-]+\.trycloudflare\.com"
+    # 1. stable localhost.run tunnel
+    try:
+        log = DATA_DIR / "lhr.log"
+        if log.exists():
+            u = _scan(log.read_text(errors="ignore"), lhr)
+            if u:
+                return u
+    except Exception:                                       # noqa: BLE001
+        pass
+    # 2. cloudflare quick-tunnel log
     try:
         log = DATA_DIR / "cloudflared.log"
         if log.exists():
-            urls = _re.findall(pat, log.read_text(errors="ignore"))
-            if urls:
-                return urls[-1]
+            u = _scan(log.read_text(errors="ignore"), cf)
+            if u:
+                return u
     except Exception:                                       # noqa: BLE001
         pass
-    # 2. fall back to scraping the live cloudflared tmux pane
+    # 3. fall back to scraping the live tmux panes
     try:
         import subprocess as _sp
-        out = _sp.run(
-            ["tmux", "capture-pane", "-t", "arui-cf", "-p", "-S", "-5000"],
-            capture_output=True, text=True, timeout=5).stdout or ""
-        urls = _re.findall(pat, out)
-        if urls:
-            return urls[-1]
+        for sess, pat in (("arui-lt", lhr), ("arui-cf", cf)):
+            out = _sp.run(
+                ["tmux", "capture-pane", "-t", sess, "-p", "-S", "-5000"],
+                capture_output=True, text=True, timeout=5).stdout or ""
+            u = _scan(out, pat)
+            if u:
+                return u
     except Exception:                                       # noqa: BLE001
         pass
     return ""
