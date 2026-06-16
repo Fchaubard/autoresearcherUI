@@ -795,6 +795,10 @@ def _baseline_metric(db, proj) -> float | None:
 # smoke test is not a research result. Without this, the digest's Best card
 # filtered on the now-unused "kept" and always rendered "—".
 _KEPT_STATUSES = ("kept_novel", "kept_replicate", "kept", "success")
+# Every terminal (finished) run status — kept/discarded outcomes PLUS crashes.
+# Used to decide which paper runs are "done" (finished, any outcome) before we
+# split them into successes vs crashes for the digest.
+_PAPER_TERMINAL = _KEPT_STATUSES + ("discarded", "done", "crashed", "failed")
 
 
 def _best_run(db, proj):
@@ -1499,8 +1503,7 @@ def _paper_snapshot(db) -> dict:
         "paper_run_ids_done": sorted(
             r.id for r in db.query(Run).filter(
                 Run.context == "paper",
-                Run.status.in_(("kept", "success", "done",
-                                "crashed", "failed"))).all()),
+                Run.status.in_(_PAPER_TERMINAL)).all()),
         "version_ids": sorted(v.id for v in db.query(PaperVersion).all()),
     }
 
@@ -1554,8 +1557,7 @@ def _paper_digest_email(window_hours: float):
         paper_runs = db.query(Run).filter(Run.context == "paper").all()
         running = [r for r in paper_runs if r.status == "running"]
         finished_recent = [r for r in paper_runs
-                            if r.status in ("kept", "success", "done",
-                                            "crashed", "failed")]
+                           if r.status in _PAPER_TERMINAL]
         sections = db.query(PaperSection).order_by(PaperSection.slug).all()
         versions = db.query(PaperVersion).order_by(
             PaperVersion.created_at.desc()).limit(3).all()
@@ -1594,6 +1596,9 @@ def _paper_digest_email(window_hours: float):
         [r for r in in_window if r.headline_metric is not None],
         key=_key, reverse=maximize)[:5]
     crashed = [r for r in in_window if r.status in ("crashed", "failed")]
+    # "done" = finished WITH a result (never a crash); crashes are their own
+    # card so the email doesn't report 72 crashes as "72 done".
+    done_window = [r for r in in_window if r.status not in ("crashed", "failed")]
 
     # Section health roll-up
     sec_status = {}
@@ -1620,9 +1625,9 @@ def _paper_digest_email(window_hours: float):
     cards = [
         ("claims", str(n_claims)),
         ("ready", str(n_ready)),
-        ("waiting", str(len(decisions_pending))),
         ("running", str(len(running))),
-        ("done {}h".format(int(window_hours)), str(len(in_window))),
+        ("done {}h".format(int(window_hours)), str(len(done_window))),
+        ("failed {}h".format(int(window_hours)), str(len(crashed))),
     ]
     if days is not None:
         cards.append(("deadline", f"{days:.1f}d"))
