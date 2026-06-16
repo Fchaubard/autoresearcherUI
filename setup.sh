@@ -176,31 +176,36 @@ for i in $(seq 1 40); do
   sleep 0.5
 done
 
-# ── 6a. STABLE tunnel (localhost.run) ────────────────────────────────────
+# ── 6a. STABLE tunnel (ngrok, if configured) ─────────────────────────────
 # The cloudflare quick-tunnel below works but hands out a NEW random hostname
-# every time cloudflared reconnects, so a bookmarked URL keeps dying. This
-# localhost.run reverse-SSH tunnel pins its hostname to a persisted SSH key
-# ($ROOT/.deploy/lhr_key) — same key ⇒ same https://<hash>.lhr.life URL across
-# restarts. The app PREFERS this stable URL (see notify._live_tunnel_url /
-# GET /api/url). Supervised in tmux 'arui-lt' so it self-respawns.
+# every time cloudflared reconnects, so a bookmarked URL keeps dying. ngrok's
+# free static domain fixes that: the hostname NEVER changes. Drop your free
+# ngrok authtoken + assigned static domain into $ROOT/.deploy/ngrok.env:
+#     NGROK_AUTHTOKEN=2abc...your_token
+#     NGROK_DOMAIN=your-name.ngrok-free.app
+# Then this runs a supervised `ngrok http` in tmux 'arui-ng' and the app
+# PREFERS that stable URL (see notify._live_tunnel_url / GET /api/url).
 URL="http://localhost:$PORT"
-if [ "$NO_TUNNEL" -eq 0 ]; then
-  step "opening STABLE localhost.run tunnel in tmux 'arui-lt'…"
-  mkdir -p "$ROOT/.deploy"
-  LHRKEY="$ROOT/.deploy/lhr_key"
-  [ -f "$LHRKEY" ] || ssh-keygen -t ed25519 -N "" -f "$LHRKEY" >/dev/null 2>&1
-  LHRLOG="$ROOT/data/lhr.log"; : > "$LHRLOG"
-  tmux kill-session -t arui-lt 2>/dev/null || true
-  tmux new-session -d -s arui-lt \
-    "while true; do ssh -i $LHRKEY -o StrictHostKeyChecking=no -o ServerAliveInterval=20 -o ExitOnForwardFailure=yes -R 80:localhost:$PORT localhost.run 2>&1 | tee -a $LHRLOG; echo '[arui-lt] localhost.run exited; respawning in 3s' >>$LHRLOG; sleep 3; done"
-  for i in $(seq 1 40); do
-    PUB=$(sed 's/\x1b\[[0-9;]*m//g' "$LHRLOG" 2>/dev/null \
-          | grep -oE 'https://[a-z0-9]+\.lhr\.life' | tail -1 || true)
-    [ -n "$PUB" ] && { URL="$PUB"; break; }
-    sleep 0.5
-  done
-  [ -n "$PUB" ] && ok "STABLE tunnel up: $URL" \
-    || warn "localhost.run didn't print a URL — falling back to cloudflared"
+if [ "$NO_TUNNEL" -eq 0 ] && [ -f "$ROOT/.deploy/ngrok.env" ]; then
+  # shellcheck disable=SC1091
+  . "$ROOT/.deploy/ngrok.env"
+  if [ -n "${NGROK_AUTHTOKEN:-}" ] && [ -n "${NGROK_DOMAIN:-}" ]; then
+    step "opening STABLE ngrok tunnel ($NGROK_DOMAIN) in tmux 'arui-ng'…"
+    if ! command -v ngrok >/dev/null 2>&1; then
+      ARCH=$(uname -m); NG=ngrok-v3-stable-linux-amd64.tgz
+      [ "$ARCH" = "aarch64" ] && NG=ngrok-v3-stable-linux-arm64.tgz
+      curl -sSLo /tmp/ngrok.tgz "https://bin.equinox.io/c/bNyj1mQVY4c/$NG" \
+        && tar xzf /tmp/ngrok.tgz -C /usr/local/bin 2>/dev/null \
+        && ok "ngrok installed" || warn "ngrok install failed"
+    fi
+    ngrok config add-authtoken "$NGROK_AUTHTOKEN" >/dev/null 2>&1 || true
+    echo "https://$NGROK_DOMAIN" > "$ROOT/data/ngrok.url"
+    tmux kill-session -t arui-ng 2>/dev/null || true
+    tmux new-session -d -s arui-ng \
+      "while true; do ngrok http --domain=$NGROK_DOMAIN $PORT --log=stdout >>$ROOT/data/ngrok.log 2>&1; echo '[arui-ng] ngrok exited; respawning in 3s' >>$ROOT/data/ngrok.log; sleep 3; done"
+    URL="https://$NGROK_DOMAIN"
+    ok "STABLE tunnel up: $URL"
+  fi
 fi
 
 # ── 6. cloudflared tunnel (fallback / secondary) ─────────────────────────
