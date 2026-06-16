@@ -85,24 +85,22 @@ def test_dashboard_url_empty_when_no_tunnel(arui_env):
     assert _dashboard_url({}) == ""
 
 
-def _write_lhr_log(url: str, ansi: bool = True) -> None:
+def _write_ngrok_url(url: str) -> None:
     from backend.app import notify
-    log = notify.DATA_DIR / "lhr.log"
-    log.parent.mkdir(parents=True, exist_ok=True)
-    # localhost.run prints the URL wrapped in ANSI colour codes
-    line = (f"\x1b[32m{url}\x1b[0m" if ansi else url)
-    log.write_text(f"connecting...\n  {line}  tunneled with tls\n")
+    f = notify.DATA_DIR / "ngrok.url"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(url + "\n")
 
 
-def test_prefers_stable_lhr_over_cloudflare(arui_env):
+def test_prefers_stable_ngrok_over_cloudflare(arui_env):
     from backend.app.notify import _live_tunnel_url
-    _write_lhr_log("https://abc123def456.lhr.life")
+    _write_ngrok_url("https://francois.ngrok-free.app")
     _write_cf_log("https://rotating-quick-tunnel.trycloudflare.com")
-    # stable wins even though a cloudflare URL is also present
-    assert _live_tunnel_url() == "https://abc123def456.lhr.life"
+    # the pinned ngrok domain wins even though a cloudflare URL is present
+    assert _live_tunnel_url() == "https://francois.ngrok-free.app"
 
 
-def test_falls_back_to_cloudflare_when_no_lhr(arui_env):
+def test_falls_back_to_cloudflare_when_no_ngrok(arui_env):
     from backend.app.notify import _live_tunnel_url
     _write_cf_log("https://only-quick-tunnel.trycloudflare.com")
     assert _live_tunnel_url() == "https://only-quick-tunnel.trycloudflare.com"
