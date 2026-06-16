@@ -98,6 +98,16 @@ function expRuns() {                       // runs that have started, in order
 const minimize = () => (S.project?.metric_direction || 'minimize') === 'minimize';
 const better = (a, b) => minimize() ? a < b : a > b;
 
+// Canonical run-status taxonomy — one source of truth so every surface
+// (top bar, status pill, Today card, email) agrees. The success states moved
+// from "kept"/"success" to "kept_novel"/"kept_replicate"; filtering on the old
+// names made counts read 0 / undercount. "done" = a finished run that yielded
+// a result (kept or discarded); a crash is NEVER counted as done.
+const KEPT_STATUSES = ['kept_novel', 'kept_replicate', 'kept', 'success'];
+const isKept    = s => KEPT_STATUSES.includes(s);
+const isDone    = s => isKept(s) || s === 'discarded';
+const isCrashed = s => s === 'crashed' || s === 'failed';
+
 function frontier(runs) {                  // mark running-best improvements
   // RESEARCH_IMPROVEMENT_PLAN #4: the frontier only counts kept_novel
   // runs. Success_smoke (probe / smoke tests) and kept_replicate
@@ -1152,13 +1162,26 @@ function statusBar() {
     sb.append(el('div', 'sb-alert',
       '<span style="color:var(--muted)">Research paused — the Author Agent is writing the paper.</span>'));
     sb.append(el('div', 'sb-spacer'));
-    const pr = (ps.state && ps.state.paper_runs) || [];
-    const run = pr.filter(r => r.status === 'running').length;
-    const q = pr.filter(r => r.status === 'queued' || r.status === 'proposed').length;
-    const done = pr.filter(r => ['kept', 'kept_novel', 'success', 'done'].includes(r.status)).length;
+    // Read the canonical, paper-scoped counts from /api/paper/status rather
+    // than re-deriving from a run list that isn't populated here (which made
+    // the bar read 0/0/0). Falls back to the run list if status isn't loaded.
+    const abl = (ps.status && ps.status.progress
+                 && ps.status.progress.ablations) || null;
+    let run, q, done, fail;
+    if (abl) {
+      run = abl.running || 0; q = abl.queued || 0;
+      done = abl.done || 0; fail = abl.crashed || 0;
+    } else {
+      const pr = (ps.state && ps.state.paper_runs) || [];
+      run = pr.filter(r => r.status === 'running').length;
+      q = pr.filter(r => r.status === 'queued' || r.status === 'proposed').length;
+      done = pr.filter(r => isDone(r.status)).length;
+      fail = pr.filter(r => isCrashed(r.status)).length;
+    }
     sb.append(el('div', 'counts',
       `<span class="c-run">runs running <b>${run}</b></span>` +
-      `<span>queued <b>${q}</b></span><span>done <b>${done}</b></span>`));
+      `<span>queued <b>${q}</b></span><span>done <b>${done}</b></span>` +
+      `<span class="c-fail">failed <b>${fail}</b></span>`));
     const gstrip = el('div', 'gpu-strip'); gstrip.id = 'gpus';
     sb.append(gstrip);
     return sb;
@@ -1834,7 +1857,7 @@ function paintHero() {
 function paintStats() {
   const p = S.project || {};
   const runs = S.runs;
-  const done = runs.filter(r => ['kept', 'discarded'].includes(r.status));
+  const done = runs.filter(r => isDone(r.status));
   const fail = runs.filter(r => r.status === 'crashed').length;
   const best = p.best_metric, base = p.baseline_metric;
   const delta = (best != null && base != null) ? base - best : null;
@@ -2725,10 +2748,9 @@ function updateBrief() {
     const paperRuns = S.runs.filter(r => r.context === 'paper');
     const pQ = paperRuns.filter(r => r.status === 'queued').length;
     const pR = paperRuns.filter(r => r.status === 'running').length;
-    const pD = paperRuns.filter(r =>
-      ['kept','success','done'].includes(r.status)).length;
+    const pD = paperRuns.filter(r => isDone(r.status)).length;
     const pX = paperRuns.filter(r =>
-      ['crashed','failed','error'].includes(r.status)).length;
+      isCrashed(r.status) || r.status === 'error').length;
     let alert = '';
     if (pX && !pD && (pX >= paperRuns.length * 0.6)) {
       alert = `<div class="brief-alert">⚠ <b>${pX} of ${paperRuns.length} ablation runs crashed.</b> ` +
@@ -5779,9 +5801,11 @@ function paintPaperStatusBar(c) {
     + 'claims: <b>' + (claims.active || 0) + ' active</b>'
     + ' · cites: <b>' + (lit.citations || 0) + '</b>'
     + ' · ablations: <b>'
-    + (abl.proposed || 0) + ' planned · '
+    + (abl.queued || 0) + ' queued · '
     + (abl.running || 0) + ' running · '
-    + (abl.done || 0) + ' done</b>'
+    + (abl.done || 0) + ' done'
+    + (abl.crashed ? ' · ' + abl.crashed + ' failed' : '')
+    + '</b>'
     + '</div>';
   if (issues.length) {
     html += '<div class="psb-issues">';
@@ -6343,7 +6367,7 @@ function paintToday(b) {
   const claims = (st.claims || []).length;
   const figs = (st.figures || []).length;
   const queued = (st.paper_runs||[]).filter(r=>r.status==='queued').length;
-  const doneN = (st.paper_runs||[]).filter(r=>['kept','success','done'].includes(r.status)).length;
+  const doneN = (st.paper_runs||[]).filter(r=>isDone(r.status)).length;
   const ago_ = (iso) => iso ? ago(iso) : '—';
   b.innerHTML = `
     <div class="td-summary">
@@ -6403,7 +6427,7 @@ function paintToday(b) {
       const d = cfg.dataset || (cfg.cmd || '').match(/--dataset[ =]([\w_.-]+)/)?.[1] || 'default';
       if (d) datasets.add(d);
     }
-    const doneN_p = pr.filter(r => ['kept','success','done'].includes(r.status)).length;
+    const doneN_p = pr.filter(r => isDone(r.status)).length;
     const claimsReady = (st.claims || []).filter(c => c.ready).length;
     const sectionsReady = sections.filter(s => s.status === 'ready').length;
     const cites = (st.citations || []).filter(c => c.user_approved_at).length;
@@ -6593,9 +6617,9 @@ function paintCoverage(b) {
     const cr = runs.filter(r => r.paper_claim_id === cid);
     return {
       main: cr.filter(r => r.paper_role === 'main').length,
-      mainDone: cr.filter(r => r.paper_role === 'main' && ['kept','success','done'].includes(r.status)).length,
+      mainDone: cr.filter(r => r.paper_role === 'main' && isDone(r.status)).length,
       abl: cr.filter(r => r.paper_role === 'ablation').length,
-      ablDone: cr.filter(r => r.paper_role === 'ablation' && ['kept','success','done'].includes(r.status)).length,
+      ablDone: cr.filter(r => r.paper_role === 'ablation' && isDone(r.status)).length,
       scaling: cr.filter(r => r.paper_role === 'scaling').length,
       cross: cr.filter(r => r.paper_role === 'cross').length,
       baseline: cr.filter(r => r.paper_role === 'baseline').length,
@@ -6685,7 +6709,7 @@ function paintPlan(b) {
                             (a.run_name || '').localeCompare(b.run_name||''));
     const queued = grp.runs.filter(r => r.status === 'queued').length;
     const running = grp.runs.filter(r => r.status === 'running').length;
-    const done = grp.runs.filter(r => ['kept','success','done'].includes(r.status)).length;
+    const done = grp.runs.filter(r => isDone(r.status)).length;
     return `<div class="plan-group">
       <div class="plan-group-hd">
         <b>${esc(grp.claim.title)}</b>
@@ -6705,7 +6729,7 @@ function paintPlan(b) {
             || 'default';
           const m = r.headline_metric != null
             ? fmt(r.headline_metric, 4) : '—';
-          const isDone = ['kept','success','done'].includes(r.status);
+          const isDone = isDone(r.status);
           return `<tr class="plan-run-row ${r.status}">
             <td>${isDone ? '☑' : (r.status==='running' ? '◷' : '☐')}</td>
             <td><span class="chip s-${r.status}">${esc(r.status)}</span></td>
@@ -6724,7 +6748,7 @@ function paintPlan(b) {
     <div class="plan-bar">
       <button class="btn xs" id="plan-rescaffold" title="Re-import claims from the council and queue any missing ablations">⚡ Re-scaffold</button>
       <span style="color:var(--muted);font-size:11px;margin-left:8px">
-        ${runs.length} total runs · ${runs.filter(r=>r.status==='queued').length} queued · ${runs.filter(r=>r.status==='running').length} running · ${runs.filter(r=>['kept','success','done'].includes(r.status)).length} done
+        ${runs.length} total runs · ${runs.filter(r=>r.status==='queued').length} queued · ${runs.filter(r=>r.status==='running').length} running · ${runs.filter(r=>isDone(r.status)).length} done
       </span>
     </div>
     ${groupHTML}`;
@@ -6777,7 +6801,7 @@ function paintCriticalPath(b) {
   const totalRuns = runs.length;
   const runningRuns = runs.filter(r => r.status === 'running').length;
   const queuedRuns = runs.filter(r => r.status === 'queued').length;
-  const doneRuns = runs.filter(r => ['kept','success','done'].includes(r.status)).length;
+  const doneRuns = runs.filter(r => isDone(r.status)).length;
   const crashedRuns = runs.filter(r => ['crashed','failed','error'].includes(r.status)).length;
   const claimsReady = claims.filter(c => c.ready).length;
   const sectionsReady = sections.filter(s => s.status === 'ready').length;
@@ -6790,7 +6814,7 @@ function paintCriticalPath(b) {
     const cRuns = runs.filter(r => r.paper_claim_id === c.id);
     const datasetsCovered = new Set();
     for (const r of cRuns) {
-      if (['kept','success','done'].includes(r.status)) {
+      if (isDone(r.status)) {
         const ds = (r.config || {}).dataset || 'default';
         datasetsCovered.add(ds);
       }
@@ -6799,7 +6823,7 @@ function paintCriticalPath(b) {
       claim: c,
       datasets_done: Array.from(datasetsCovered),
       total_runs: cRuns.length,
-      done: cRuns.filter(r => ['kept','success','done'].includes(r.status)).length,
+      done: cRuns.filter(r => isDone(r.status)).length,
       running: cRuns.filter(r => r.status === 'running').length,
       queued: cRuns.filter(r => r.status === 'queued').length,
     };
@@ -7133,7 +7157,7 @@ function _paintGantt(b, runs, claims) {
   const HOUR = 3600000;
   const observedDurations = runs
     .filter(r => r.started_at && r.ended_at &&
-                 ['kept','success','done'].includes(r.status))
+                 isDone(r.status))
     .map(r => (+new Date(r.ended_at) - +new Date(r.started_at)) / 1000)
     .filter(d => d > 0 && d < 86400)
     .sort((a, b) => a - b);
@@ -7144,7 +7168,7 @@ function _paintGantt(b, runs, claims) {
   // 1) Place completed/running runs at their real time.
   const placed = [];
   for (const r of runs) {
-    if (['running','kept','success','done','crashed','failed'].includes(r.status) && r.started_at) {
+    if ((r.status === 'running' || isDone(r.status) || isCrashed(r.status)) && r.started_at) {
       const start = +new Date(r.started_at);
       const end = r.ended_at ? +new Date(r.ended_at)
         : (r.status === 'running' ? NOW + estSec(r) * 1000 * 0.5 : NOW);
