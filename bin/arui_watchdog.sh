@@ -32,6 +32,8 @@ ROOT="${ARUI_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 PORT="${ARUI_PORT:-8000}"
 LOG="$ROOT/data/arui.log"
 CFLOG="$ROOT/data/cloudflared.log"
+LHRLOG="$ROOT/data/lhr.log"
+LHRKEY="$ROOT/.deploy/lhr_key"
 STRIKE="$ROOT/data/.watchdog_healthz_strike"
 mkdir -p "$ROOT/data"
 
@@ -55,6 +57,15 @@ launch_tunnel() {
   echo "[watchdog $(date -u +%FT%TZ)] relaunched tunnel session 'arui-cf'" >>"$CFLOG"
 }
 
+launch_stable_tunnel() {
+  # localhost.run reverse tunnel — STABLE hostname pinned to a persisted key.
+  mkdir -p "$ROOT/.deploy"
+  [ -f "$LHRKEY" ] || ssh-keygen -t ed25519 -N "" -f "$LHRKEY" >/dev/null 2>&1
+  tmux new-session -d -s arui-lt \
+    "while true; do ssh -i $LHRKEY -o StrictHostKeyChecking=no -o ServerAliveInterval=20 -o ExitOnForwardFailure=yes -R 80:localhost:$PORT localhost.run 2>&1 | tee -a $LHRLOG; echo '[arui-lt] localhost.run exited; respawning in 3s' >>$LHRLOG; sleep 3; done"
+  echo "[watchdog $(date -u +%FT%TZ)] relaunched stable tunnel 'arui-lt'" >>"$LHRLOG"
+}
+
 # ── backend ──────────────────────────────────────────────────────────────
 if ! have_session arui; then
   launch_backend
@@ -73,7 +84,12 @@ else
   rm -f "$STRIKE"
 fi
 
-# ── tunnel ───────────────────────────────────────────────────────────────
+# ── tunnels ──────────────────────────────────────────────────────────────
+# STABLE localhost.run tunnel (the bookmarkable URL) — resurrect if gone.
+if ! have_session arui-lt; then
+  launch_stable_tunnel
+fi
+# cloudflare quick-tunnel (secondary / fallback) — resurrect if gone.
 if command -v cloudflared >/dev/null 2>&1 && ! have_session arui-cf; then
   launch_tunnel
 fi
