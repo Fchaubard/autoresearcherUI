@@ -203,7 +203,7 @@ def get_progress(db=None) -> dict:
             "lit":       {"citations": 0, "approved": 0, "pending": 0},
             "draft":     {"sections": 0, "pdf_compiled": False},
             "ablations": {"proposed": 0, "queued": 0, "running": 0,
-                          "done": 0, "kept": 0,
+                          "done": 0, "kept": 0, "crashed": 0,
                           "est_hours": 0.0},
             "gantt":     {"runs": 0, "eta_hours": 0.0,
                           "deadline_days": None},
@@ -365,12 +365,20 @@ def _derive_progress_from_db(db) -> dict:
     n_cit_approved = sum(1 for d in decisions
                          if (d.kind or "") == "cite_paper"
                          and (d.status or "") == "accepted")
-    # Paper runs status breakdown.
+    # Paper runs status breakdown. Scope STRICTLY to paper-context runs — the
+    # old ``| paper_claim_id != None`` clause leaked research-mode runs that
+    # carry a claim id, which is why "done" read 143 (all-mode) instead of the
+    # ~74 actual paper ablations. Taxonomy: success = kept_novel/kept_replicate
+    # (the new names) plus legacy kept/success; "done" = finished-with-a-result
+    # (success + discarded); crashed is tracked separately, never as "done".
     runs_by_status: dict[str, int] = {}
-    for r in (db.query(Run)
-              .filter((Run.context == "paper")
-                       | (Run.paper_claim_id != None)).all()):  # noqa: E711
+    for r in db.query(Run).filter(Run.context == "paper").all():
         runs_by_status[r.status] = runs_by_status.get(r.status, 0) + 1
+    n_kept = sum(runs_by_status.get(s, 0) for s in
+                 ("kept_novel", "kept_replicate", "kept", "success"))
+    n_disc = runs_by_status.get("discarded", 0)
+    n_crashed = (runs_by_status.get("crashed", 0)
+                 + runs_by_status.get("failed", 0))
     return {
         "claims": {"active": n_active, "ready": n_ready,
                     "killed": n_killed},
@@ -380,11 +388,9 @@ def _derive_progress_from_db(db) -> dict:
             "proposed": runs_by_status.get("proposed", 0),
             "queued":   runs_by_status.get("queued", 0),
             "running":  runs_by_status.get("running", 0),
-            "done":     (runs_by_status.get("kept_novel", 0)
-                          + runs_by_status.get("kept", 0)
-                          + runs_by_status.get("discarded", 0)),
-            "kept":     (runs_by_status.get("kept_novel", 0)
-                          + runs_by_status.get("kept", 0)),
+            "done":     n_kept + n_disc,
+            "kept":     n_kept,
+            "crashed":  n_crashed,
         },
     }
 
