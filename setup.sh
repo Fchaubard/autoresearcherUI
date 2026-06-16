@@ -176,8 +176,34 @@ for i in $(seq 1 40); do
   sleep 0.5
 done
 
-# ── 6. cloudflared tunnel ───────────────────────────────────────────────
+# ── 6a. STABLE tunnel (localhost.run) ────────────────────────────────────
+# The cloudflare quick-tunnel below works but hands out a NEW random hostname
+# every time cloudflared reconnects, so a bookmarked URL keeps dying. This
+# localhost.run reverse-SSH tunnel pins its hostname to a persisted SSH key
+# ($ROOT/.deploy/lhr_key) — same key ⇒ same https://<hash>.lhr.life URL across
+# restarts. The app PREFERS this stable URL (see notify._live_tunnel_url /
+# GET /api/url). Supervised in tmux 'arui-lt' so it self-respawns.
 URL="http://localhost:$PORT"
+if [ "$NO_TUNNEL" -eq 0 ]; then
+  step "opening STABLE localhost.run tunnel in tmux 'arui-lt'…"
+  mkdir -p "$ROOT/.deploy"
+  LHRKEY="$ROOT/.deploy/lhr_key"
+  [ -f "$LHRKEY" ] || ssh-keygen -t ed25519 -N "" -f "$LHRKEY" >/dev/null 2>&1
+  LHRLOG="$ROOT/data/lhr.log"; : > "$LHRLOG"
+  tmux kill-session -t arui-lt 2>/dev/null || true
+  tmux new-session -d -s arui-lt \
+    "while true; do ssh -i $LHRKEY -o StrictHostKeyChecking=no -o ServerAliveInterval=20 -o ExitOnForwardFailure=yes -R 80:localhost:$PORT localhost.run 2>&1 | tee -a $LHRLOG; echo '[arui-lt] localhost.run exited; respawning in 3s' >>$LHRLOG; sleep 3; done"
+  for i in $(seq 1 40); do
+    PUB=$(sed 's/\x1b\[[0-9;]*m//g' "$LHRLOG" 2>/dev/null \
+          | grep -oE 'https://[a-z0-9]+\.lhr\.life' | tail -1 || true)
+    [ -n "$PUB" ] && { URL="$PUB"; break; }
+    sleep 0.5
+  done
+  [ -n "$PUB" ] && ok "STABLE tunnel up: $URL" \
+    || warn "localhost.run didn't print a URL — falling back to cloudflared"
+fi
+
+# ── 6. cloudflared tunnel (fallback / secondary) ─────────────────────────
 if [ "$NO_TUNNEL" -eq 0 ] && command -v cloudflared >/dev/null 2>&1; then
   step "opening cloudflared tunnel in tmux 'arui-cf'…"
   CFLOG="$ROOT/data/cloudflared.log"
