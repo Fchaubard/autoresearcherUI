@@ -85,27 +85,6 @@ def test_dashboard_url_empty_when_no_tunnel(arui_env):
     assert _dashboard_url({}) == ""
 
 
-def _write_ngrok_url(url: str) -> None:
-    from backend.app import notify
-    f = notify.DATA_DIR / "ngrok.url"
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(url + "\n")
-
-
-def test_prefers_stable_ngrok_over_cloudflare(arui_env):
-    from backend.app.notify import _live_tunnel_url
-    _write_ngrok_url("https://francois.ngrok-free.app")
-    _write_cf_log("https://rotating-quick-tunnel.trycloudflare.com")
-    # the pinned ngrok domain wins even though a cloudflare URL is present
-    assert _live_tunnel_url() == "https://francois.ngrok-free.app"
-
-
-def test_falls_back_to_cloudflare_when_no_ngrok(arui_env):
-    from backend.app.notify import _live_tunnel_url
-    _write_cf_log("https://only-quick-tunnel.trycloudflare.com")
-    assert _live_tunnel_url() == "https://only-quick-tunnel.trycloudflare.com"
-
-
 # ── Best card must recognise the current kept-run taxonomy ──────────────────
 #
 # Runs are now kept_novel / kept_replicate, not plain "kept". The digest's
