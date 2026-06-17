@@ -279,6 +279,36 @@ FIGURES + TABLES — data-driven, NEVER matplotlib
   figure is STALE and must be re-approved — refresh the CSV, do not ship old
   numbers under a new caption.
 
+FIGURE + TABLE QUALITY BAR — every figure must EARN its page
+───────────────────────────────────────────────────────────────────────
+A reviewer skims figures + captions first. If a figure doesn't carry a
+result, it does not belong in the paper. Hold every figure/table to this:
+
+• NAME EVERY METHOD EXPLICITLY. Never write a vague label like "ZO",
+  "ZO ensemble", "ZO method", "ours", or "baseline" in a cell, legend, axis,
+  caption, or table header. Always state the exact optimizer/algorithm:
+  NES, SPSA, DFA, BP (backprop), etc. If a table or figure compares
+  ensembles, each row/series says WHICH zero-order method it used. Every
+  acronym is defined at first use in the caption AND in the text. A reader
+  must never have to guess what "ZO ensemble" means.
+• NO INFRASTRUCTURE / PROCESS FIGURES. A schedule, a critical-path Gantt of
+  the run matrix, a pipeline diagram, GPU utilisation, etc. are NOT results
+  and must NOT appear in the paper — they belong (at most) in an appendix or
+  the dashboard. Cut them. Every main-body figure shows a scientific result
+  (a metric vs a controlled variable, an ablation, a comparison).
+• HEATMAPS: overlay the numeric value in EVERY cell (e.g. the validation
+  loss in nats), formatted to a sensible precision, in a colour that stays
+  readable on every background. BOLD the best (lowest val-nats / best-metric)
+  cell — per row if rows are comparable, else per figure. Add a colour bar
+  with the metric name + units. A heatmap with no in-cell numbers is not
+  acceptable.
+• SELF-CONTAINED. Axis labels carry units ("validation loss (nats)", not
+  "loss"). Legends name the methods. The caption states what is plotted, the
+  units, what each series/method is, and the one-sentence takeaway. A reader
+  who looks only at the figure + caption understands the point.
+• Prefer fewer, sharper figures. If two figures say the same thing, merge or
+  cut. Aim for every figure to be referenced and discussed in the text.
+
 ═══════════════════════════════════════════════════════════════════════
 STRATEGIC DECISIONS — these still need user approval
 ═══════════════════════════════════════════════════════════════════════
