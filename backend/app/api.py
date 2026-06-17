@@ -1809,11 +1809,24 @@ def agent_raw_stream(session: str = "agent", offset: int = 0):
     pre_size = pane_stream.size(session)
     rotated = bool(offset and offset > pre_size)
     chunk, new_off, size = pane_stream.read_range(session, offset)
+    alive = _tmux_alive(session)
+    # SELF-HEAL a dead pipe-pane. If the session is alive but we got no new
+    # bytes, the mirror may have stopped (pipe-pane drops on pane re-exec /
+    # reattach, and sweep_enable_all skips the author/agent infra sessions) —
+    # which is exactly what makes the rail terminal look "frozen". ensure_piped
+    # re-enables it and is a cheap no-op when the pipe is already healthy, so
+    # gating on an empty chunk keeps it off the hot path.
+    if not chunk and alive:
+        try:
+            if pane_stream.ensure_piped(session):
+                size = pane_stream.size(session)
+        except Exception:                                   # noqa: BLE001
+            pass
     return {
         "chunk": base64.b64encode(chunk).decode("ascii"),
         "offset": new_off,
         "size": size,
-        "alive": _tmux_alive(session),
+        "alive": alive,
         "rotated": rotated,
     }
 
