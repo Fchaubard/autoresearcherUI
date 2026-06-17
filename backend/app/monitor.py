@@ -97,6 +97,18 @@ def _loop() -> None:
             _ensure_log_pipes(sessions)
         except Exception as e:                       # noqa: BLE001
             print(f"[monitor] _ensure_log_pipes error: {e}", flush=True)
+        # Self-heal the infra agent terminals (author/agent). sweep_enable_all
+        # skips these on purpose, so when their pipe-pane drops nothing brings
+        # the live xterm back — the "terminal frozen" bug. ensure_piped is a
+        # no-op when the pipe is healthy; it only re-enables a dropped one.
+        try:
+            from . import pane_stream as _ps
+            for _s in ("author", "agent"):
+                if _ps.ensure_piped(_s):
+                    print(f"[monitor] re-enabled dropped pipe-pane for {_s}",
+                          flush=True)
+        except Exception as e:                       # noqa: BLE001
+            print(f"[monitor] pipe self-heal error: {e}", flush=True)
         for step in (_poll_gpus, _poll_system):
             try:
                 step()
