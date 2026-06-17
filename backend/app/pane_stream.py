@@ -107,6 +107,41 @@ def enable(session: str, *, mirror_to: Optional[str] = None,
     return tf
 
 
+def is_piped(session: str) -> bool | None:
+    """True iff `tmux pipe-pane` is currently active for the session's pane.
+
+    Returns None if the session doesn't exist / tmux can't answer. Uses the
+    ``#{pane_pipe}`` format var (1 = piped, 0 = not)."""
+    try:
+        r = subprocess.run(
+            ["tmux", "display-message", "-p", "-t", session, "#{pane_pipe}"],
+            capture_output=True, text=True, timeout=4)
+        if r.returncode != 0:
+            return None
+        return (r.stdout or "").strip() == "1"
+    except Exception:                                       # noqa: BLE001
+        return None
+
+
+def ensure_piped(session: str) -> bool:
+    """Self-heal: if the session is alive but its pipe-pane mirror has died
+    (``pane_pipe == 0``), re-enable it so the live xterm resumes.
+
+    This is THE fix for "the terminal froze": pipe-pane can drop (pane program
+    re-exec, session reattach, etc.) and nothing was re-establishing it for the
+    ``author``/``agent`` infra sessions — sweep_enable_all() skips them. Cheap
+    (one display-message); only re-enables when actually unpiped, so it's safe
+    to call on every raw poll. Returns True iff it re-enabled."""
+    piped = is_piped(session)
+    if piped is False:
+        try:
+            enable(session, preserve_history=True)
+            return True
+        except Exception:                                   # noqa: BLE001
+            pass
+    return False
+
+
 def list_tmux_sessions() -> list[str]:
     """Return every tmux session name visible to the backend's tmux
     server. Drops infra sessions (arui, arui-cf, agent, author) that the
