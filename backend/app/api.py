@@ -3784,20 +3784,29 @@ def paper_gantt(db: Session = Depends(get_session)):
     # appended afterward (so they still appear as completed rows).
     now = _dt.datetime.now(_dt.timezone.utc)
 
-    def _remaining_sec(r):
-        # For a RUNNING run, how much wall-clock is left (so the scheduler pins
-        # it to now and the bar shows time remaining, not full duration).
-        if r.status != "running" or not r.started_at:
+    def _elapsed_sec(r):
+        if not r.started_at:
             return None
         try:
             st = _dt.datetime.fromisoformat(
                 r.started_at.replace("Z", "+00:00"))
             if st.tzinfo is None:
                 st = st.replace(tzinfo=_dt.timezone.utc)
-            elapsed = (now - st).total_seconds()
-            return max(60, int((r.est_time_sec or 0) - elapsed))
+            return max(0.0, (now - st).total_seconds())
         except Exception:
             return None
+
+    def _remaining_sec(r):
+        # RAW wall-clock left for a RUNNING run (est - elapsed). May be <= 0 when
+        # the run has overrun its estimate — we return it as-is and let the
+        # scheduler give overruns a visible "winding down" bar + the UI flag it
+        # overdue, instead of silently flooring to a 60s sliver.
+        if r.status != "running":
+            return None
+        el = _elapsed_sec(r)
+        if el is None:
+            return None
+        return int((r.est_time_sec or 0) - el)
 
     sched_states = ("proposed", "queued", "running")
     sched_in = [{
@@ -3836,11 +3845,25 @@ def paper_gantt(db: Session = Depends(get_session)):
         t["figure_title"] = (figs[fid].title if fid in figs else "")
         t["run_number"] = per_fig[fid]
         t["command"] = _cmd(r)
-        t["duration_sec"] = int(t.get("est_time_sec") or 0)
         t["start_iso"] = (now + _dt.timedelta(
             seconds=t.get("start_sec", 0))).isoformat()
         t["end_iso"] = (now + _dt.timedelta(
             seconds=t.get("end_sec", 0))).isoformat()
+        # Running runs: surface the TRUE estimate + elapsed + overdue flag so
+        # the Gantt can show a real projected end (the scheduler overwrote
+        # est_time_sec with the placed bar duration). end_iso above is the
+        # projected finish (now + remaining); overdue means it has already
+        # blown past its estimate and the finish is unknown.
+        if r is not None and t.get("status") == "running":
+            true_est = int(r.est_time_sec or 0)
+            el = _elapsed_sec(r)
+            t["est_time_sec"] = true_est
+            t["elapsed_sec"] = int(el) if el is not None else None
+            t["remaining_sec"] = (None if el is None
+                                  else int(true_est - el))
+            t["overdue"] = bool(el is not None and true_est
+                                and el > true_est)
+        t["duration_sec"] = int(t.get("est_time_sec") or 0)
     out["tasks"] = tasks
     out["n_gpus"] = n_gpus
     out["generated_at"] = now.isoformat()
