@@ -463,7 +463,7 @@ function pushView(viewId) {
   }
 }
 // Opt-out frontend telemetry. Fire-and-forget POST through the backend (which
-// adds standard props + honors the env opt-out). Respects Do-Not-Track. Never
+// adds standard props + honors the env opt-out). Server-side opt-out only. Never
 // throws, never blocks. A STABLE anonymous id (random UUID in localStorage,
 // reused across visits) lets PostHog build person profiles for DAU/WAU/
 // retention — it carries no names/emails/PII, just a per-browser random id.
@@ -480,8 +480,12 @@ function _anonId() {
 }
 function track(event, props) {
   try {
-    if (navigator.doNotTrack === '1' || window.doNotTrack === '1' ||
-        navigator.msDoNotTrack === '1') return;
+    // NOTE: we intentionally do NOT auto-skip on the browser Do-Not-Track
+    // signal — this is the operator's own product-analytics for their own
+    // deployment, and DNT was silently dropping their own pageviews so the
+    // PostHog dashboards stayed empty. True opt-out is still available
+    // server-side (DO_NOT_TRACK=1 / ARUI_TELEMETRY_DISABLED=1 / CI env vars,
+    // honored in telemetry.telemetry_disabled()).
     fetch('/api/telemetry/event', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
