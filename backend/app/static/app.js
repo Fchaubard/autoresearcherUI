@@ -2192,11 +2192,7 @@ function paintRail() {
 //
 // If xterm.js failed to load (CDN blocked, offline), we fall back to a
 // plain <pre> so the rail still works, just with the old read-only UX.
-function createRailTerm(session, opts) {
-  // transcript mode: feed the agent's full conversation (from its Claude Code
-  // session log) into xterm instead of mirroring the live fullscreen TUI, so
-  // the terminal scrolls back to the very first message and text is selectable.
-  const _tx = !!(opts && opts.transcript);
+function createRailTerm(session) {
   const container = el('div', 'xterm-wrap');
   container.dataset.session = session;
   if (!window.Terminal) {
@@ -2231,10 +2227,6 @@ function createRailTerm(session, opts) {
       brightCyan: '#67E8F9', brightWhite: '#F9FAFB',
     },
     scrollback: 8000,
-    // Don't yank the viewport to the bottom when the user types/clicks while
-    // they've scrolled up to read — part of making this feel like a normal,
-    // selectable scrollback terminal (see the scroll-lock logic below).
-    scrollOnUserInput: false,
     allowProposedApi: true,
   });
   const FitAddon = window.FitAddon && window.FitAddon.FitAddon;
@@ -2257,15 +2249,28 @@ function createRailTerm(session, opts) {
       t.loadAddon(gl);
     }
   } catch (e) { /* no WebGL → DOM renderer, still works */ }
-  // Wheel = always scroll xterm's own scrollback (like any normal terminal /
-  // like the paused research terminal). We do NOT forward the wheel to the live
-  // TUI — that hijack is what made the author terminal feel alien. Native scroll
-  // means the user can scroll up, the view stays put, and selections survive.
+  // Scrolling the author/agent terminal: Claude Code runs as a full-screen TUI
+  // in the ALTERNATE screen, so xterm has no scrollback of its own. If there IS
+  // scrollback (a plain program), scroll xterm; otherwise forward the wheel as
+  // SGR mouse-wheel reports so the TUI scrolls its own transcript (verified: it
+  // responds to \x1b[<64/65;..M). Capture-phase + stopPropagation so this wins
+  // over xterm's default mouse-report handler.
   container.addEventListener('wheel', (ev) => {
     try {
-      let lines = ev.deltaMode === 1 ? ev.deltaY
-        : ev.deltaMode === 2 ? ev.deltaY * (t.rows || 24) : ev.deltaY / 16;
-      t.scrollLines(Math.trunc(lines) || (ev.deltaY > 0 ? 1 : -1));
+      const buf = t.buffer && t.buffer.active;
+      const hasScrollback = buf && buf.type === 'normal' &&
+        (buf.length > t.rows);
+      if (hasScrollback) {
+        let lines = ev.deltaMode === 1 ? ev.deltaY
+          : ev.deltaMode === 2 ? ev.deltaY * (t.rows || 24) : ev.deltaY / 16;
+        t.scrollLines(Math.trunc(lines) || (ev.deltaY > 0 ? 1 : -1));
+      } else {
+        const btn = ev.deltaY < 0 ? 64 : 65;   // 64 wheel-up, 65 wheel-down
+        const n = Math.min(6, Math.max(1, Math.round(Math.abs(ev.deltaY) / 40)));
+        let seq = '';
+        for (let i = 0; i < n; i++) seq += '\x1b[<' + btn + ';20;20M';
+        post('/agent/keys', { session, data: seq }).catch(() => {});
+      }
       ev.preventDefault();
       ev.stopPropagation();
     } catch (e) {}
@@ -2318,9 +2323,7 @@ function createRailTerm(session, opts) {
     // through anyway. Don't await — we want zero latency feel.
     post('/agent/keys', { session, data }).catch(() => {});
   };
-  // In transcript mode the terminal is a read-only scrollable log of the
-  // conversation; typing goes through the composer box below, not the pane.
-  if (!_tx) t.onData((data) => { sendNow(data); });
+  t.onData((data) => { sendNow(data); });
 
   /* Browser-intercepted keys: let F-keys + most Cmd/Ctrl shortcuts go
      through to tmux instead of triggering the browser. We deliberately
@@ -2331,34 +2334,8 @@ function createRailTerm(session, opts) {
   t.attachCustomKeyEventHandler((ev) => {
     if (ev.type !== 'keydown') return true;
     const k = ev.key, isMod = ev.metaKey || ev.ctrlKey;
-    // COPY: Cmd/Ctrl-C with an active selection copies that selection to the
-    // clipboard (with the WebGL/canvas renderer the selection isn't a DOM
-    // selection, so the browser's own copy would grab nothing). Only when there
-    // is NO selection do we fall through — so Ctrl-C can still interrupt the
-    // agent. This makes "scroll up, select, copy" work identically to the
-    // research terminal.
-    if (isMod && /^c$/i.test(k)) {
-      try {
-        if (t.hasSelection && t.hasSelection()) {
-          const sel = t.getSelection();
-          if (sel) {
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-              navigator.clipboard.writeText(sel).catch(() => {});
-            } else {
-              const ta = document.createElement('textarea');
-              ta.value = sel; document.body.appendChild(ta); ta.select();
-              try { document.execCommand('copy'); } catch (e) {}
-              document.body.removeChild(ta);
-            }
-            ev.preventDefault();
-            return false;            // consumed — don't send ^C to the agent
-          }
-        }
-      } catch (e) {}
-      return true;                   // no selection → normal (Ctrl-C interrupt)
-    }
-    // Allow these to behave normally (paste, new tab etc).
-    if (isMod && /^[vtnwqrlf]$/i.test(k)) return true;
+    // Allow these to behave normally (copy, paste, new tab etc).
+    if (isMod && /^[cvtnwqrlf]$/i.test(k)) return true;
     // F1-F12 → swallow browser default + forward as escape sequence.
     if (/^F([1-9]|1[0-2])$/.test(k)) {
       const fnum = parseInt(k.slice(1), 10);
@@ -2412,55 +2389,6 @@ function createRailTerm(session, opts) {
       return buf;
     } catch (e) { return new Uint8Array(0); }
   };
-  /* ── Scroll-lock (the research-terminal feel) ──────────────────────────────
-     A LIVE terminal repaints every ~250ms; each write clears the user's text
-     selection and yanks the viewport to the cursor (the "jumps me to the
-     bottom" bug). The paused research terminal feels nice precisely because it
-     never writes while you read it. So: while the user has scrolled up, we HOLD
-     incoming bytes in a buffer instead of writing them — the view freezes, the
-     selection survives, copy works. When they scroll back to the bottom we
-     flush the buffer and resume live tailing. */
-  let _pending = [];                 // bytes received while scrolled up
-  let _pendingLen = 0;
-  const _PENDING_CAP = 2 * 1024 * 1024;
-  const _atBottom = () => {
-    try {
-      const b = t.buffer && t.buffer.active;
-      if (!b) return true;
-      return b.viewportY >= b.baseY;     // viewport sits at the live edge
-    } catch (e) { return true; }
-  };
-  const _flushPending = () => {
-    if (!_pending.length) return;
-    const q = _pending; _pending = []; _pendingLen = 0;
-    for (const b of q) { try { t.write(b); } catch (e) {} }
-    try { t.scrollToBottom(); } catch (e) {}
-    if (_newBadge) _newBadge.style.display = 'none';
-  };
-  // "↓ live" badge: shows when output is paused because you scrolled up; click
-  // it (or scroll to the bottom) to resume.
-  let _newBadge = null;
-  try {
-    _newBadge = el('button', 'term-live-badge', '↓ live output paused');
-    _newBadge.style.display = 'none';
-    _newBadge.onclick = () => { try { t.scrollToBottom(); } catch (e) {} _flushPending(); };
-    container.appendChild(_newBadge);
-  } catch (e) {}
-  try {
-    t.onScroll(() => { if (_atBottom()) _flushPending(); });
-  } catch (e) {}
-  const _writeOrHold = (bytes) => {
-    if (_atBottom()) {
-      t.write(bytes);
-    } else {
-      _pending.push(bytes); _pendingLen += bytes.length;
-      // Cap the hold buffer so a long read doesn't grow it unbounded.
-      while (_pendingLen > _PENDING_CAP && _pending.length > 1) {
-        _pendingLen -= _pending.shift().length;
-      }
-      if (_newBadge) _newBadge.style.display = '';
-    }
-  };
   const tick = async () => {
     try {
       const d = await api(
@@ -2469,8 +2397,6 @@ function createRailTerm(session, opts) {
       if (d.rotated) {
         t.reset();
         _offset = 0;
-        _pending = []; _pendingLen = 0;   // drop held bytes from the old session
-        if (_newBadge) _newBadge.style.display = 'none';
         delete _PANE_CACHE[session];     // stale history — start fresh
         // Agent was restarted server-side. Our last dimensions cache
         // is invalidated — force a re-push so the fresh tmux pane
@@ -2487,7 +2413,7 @@ function createRailTerm(session, opts) {
       // with no delay, then fall back to the snappy/idle poll once caught up.
       const more = (typeof d.size === 'number' && (d.offset || 0) < d.size);
       if (bytes.length) {
-        _writeOrHold(bytes);    // hold instead of write while user scrolled up
+        t.write(bytes);
         _offset = d.offset || (_offset + bytes.length);
         _cacheAppend(bytes);    // remember for instant repaint on remount
         _idleMs = more ? 0 : 250;   // 0 = drain backlog ASAP; else stay snappy
@@ -2500,41 +2426,8 @@ function createRailTerm(session, opts) {
     } catch (e) { _idleMs = Math.min(_idleMs * 1.5, 2000); }
     _streamTimer = setTimeout(tick, _idleMs);
   };
-  /* ── Transcript mode stream ────────────────────────────────────────────
-     Fetch the whole conversation as terminal text, write it into xterm (so the
-     scrollback holds the entire history → scroll to the very first message),
-     then poll for new turns and append (held while the user is scrolled up). */
-  let _txCursor = '';
-  const txTick = async () => {
-    if (_stopped) return;
-    try {
-      const d = await api('/agent/transcript_text?session='
-        + encodeURIComponent(session)
-        + (_txCursor ? '&after=' + encodeURIComponent(_txCursor) : ''));
-      if (!_stopped && d) {
-        if (d.text) _writeOrHold(d.text);
-        if (d.cursor) _txCursor = d.cursor;
-      }
-    } catch (e) { /* keep last; retry */ }
-    if (!_stopped) _streamTimer = setTimeout(txTick, 2000);
-  };
-  const txStart = async () => {
-    try {
-      const d = await api('/agent/transcript_text?session='
-        + encodeURIComponent(session) + '&limit=8000');
-      if (_stopped) return;
-      try { t.reset(); } catch (e) {}
-      if (d && d.text) t.write(d.text);
-      else t.write('\x1b[2m(waiting for the agent to take its first turn…)\x1b[0m\r\n');
-      _txCursor = (d && d.cursor) || '';
-      try { t.scrollToBottom(); } catch (e) {}
-    } catch (e) {}
-    if (!_stopped) _streamTimer = setTimeout(txTick, 2000);
-  };
-
   const start = async () => {
     if (_streamTimer) return;
-    if (_tx) { _stopped = false; txStart(); return; }
     // Repaint cached history instantly, then resume from the last offset so
     // only net-new bytes are fetched (no slow "buffer in from the top").
     const c = _PANE_CACHE[session];
@@ -2544,12 +2437,21 @@ function createRailTerm(session, opts) {
       tick();
       return;
     }
-    // FRESH mount (no cache): replay the WHOLE pane mirror from the very first
-    // byte — _offset stays 0 and tick() drains the backlog fast (idleMs=0 while
-    // there's more to fetch). This is byte-for-byte the SAME path the research
-    // terminal uses, so the author and research terminals load, scroll, and
-    // select identically. No special "seed" snapshot — that was the only thing
-    // that made the author behave differently from research.
+    // FRESH mount (e.g. hard refresh, no cache): SEED from the current screen
+    // instead of replaying the whole multi-MB log. A full-screen TUI has no
+    // real scrollback, so the history was never useful — only the current
+    // frame is. This is what makes the load near-instant.
+    try {
+      const d = await api('/agent/raw?session=' + encodeURIComponent(session)
+        + '&offset=0&seed=1');
+      if (d && d.seeded) {
+        try { t.reset(); } catch (e) {}
+        const bytes = b64ToBytes(d.chunk);
+        if (bytes.length) { t.write(bytes); _cacheAppend(bytes); }
+        _offset = d.offset || 0;
+      }
+    } catch (e) { /* no seed → tick() replays from 0 as a fallback */ }
+    if (_stopped) return;          // disposed/stopped during the seed fetch
     tick();
   };
   let _stopped = false;
@@ -2569,78 +2471,6 @@ function createRailTerm(session, opts) {
       try { ro && ro.disconnect(); } catch (e) {}
       try { t.dispose(); } catch (e) {}
     },
-  };
-}
-
-/* ── Agent conversation pane ───────────────────────────────────────────────
-   A plain, scrollable, selectable monospace log of the agent's FULL Claude Code
-   conversation (from /api/agent/transcript_text). We deliberately do NOT use
-   xterm here: claude 2.1.x renders a fullscreen TUI with no scrollback, and the
-   xterm/WebGL path can't reliably scroll back or let you select+copy. A native
-   <pre> gives all three for free — scroll to the first message, drag-select any
-   range, Cmd/Ctrl-C to copy — and it's the SAME widget for both agents.
-   Returns the same shape as createRailTerm so the rail code is unchanged.       */
-function createTranscriptPane(session) {
-  const container = el('div', 'tx-pane');
-  const pre = el('pre', 'tx-pre');
-  container.append(pre);
-  let _cursor = '', _timer = null, _stopped = false, _first = true;
-  const nearBottom = () =>
-    (pre.scrollHeight - pre.scrollTop - pre.clientHeight) < 60;
-  // strip ANSI SGR + lone CRs; classify each line for light coloring.
-  const _ansi = /\x1b\[[0-9;]*m/g;
-  const appendText = (text) => {
-    const clean = (text || '').replace(_ansi, '').replace(/\r/g, '');
-    const frag = document.createDocumentFragment();
-    // split keeping newlines so selection/copy preserves line breaks
-    clean.split('\n').forEach((line, i, arr) => {
-      const withNl = (i < arr.length - 1) ? line + '\n' : line;
-      let cls = 'tx-asst';
-      const tr = line.trimStart();
-      if (tr.startsWith('❯')) cls = 'tx-user';
-      else if (tr.startsWith('⏺')) cls = 'tx-tool';
-      else if (line.startsWith('  ')) cls = 'tx-res';
-      const span = el('span', cls);
-      span.textContent = withNl;
-      frag.appendChild(span);
-    });
-    pre.appendChild(frag);
-  };
-  const tick = async () => {
-    if (_stopped) return;
-    try {
-      const d = await api('/agent/transcript_text?session='
-        + encodeURIComponent(session)
-        + (_cursor ? '&after=' + encodeURIComponent(_cursor) : '&limit=8000'));
-      if (!_stopped && d) {
-        if (_first) {
-          pre.textContent = '';
-          _first = false;
-          if (!d.text) pre.textContent =
-            '(waiting for the agent to take its first turn…)';
-        }
-        if (d.text) {
-          const stick = nearBottom();
-          appendText(d.text);
-          if (stick) pre.scrollTop = pre.scrollHeight;   // only autoscroll at bottom
-        }
-        if (d.cursor) _cursor = d.cursor;
-      }
-    } catch (e) { /* keep last; retry */ }
-    if (!_stopped) _timer = setTimeout(tick, 2000);
-  };
-  const start = () => {
-    if (_timer) return;
-    _stopped = false; _first = true;
-    pre.textContent = 'loading conversation…';
-    tick();
-  };
-  const stop = () => { _stopped = true; if (_timer) { clearTimeout(_timer); _timer = null; } };
-  return {
-    container, fallback: false,
-    startStream: start, stopStream: stop,
-    writeText() {},
-    dispose() { stop(); },
   };
 }
 
@@ -2668,7 +2498,7 @@ function renderAuthorLive(c) {
         'straight to the Claude session.' +
       '</div>' +
     '</div>';
-  const termHost = createTranscriptPane('author');
+  const termHost = createRailTerm('author');
   termHost.container.id = 'authorterm-host';
   c.appendChild(termHost.container);
   if (_termHost) { try { _termHost.dispose(); } catch (e) {} }
@@ -2733,7 +2563,7 @@ function renderLive(c) {
       '</div>' +
     '</div>' +
     pausedBanner;
-  const termHost = createTranscriptPane('agent');
+  const termHost = createRailTerm('agent');
   termHost.container.id = 'term-host';
   c.appendChild(termHost.container);
   if (_termHost) { try { _termHost.dispose(); } catch (e) {} }

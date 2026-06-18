@@ -1808,32 +1808,26 @@ def agent_raw_stream(session: str = "agent", offset: int = 0, seed: int = 0):
         return {"error": "bad session"}
     pre_size = pane_stream.size(session)
     alive = _tmux_alive(session)
-    # SEED MODE (fresh mount): seed the xterm with the TAIL of the real pane
-    # mirror — the last ~chunk of actual bytes the agent emitted — instead of a
-    # `capture-pane` snapshot of just the current screen.
-    #
-    # WHY: the rail xterm streams the pipe-pane mirror, which (because pipe-pane
-    # attaches a beat after the pane is created) never captures Claude Code's
-    # initial alt-screen-enter sequence. So xterm replays the whole mirror in
-    # its NORMAL buffer and it IS scrollable — that is exactly why the research
-    # terminal is "long and scrollable". The earlier capture-pane seed threw
-    # that history away and showed only the current frame, which is what made
-    # the (freshly-respawned, short-mirror) author terminal feel "stuck, can't
-    # scroll up". Seeding from the mirror tail gives both agents the same long,
-    # scrollable history while still loading fast (bounded to the tail).
+    # SEED MODE (fresh mount): instead of replaying the whole multi-MB raw log
+    # — which is slow AND pointless for a full-screen TUI that has no real
+    # scrollback — return a clean snapshot of the CURRENT screen + a little
+    # history via `tmux capture-pane`, and tell the client to resume streaming
+    # from the current end-of-file. Makes the author/agent terminal load near-
+    # instantly regardless of how big the log has grown.
     if seed and alive:
-        SEED_BYTES = 512 * 1024            # ~last 512KB of real scrollback
-        start = max(0, pre_size - SEED_BYTES)
-        chunk, new_off, size = pane_stream.read_range(session, start)
-        # If we started mid-stream, drop the partial first line so we don't
-        # open on a half-rendered ANSI escape.
-        if start > 0:
-            nl = chunk.find(b"\n")
-            if 0 <= nl < len(chunk) - 1:
-                chunk = chunk[nl + 1:]
+        snap = b""
+        try:
+            cp = subprocess.run(
+                ["tmux", "capture-pane", "-t", session, "-e", "-p",
+                 "-S", "-400"],
+                capture_output=True, timeout=5)
+            if cp.returncode == 0:
+                snap = (cp.stdout or b"").replace(b"\n", b"\r\n")
+        except Exception:                                   # noqa: BLE001
+            pass
         return {
-            "chunk": base64.b64encode(chunk).decode("ascii"),
-            "offset": new_off, "size": size,
+            "chunk": base64.b64encode(snap).decode("ascii"),
+            "offset": pre_size, "size": pre_size,
             "alive": alive, "rotated": False, "seeded": True,
         }
     rotated = bool(offset and offset > pre_size)
@@ -1857,35 +1851,6 @@ def agent_raw_stream(session: str = "agent", offset: int = 0, seed: int = 0):
         "alive": alive,
         "rotated": rotated,
     }
-
-
-@router.get("/agent/transcript_text")
-def agent_transcript_text(session: str = "agent", after: str = "",
-                          limit: int = 4000):
-    """The agent's FULL conversation as scrollable terminal text.
-
-    Claude Code 2.1.x renders a fullscreen TUI with no scrollback, so mirroring
-    the live pane can never let you scroll back to the start of the conversation
-    or reliably copy text. Instead we render the on-disk session transcript as
-    ANSI terminal text and feed it into the SAME xterm widget the research
-    terminal uses — one long, scrollable, selectable, copyable terminal for both
-    the research and author agents.
-
-    Pass back ``after`` (the previous ``cursor``) to fetch only new text.
-    """
-    from . import transcript
-    if not session or len(session) > 80 or not _SAFE_NAME.match(session):
-        return {"error": "bad session"}
-    try:
-        limit = max(1, min(int(limit), 20000))
-    except Exception:                                       # noqa: BLE001
-        limit = 4000
-    try:
-        return transcript.render_text(session, after=(after or None),
-                                      limit=limit)
-    except Exception as e:                                  # noqa: BLE001
-        return {"text": "", "cursor": after or None, "file": None,
-                "cwd": None, "error": str(e)}
 
 
 @router.get("/agent/terminal")

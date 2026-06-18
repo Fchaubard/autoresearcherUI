@@ -315,18 +315,9 @@ body.resizing{user-select:none}
  * styled by the xterm.css CDN; we just give the host container size. */
 .xterm-wrap{flex:1;min-height:0;background:#0a0c0f;padding:6px 4px;
   overflow:hidden;display:flex;flex-direction:column;
-  border-top:1px solid #1a1d22;position:relative}
+  border-top:1px solid #1a1d22}
 .xterm-wrap .xterm{flex:1;min-height:0}
 .xterm-wrap .xterm-viewport{background:transparent !important}
-/* Let the user select + copy terminal text (xterm renders selectable rows). */
-.xterm-wrap .xterm-rows,.xterm-wrap .xterm-screen{user-select:text}
-/* "live output paused" badge — shows while the user has scrolled up and we're
-   holding new output so their selection/scroll position is preserved. */
-.term-live-badge{position:absolute;right:14px;bottom:12px;z-index:5;
-  font:inherit;font-size:11px;cursor:pointer;padding:4px 11px;border-radius:999px;
-  background:var(--accent,#6366F1);color:#fff;border:none;
-  box-shadow:0 2px 8px rgba(0,0,0,.45);opacity:.95}
-.term-live-badge:hover{opacity:1}
 .sess-wrap{flex:1;min-height:0;display:flex;flex-direction:column}
 /* Host that the per-session xterm is mounted into. Mirrors the
  * Research Agent rail's slot: a flex column that fills available space
@@ -1797,21 +1788,6 @@ textarea.onb-in{resize:vertical;line-height:1.5}
   border-bottom:1px solid rgba(251,191,36,.35);
   color:#FDE68A;font-size:11.5px;line-height:1.55}
 .rail-paused-banner b{color:#FBBF24;font-weight:600}
-
-/* ── Agent conversation pane (scrollable, selectable terminal-style log) ──── */
-.tx-pane{flex:1 1 auto;min-height:0;display:flex;background:#0a0c0f;
-  border-top:1px solid #1a1d22}
-.tx-pre{flex:1 1 auto;min-height:0;margin:0;padding:8px 12px;overflow:auto;
-  white-space:pre-wrap;word-break:break-word;
-  -webkit-user-select:text;user-select:text;cursor:text;
-  font-family:'SF Mono','Menlo','Consolas',ui-monospace,monospace;
-  font-size:12px;line-height:1.5;color:#cdd3da;
-  background:#0a0c0f}
-.tx-pre .tx-user{color:#67E8F9;font-weight:600}   /* user / PI prompts */
-.tx-pre .tx-tool{color:#86EFAC}                    /* tool calls */
-.tx-pre .tx-res{color:#8a93a1}                     /* tool output */
-.tx-pre .tx-asst{color:#dfe3e8}                    /* assistant prose */
-.tx-pre::selection,.tx-pre ::selection{background:#6366F1aa;color:#fff}
 
 /* Critical Path — Milestones (primary view) */
 .ms-list{display:flex;flex-direction:column;gap:6px;margin-top:8px}
