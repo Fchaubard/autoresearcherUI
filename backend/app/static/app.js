@@ -106,7 +106,7 @@ const better = (a, b) => minimize() ? a < b : a > b;
 const KEPT_STATUSES = ['kept_novel', 'kept_replicate', 'kept', 'success'];
 const isKept    = s => KEPT_STATUSES.includes(s);
 const isDone    = s => isKept(s) || s === 'discarded';
-const isCrashed = s => s === 'crashed' || s === 'failed';
+const isCrashed = s => s === 'crashed' || s === 'failed' || s === 'error';
 
 function frontier(runs) {                  // mark running-best improvements
   // RESEARCH_IMPROVEMENT_PLAN #4: the frontier only counts kept_novel
@@ -1228,9 +1228,10 @@ function statusBar() {
   // run counts
   const runs = S.runs.filter(r => r.status === 'running').length;
   const q = S.ideas.filter(i => i.status === 'not_implemented').length;
-  const done = S.runs.filter(r => (r.status || '').startsWith('kept')
-    || r.status === 'discarded').length;
-  const fail = S.runs.filter(r => r.status === 'crashed').length;
+  // Use the SHARED taxonomy helpers so the research bar agrees with the paper
+  // bar (the old inline filter missed 'success' done + 'failed' crashes).
+  const done = S.runs.filter(r => isDone(r.status)).length;
+  const fail = S.runs.filter(r => isCrashed(r.status)).length;
   sb.append(el('div', 'counts',
     `<span class="c-run">running <b>${runs}</b></span>` +
     `<span>queued <b>${q}</b></span><span>done <b>${done}</b></span>` +
@@ -1883,7 +1884,7 @@ function paintStats() {
   const p = S.project || {};
   const runs = S.runs;
   const done = runs.filter(r => isDone(r.status));
-  const fail = runs.filter(r => r.status === 'crashed').length;
+  const fail = runs.filter(r => isCrashed(r.status)).length;
   const best = p.best_metric, base = p.baseline_metric;
   const delta = (best != null && base != null) ? base - best : null;
   const cards = [
@@ -2781,7 +2782,7 @@ function updateBrief() {
   const p = S.project || {};
   const runs = frontier(expRuns());
   const kept = runs.filter(r => r._frontier);
-  const fail = S.runs.filter(r => r.status === 'crashed').length;
+  const fail = S.runs.filter(r => isCrashed(r.status)).length;
   const top = kept[kept.length - 1];
   // ── Paper-mode brief takes precedence when we're in paper mode ──────
   const inPaper = (S.mode && S.mode.mode === 'paper');
@@ -6772,9 +6773,9 @@ function paintPlan(b) {
             || 'default';
           const m = r.headline_metric != null
             ? fmt(r.headline_metric, 4) : '—';
-          const isDone = isDone(r.status);
+          const done = isDone(r.status);
           return `<tr class="plan-run-row ${r.status}">
-            <td>${isDone ? '☑' : (r.status==='running' ? '◷' : '☐')}</td>
+            <td>${done ? '☑' : (r.status==='running' ? '◷' : '☐')}</td>
             <td><span class="chip s-${r.status}">${esc(r.status)}</span></td>
             <td class="mono">${esc(r.run_name || r.id)}</td>
             <td>${esc(r.paper_role || cfg.role || '')}</td>
@@ -6845,7 +6846,7 @@ function paintCriticalPath(b) {
   const runningRuns = runs.filter(r => r.status === 'running').length;
   const queuedRuns = runs.filter(r => r.status === 'queued').length;
   const doneRuns = runs.filter(r => isDone(r.status)).length;
-  const crashedRuns = runs.filter(r => ['crashed','failed','error'].includes(r.status)).length;
+  const crashedRuns = runs.filter(r => isCrashed(r.status)).length;
   const claimsReady = claims.filter(c => c.ready).length;
   const sectionsReady = sections.filter(s => s.status === 'ready').length;
   const approvedCites = citations.filter(c => c.user_approved_at).length;
