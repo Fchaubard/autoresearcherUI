@@ -933,8 +933,7 @@ def summary_text(window_hours: float):
             st, ed = _parse_iso(r.started_at), _parse_iso(r.ended_at)
             if st and ed:
                 durations.append((ed - st).total_seconds())
-            if r.status in ("kept", "crashed", "discarded") and ed \
-                    and ed >= cutoff:
+            if r.status in _PAPER_TERMINAL and ed and ed >= cutoff:
                 finished.append((r, ed))
         finished.sort(key=lambda x: x[1])
         running = [r for r in runs if r.status == "running"]
@@ -1284,8 +1283,7 @@ def digest_email(window_hours: float):
         finished, running = [], []
         for r in runs:
             ed = _parse_iso(r.ended_at)
-            if r.status in ("kept", "crashed", "discarded", "failed",
-                            "success") and ed and ed >= cutoff:
+            if r.status in _PAPER_TERMINAL and ed and ed >= cutoff:
                 finished.append(r)
             if r.status == "running":
                 running.append(r)
