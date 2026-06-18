@@ -317,7 +317,11 @@ class RealAgent:
             pf = os.path.join(self.workspace, "_setup_prompt.txt")
             with open(pf, "w") as f:
                 f.write(self.setup_prompt)
-            inner = "claude --dangerously-skip-permissions"
+            # --ax-screen-reader: flat inline rendering (no fullscreen TUI) so
+            # the pane keeps real scrollback — scroll back to the first message,
+            # select + copy — while staying interactive. See author_agent.start
+            # for the full rationale.
+            inner = "claude --dangerously-skip-permissions --ax-screen-reader"
 
         full = f"cd {shlex.quote(self.workspace)} && {exports} {inner}"
         subprocess.run(["tmux", "kill-session", "-t", self.session],

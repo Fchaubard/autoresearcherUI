@@ -693,7 +693,14 @@ def start(proposal_id: str = "") -> dict:
     if cmd_override:
         inner = cmd_override
     else:
-        inner = "claude --dangerously-skip-permissions"
+        # --ax-screen-reader: render flat INLINE text (no fullscreen/alt-screen
+        # TUI). claude 2.1.x's default TUI repaints one screen in place, so the
+        # tmux pane has NO scrollback — you can't scroll back through the
+        # conversation, and the rail terminal feels "stuck". The screen-reader
+        # renderer streams plain newline-delimited text instead, so the pane
+        # accumulates real scrollback (scroll to the first message + select +
+        # copy) while staying fully interactive (you can still type into it).
+        inner = "claude --dangerously-skip-permissions --ax-screen-reader"
         # Make sure Claude uses the API key (set in env) instead of
         # falling into its OAuth flow. See agent.RealAgent._ensure_claude_settings
         # for the full explanation.
