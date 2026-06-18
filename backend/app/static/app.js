@@ -2318,11 +2318,35 @@ function createRailTerm(session) {
        already batches paste into a single call so we don't need to
        coalesce on our side).
      - No 90 ms delay. */
-  const sendNow = (data) => {
-    // Fire-and-forget: if the network coughs, the next keystroke goes
-    // through anyway. Don't await — we want zero latency feel.
-    post('/agent/keys', { session, data }).catch(() => {});
+  // ORDERED keystroke sender. The old code fired each keystroke as an
+  // independent fire-and-forget POST; those race over the network, so fast
+  // typing and multi-byte keybindings (arrows, shift+tab) arrived SCRAMBLED at
+  // tmux (e.g. "TESTtype"→"TET2ty…"). We queue keystrokes and drain them with a
+  // single in-flight request at a time, coalescing runs of printable chars into
+  // one POST and sending each control/escape key on its own — order preserved,
+  // still snappy (one round-trip per burst).
+  const _keyQ = [];
+  let _keyBusy = false;
+  const _isSpecialKey = (d) =>
+    (d.length === 1 && (d.charCodeAt(0) < 0x20 || d.charCodeAt(0) === 0x7f)) ||
+    d.charCodeAt(0) === 0x1b;          // ESC-prefixed sequences (arrows, etc.)
+  const _drainKeys = async () => {
+    if (_keyBusy) return;
+    _keyBusy = true;
+    try {
+      while (_keyQ.length) {
+        if (_isSpecialKey(_keyQ[0])) {
+          const d = _keyQ.shift();
+          await post('/agent/keys', { session, data: d }).catch(() => {});
+        } else {
+          let buf = '';
+          while (_keyQ.length && !_isSpecialKey(_keyQ[0])) buf += _keyQ.shift();
+          await post('/agent/keys', { session, data: buf }).catch(() => {});
+        }
+      }
+    } finally { _keyBusy = false; }
   };
+  const sendNow = (data) => { if (data) { _keyQ.push(data); _drainKeys(); } };
   t.onData((data) => { sendNow(data); });
 
   /* Browser-intercepted keys: let F-keys + most Cmd/Ctrl shortcuts go
