@@ -2417,7 +2417,7 @@ function createRailTerm(session) {
     } catch (e) { _idleMs = Math.min(_idleMs * 1.5, 2000); }
     _streamTimer = setTimeout(tick, _idleMs);
   };
-  const start = () => {
+  const start = async () => {
     if (_streamTimer) return;
     // Repaint cached history instantly, then resume from the last offset so
     // only net-new bytes are fetched (no slow "buffer in from the top").
@@ -2425,10 +2425,29 @@ function createRailTerm(session) {
     if (c && c.bytes && c.bytes.length) {
       try { t.write(c.bytes); } catch (e) {}
       _offset = c.offset || _offset;
+      tick();
+      return;
     }
+    // FRESH mount (e.g. hard refresh, no cache): SEED from the current screen
+    // instead of replaying the whole multi-MB log. A full-screen TUI has no
+    // real scrollback, so the history was never useful — only the current
+    // frame is. This is what makes the load near-instant.
+    try {
+      const d = await api('/agent/raw?session=' + encodeURIComponent(session)
+        + '&offset=0&seed=1');
+      if (d && d.seeded) {
+        try { t.reset(); } catch (e) {}
+        const bytes = b64ToBytes(d.chunk);
+        if (bytes.length) { t.write(bytes); _cacheAppend(bytes); }
+        _offset = d.offset || 0;
+      }
+    } catch (e) { /* no seed → tick() replays from 0 as a fallback */ }
+    if (_stopped) return;          // disposed/stopped during the seed fetch
     tick();
   };
+  let _stopped = false;
   const stop  = () => {
+    _stopped = true;
     if (_streamTimer) { clearTimeout(_streamTimer); _streamTimer = null; }
   };
 
