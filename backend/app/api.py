@@ -1859,6 +1859,35 @@ def agent_raw_stream(session: str = "agent", offset: int = 0, seed: int = 0):
     }
 
 
+@router.get("/agent/transcript_text")
+def agent_transcript_text(session: str = "agent", after: str = "",
+                          limit: int = 4000):
+    """The agent's FULL conversation as scrollable terminal text.
+
+    Claude Code 2.1.x renders a fullscreen TUI with no scrollback, so mirroring
+    the live pane can never let you scroll back to the start of the conversation
+    or reliably copy text. Instead we render the on-disk session transcript as
+    ANSI terminal text and feed it into the SAME xterm widget the research
+    terminal uses — one long, scrollable, selectable, copyable terminal for both
+    the research and author agents.
+
+    Pass back ``after`` (the previous ``cursor``) to fetch only new text.
+    """
+    from . import transcript
+    if not session or len(session) > 80 or not _SAFE_NAME.match(session):
+        return {"error": "bad session"}
+    try:
+        limit = max(1, min(int(limit), 20000))
+    except Exception:                                       # noqa: BLE001
+        limit = 4000
+    try:
+        return transcript.render_text(session, after=(after or None),
+                                      limit=limit)
+    except Exception as e:                                  # noqa: BLE001
+        return {"text": "", "cursor": after or None, "file": None,
+                "cwd": None, "error": str(e)}
+
+
 @router.get("/agent/terminal")
 def agent_terminal():
     """Live contents of the agent's tmux session — drives the rail Live tab."""

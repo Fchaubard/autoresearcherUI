@@ -2192,7 +2192,11 @@ function paintRail() {
 //
 // If xterm.js failed to load (CDN blocked, offline), we fall back to a
 // plain <pre> so the rail still works, just with the old read-only UX.
-function createRailTerm(session) {
+function createRailTerm(session, opts) {
+  // transcript mode: feed the agent's full conversation (from its Claude Code
+  // session log) into xterm instead of mirroring the live fullscreen TUI, so
+  // the terminal scrolls back to the very first message and text is selectable.
+  const _tx = !!(opts && opts.transcript);
   const container = el('div', 'xterm-wrap');
   container.dataset.session = session;
   if (!window.Terminal) {
@@ -2314,7 +2318,9 @@ function createRailTerm(session) {
     // through anyway. Don't await — we want zero latency feel.
     post('/agent/keys', { session, data }).catch(() => {});
   };
-  t.onData((data) => { sendNow(data); });
+  // In transcript mode the terminal is a read-only scrollable log of the
+  // conversation; typing goes through the composer box below, not the pane.
+  if (!_tx) t.onData((data) => { sendNow(data); });
 
   /* Browser-intercepted keys: let F-keys + most Cmd/Ctrl shortcuts go
      through to tmux instead of triggering the browser. We deliberately
@@ -2494,8 +2500,41 @@ function createRailTerm(session) {
     } catch (e) { _idleMs = Math.min(_idleMs * 1.5, 2000); }
     _streamTimer = setTimeout(tick, _idleMs);
   };
+  /* ── Transcript mode stream ────────────────────────────────────────────
+     Fetch the whole conversation as terminal text, write it into xterm (so the
+     scrollback holds the entire history → scroll to the very first message),
+     then poll for new turns and append (held while the user is scrolled up). */
+  let _txCursor = '';
+  const txTick = async () => {
+    if (_stopped) return;
+    try {
+      const d = await api('/agent/transcript_text?session='
+        + encodeURIComponent(session)
+        + (_txCursor ? '&after=' + encodeURIComponent(_txCursor) : ''));
+      if (!_stopped && d) {
+        if (d.text) _writeOrHold(d.text);
+        if (d.cursor) _txCursor = d.cursor;
+      }
+    } catch (e) { /* keep last; retry */ }
+    if (!_stopped) _streamTimer = setTimeout(txTick, 2000);
+  };
+  const txStart = async () => {
+    try {
+      const d = await api('/agent/transcript_text?session='
+        + encodeURIComponent(session) + '&limit=8000');
+      if (_stopped) return;
+      try { t.reset(); } catch (e) {}
+      if (d && d.text) t.write(d.text);
+      else t.write('\x1b[2m(waiting for the agent to take its first turn…)\x1b[0m\r\n');
+      _txCursor = (d && d.cursor) || '';
+      try { t.scrollToBottom(); } catch (e) {}
+    } catch (e) {}
+    if (!_stopped) _streamTimer = setTimeout(txTick, 2000);
+  };
+
   const start = async () => {
     if (_streamTimer) return;
+    if (_tx) { _stopped = false; txStart(); return; }
     // Repaint cached history instantly, then resume from the last offset so
     // only net-new bytes are fetched (no slow "buffer in from the top").
     const c = _PANE_CACHE[session];
@@ -2557,7 +2596,7 @@ function renderAuthorLive(c) {
         'straight to the Claude session.' +
       '</div>' +
     '</div>';
-  const termHost = createRailTerm('author');
+  const termHost = createRailTerm('author', { transcript: true });
   termHost.container.id = 'authorterm-host';
   c.appendChild(termHost.container);
   if (_termHost) { try { _termHost.dispose(); } catch (e) {} }
@@ -2622,7 +2661,7 @@ function renderLive(c) {
       '</div>' +
     '</div>' +
     pausedBanner;
-  const termHost = createRailTerm('agent');
+  const termHost = createRailTerm('agent', { transcript: true });
   termHost.container.id = 'term-host';
   c.appendChild(termHost.container);
   if (_termHost) { try { _termHost.dispose(); } catch (e) {} }
