@@ -1778,7 +1778,7 @@ async def research_resume():
 
 
 @router.get("/agent/raw")
-def agent_raw_stream(session: str = "agent", offset: int = 0):
+def agent_raw_stream(session: str = "agent", offset: int = 0, seed: int = 0):
     """Byte-offset incremental read of a tmux session's RAW pane bytes.
 
     This is what the rail xterm.js subscribes to so the embedded terminal
@@ -1807,9 +1807,31 @@ def agent_raw_stream(session: str = "agent", offset: int = 0):
     if not session or len(session) > 80 or not _SAFE_NAME.match(session):
         return {"error": "bad session"}
     pre_size = pane_stream.size(session)
+    alive = _tmux_alive(session)
+    # SEED MODE (fresh mount): instead of replaying the whole multi-MB raw log
+    # — which is slow AND pointless for a full-screen TUI that has no real
+    # scrollback — return a clean snapshot of the CURRENT screen + a little
+    # history via `tmux capture-pane`, and tell the client to resume streaming
+    # from the current end-of-file. Makes the author/agent terminal load near-
+    # instantly regardless of how big the log has grown.
+    if seed and alive:
+        snap = b""
+        try:
+            cp = subprocess.run(
+                ["tmux", "capture-pane", "-t", session, "-e", "-p",
+                 "-S", "-400"],
+                capture_output=True, timeout=5)
+            if cp.returncode == 0:
+                snap = (cp.stdout or b"").replace(b"\n", b"\r\n")
+        except Exception:                                   # noqa: BLE001
+            pass
+        return {
+            "chunk": base64.b64encode(snap).decode("ascii"),
+            "offset": pre_size, "size": pre_size,
+            "alive": alive, "rotated": False, "seeded": True,
+        }
     rotated = bool(offset and offset > pre_size)
     chunk, new_off, size = pane_stream.read_range(session, offset)
-    alive = _tmux_alive(session)
     # SELF-HEAL a dead pipe-pane. If the session is alive but we got no new
     # bytes, the mirror may have stopped (pipe-pane drops on pane re-exec /
     # reattach, and sweep_enable_all skips the author/agent infra sessions) —
