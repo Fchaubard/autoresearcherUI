@@ -2497,21 +2497,29 @@ async def telemetry_event(request: Request):
     # (GitHub Actions sets CI=1, which would otherwise short-circuit to ok).
     body = await _safe_json(request)
     event = str(body.get("event") or "").strip()[:60]
-    if not event or not re.match(r"^[A-Za-z0-9_]+$", event):
+    # Allow an optional leading "$" so the browser can send PostHog's standard
+    # events ($pageview etc.) that the default dashboards key off of.
+    if not event or not re.match(r"^\$?[A-Za-z0-9_]+$", event):
         return {"ok": False, "detail": "bad event name"}
     if telemetry.telemetry_disabled():
         return {"ok": True, "disabled": True}
+    # The browser's STABLE anonymous id (localStorage UUID). Tight charset so it
+    # can't be used to smuggle data; empty -> server-side person-less event.
+    did = str(body.get("distinct_id") or "").strip()[:64]
+    if did and not re.match(r"^[A-Za-z0-9_-]+$", did):
+        did = ""
     props = {"client": "browser"}
     raw = body.get("properties")
     if isinstance(raw, dict):
-        for k, v in list(raw.items())[:10]:
+        for k, v in list(raw.items())[:12]:
+            # allow PostHog's $-prefixed standard props (e.g. $current_url)
             if not isinstance(k, str) or len(k) > 40:
                 continue
             if isinstance(v, bool) or isinstance(v, (int, float)):
                 props[k] = v
             elif isinstance(v, str):
-                props[k] = v[:120]
-    telemetry.capture(event, props)
+                props[k] = v[:200]
+    telemetry.capture(event, props, distinct_id=did or None)
     return {"ok": True}
 
 
