@@ -71,13 +71,19 @@ def schedule(runs: list[dict], n_gpus: int, now_sec: float = 0.0) -> dict:
         -int(by_id[rid].get("remaining_sec")
              if by_id[rid].get("remaining_sec") is not None
              else (by_id[rid].get("est_time_sec") or 0)), str(rid)))
+    # A run that has OVERRUN its estimate (remaining <= 0) shouldn't collapse to
+    # a 0/floor-width sliver with no visible end — give it a small "winding
+    # down" bar so it's visible and the UI can flag it overdue. Min bar = 5 min.
+    _MIN_RUNNING_BAR = 300
     for rid in running:
         r = by_id[rid]
         g = max(1, min(int(r.get("gpus_required") or 1), n_gpus))
         chosen = sorted(range(n_gpus), key=lambda i: gpu_free[i])[:g]
         rem = r.get("remaining_sec")
-        dur = max(0, int(rem if rem is not None
-                         else (r.get("est_time_sec") or 0)))
+        if rem is not None:
+            dur = int(rem) if int(rem) > 0 else _MIN_RUNNING_BAR
+        else:
+            dur = max(_MIN_RUNNING_BAR, int(r.get("est_time_sec") or 0))
         _place(rid, float(now_sec), chosen, dur)   # start pinned to now
 
     def plan(rid):
