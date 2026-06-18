@@ -2572,6 +2572,78 @@ function createRailTerm(session, opts) {
   };
 }
 
+/* ── Agent conversation pane ───────────────────────────────────────────────
+   A plain, scrollable, selectable monospace log of the agent's FULL Claude Code
+   conversation (from /api/agent/transcript_text). We deliberately do NOT use
+   xterm here: claude 2.1.x renders a fullscreen TUI with no scrollback, and the
+   xterm/WebGL path can't reliably scroll back or let you select+copy. A native
+   <pre> gives all three for free — scroll to the first message, drag-select any
+   range, Cmd/Ctrl-C to copy — and it's the SAME widget for both agents.
+   Returns the same shape as createRailTerm so the rail code is unchanged.       */
+function createTranscriptPane(session) {
+  const container = el('div', 'tx-pane');
+  const pre = el('pre', 'tx-pre');
+  container.append(pre);
+  let _cursor = '', _timer = null, _stopped = false, _first = true;
+  const nearBottom = () =>
+    (pre.scrollHeight - pre.scrollTop - pre.clientHeight) < 60;
+  // strip ANSI SGR + lone CRs; classify each line for light coloring.
+  const _ansi = /\x1b\[[0-9;]*m/g;
+  const appendText = (text) => {
+    const clean = (text || '').replace(_ansi, '').replace(/\r/g, '');
+    const frag = document.createDocumentFragment();
+    // split keeping newlines so selection/copy preserves line breaks
+    clean.split('\n').forEach((line, i, arr) => {
+      const withNl = (i < arr.length - 1) ? line + '\n' : line;
+      let cls = 'tx-asst';
+      const tr = line.trimStart();
+      if (tr.startsWith('❯')) cls = 'tx-user';
+      else if (tr.startsWith('⏺')) cls = 'tx-tool';
+      else if (line.startsWith('  ')) cls = 'tx-res';
+      const span = el('span', cls);
+      span.textContent = withNl;
+      frag.appendChild(span);
+    });
+    pre.appendChild(frag);
+  };
+  const tick = async () => {
+    if (_stopped) return;
+    try {
+      const d = await api('/agent/transcript_text?session='
+        + encodeURIComponent(session)
+        + (_cursor ? '&after=' + encodeURIComponent(_cursor) : '&limit=8000'));
+      if (!_stopped && d) {
+        if (_first) {
+          pre.textContent = '';
+          _first = false;
+          if (!d.text) pre.textContent =
+            '(waiting for the agent to take its first turn…)';
+        }
+        if (d.text) {
+          const stick = nearBottom();
+          appendText(d.text);
+          if (stick) pre.scrollTop = pre.scrollHeight;   // only autoscroll at bottom
+        }
+        if (d.cursor) _cursor = d.cursor;
+      }
+    } catch (e) { /* keep last; retry */ }
+    if (!_stopped) _timer = setTimeout(tick, 2000);
+  };
+  const start = () => {
+    if (_timer) return;
+    _stopped = false; _first = true;
+    pre.textContent = 'loading conversation…';
+    tick();
+  };
+  const stop = () => { _stopped = true; if (_timer) { clearTimeout(_timer); _timer = null; } };
+  return {
+    container, fallback: false,
+    startStream: start, stopStream: stop,
+    writeText() {},
+    dispose() { stop(); },
+  };
+}
+
 /* ── Author Agent rail (paper mode) ─────────────────────────────────────── */
 function renderAuthorLive(c) {
   c.innerHTML =
@@ -2596,7 +2668,7 @@ function renderAuthorLive(c) {
         'straight to the Claude session.' +
       '</div>' +
     '</div>';
-  const termHost = createRailTerm('author', { transcript: true });
+  const termHost = createTranscriptPane('author');
   termHost.container.id = 'authorterm-host';
   c.appendChild(termHost.container);
   if (_termHost) { try { _termHost.dispose(); } catch (e) {} }
@@ -2661,7 +2733,7 @@ function renderLive(c) {
       '</div>' +
     '</div>' +
     pausedBanner;
-  const termHost = createRailTerm('agent', { transcript: true });
+  const termHost = createTranscriptPane('agent');
   termHost.container.id = 'term-host';
   c.appendChild(termHost.container);
   if (_termHost) { try { _termHost.dispose(); } catch (e) {} }

@@ -1798,6 +1798,21 @@ textarea.onb-in{resize:vertical;line-height:1.5}
   color:#FDE68A;font-size:11.5px;line-height:1.55}
 .rail-paused-banner b{color:#FBBF24;font-weight:600}
 
+/* ── Agent conversation pane (scrollable, selectable terminal-style log) ──── */
+.tx-pane{flex:1 1 auto;min-height:0;display:flex;background:#0a0c0f;
+  border-top:1px solid #1a1d22}
+.tx-pre{flex:1 1 auto;min-height:0;margin:0;padding:8px 12px;overflow:auto;
+  white-space:pre-wrap;word-break:break-word;
+  -webkit-user-select:text;user-select:text;cursor:text;
+  font-family:'SF Mono','Menlo','Consolas',ui-monospace,monospace;
+  font-size:12px;line-height:1.5;color:#cdd3da;
+  background:#0a0c0f}
+.tx-pre .tx-user{color:#67E8F9;font-weight:600}   /* user / PI prompts */
+.tx-pre .tx-tool{color:#86EFAC}                    /* tool calls */
+.tx-pre .tx-res{color:#8a93a1}                     /* tool output */
+.tx-pre .tx-asst{color:#dfe3e8}                    /* assistant prose */
+.tx-pre::selection,.tx-pre ::selection{background:#6366F1aa;color:#fff}
+
 /* Critical Path — Milestones (primary view) */
 .ms-list{display:flex;flex-direction:column;gap:6px;margin-top:8px}
 .ms-row{display:flex;gap:11px;align-items:center;padding:9px 12px;
