@@ -2103,14 +2103,10 @@ async def agent_restart(request: Request):
     return {"ok": ok, "targets": targets, "results": results}
 
 
-@router.post("/paper/author/restart")
-async def paper_author_restart():
-    """Re-launch the author agent (paper mode counterpart of /agent/restart)."""
-    from . import author_agent
-    subprocess.run(["tmux", "kill-session", "-t", "author"],
-                   capture_output=True, timeout=5)
-    info = author_agent.start()
-    return {"ok": True, "info": info}
+# NOTE: /paper/author/restart is defined ONCE, lower in this file (the
+# proposal-aware, idempotent handler). A second duplicate route here was
+# removed — having two registrations for the same path is a silent-drift trap
+# (edits to the wrong copy do nothing).
 
 
 # ──────────── reset + onboarding ─────────────────────────────────────────────
