@@ -315,9 +315,18 @@ body.resizing{user-select:none}
  * styled by the xterm.css CDN; we just give the host container size. */
 .xterm-wrap{flex:1;min-height:0;background:#0a0c0f;padding:6px 4px;
   overflow:hidden;display:flex;flex-direction:column;
-  border-top:1px solid #1a1d22}
+  border-top:1px solid #1a1d22;position:relative}
 .xterm-wrap .xterm{flex:1;min-height:0}
 .xterm-wrap .xterm-viewport{background:transparent !important}
+/* Let the user select + copy terminal text (xterm renders selectable rows). */
+.xterm-wrap .xterm-rows,.xterm-wrap .xterm-screen{user-select:text}
+/* "live output paused" badge — shows while the user has scrolled up and we're
+   holding new output so their selection/scroll position is preserved. */
+.term-live-badge{position:absolute;right:14px;bottom:12px;z-index:5;
+  font:inherit;font-size:11px;cursor:pointer;padding:4px 11px;border-radius:999px;
+  background:var(--accent,#6366F1);color:#fff;border:none;
+  box-shadow:0 2px 8px rgba(0,0,0,.45);opacity:.95}
+.term-live-badge:hover{opacity:1}
 .sess-wrap{flex:1;min-height:0;display:flex;flex-direction:column}
 /* Host that the per-session xterm is mounted into. Mirrors the
  * Research Agent rail's slot: a flex column that fills available space

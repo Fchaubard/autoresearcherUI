@@ -2227,6 +2227,10 @@ function createRailTerm(session) {
       brightCyan: '#67E8F9', brightWhite: '#F9FAFB',
     },
     scrollback: 8000,
+    // Don't yank the viewport to the bottom when the user types/clicks while
+    // they've scrolled up to read — part of making this feel like a normal,
+    // selectable scrollback terminal (see the scroll-lock logic below).
+    scrollOnUserInput: false,
     allowProposedApi: true,
   });
   const FitAddon = window.FitAddon && window.FitAddon.FitAddon;
@@ -2249,28 +2253,15 @@ function createRailTerm(session) {
       t.loadAddon(gl);
     }
   } catch (e) { /* no WebGL → DOM renderer, still works */ }
-  // Scrolling the author/agent terminal: Claude Code runs as a full-screen TUI
-  // in the ALTERNATE screen, so xterm has no scrollback of its own. If there IS
-  // scrollback (a plain program), scroll xterm; otherwise forward the wheel as
-  // SGR mouse-wheel reports so the TUI scrolls its own transcript (verified: it
-  // responds to \x1b[<64/65;..M). Capture-phase + stopPropagation so this wins
-  // over xterm's default mouse-report handler.
+  // Wheel = always scroll xterm's own scrollback (like any normal terminal /
+  // like the paused research terminal). We do NOT forward the wheel to the live
+  // TUI — that hijack is what made the author terminal feel alien. Native scroll
+  // means the user can scroll up, the view stays put, and selections survive.
   container.addEventListener('wheel', (ev) => {
     try {
-      const buf = t.buffer && t.buffer.active;
-      const hasScrollback = buf && buf.type === 'normal' &&
-        (buf.length > t.rows);
-      if (hasScrollback) {
-        let lines = ev.deltaMode === 1 ? ev.deltaY
-          : ev.deltaMode === 2 ? ev.deltaY * (t.rows || 24) : ev.deltaY / 16;
-        t.scrollLines(Math.trunc(lines) || (ev.deltaY > 0 ? 1 : -1));
-      } else {
-        const btn = ev.deltaY < 0 ? 64 : 65;   // 64 wheel-up, 65 wheel-down
-        const n = Math.min(6, Math.max(1, Math.round(Math.abs(ev.deltaY) / 40)));
-        let seq = '';
-        for (let i = 0; i < n; i++) seq += '\x1b[<' + btn + ';20;20M';
-        post('/agent/keys', { session, data: seq }).catch(() => {});
-      }
+      let lines = ev.deltaMode === 1 ? ev.deltaY
+        : ev.deltaMode === 2 ? ev.deltaY * (t.rows || 24) : ev.deltaY / 16;
+      t.scrollLines(Math.trunc(lines) || (ev.deltaY > 0 ? 1 : -1));
       ev.preventDefault();
       ev.stopPropagation();
     } catch (e) {}
@@ -2389,6 +2380,55 @@ function createRailTerm(session) {
       return buf;
     } catch (e) { return new Uint8Array(0); }
   };
+  /* ── Scroll-lock (the research-terminal feel) ──────────────────────────────
+     A LIVE terminal repaints every ~250ms; each write clears the user's text
+     selection and yanks the viewport to the cursor (the "jumps me to the
+     bottom" bug). The paused research terminal feels nice precisely because it
+     never writes while you read it. So: while the user has scrolled up, we HOLD
+     incoming bytes in a buffer instead of writing them — the view freezes, the
+     selection survives, copy works. When they scroll back to the bottom we
+     flush the buffer and resume live tailing. */
+  let _pending = [];                 // bytes received while scrolled up
+  let _pendingLen = 0;
+  const _PENDING_CAP = 2 * 1024 * 1024;
+  const _atBottom = () => {
+    try {
+      const b = t.buffer && t.buffer.active;
+      if (!b) return true;
+      return b.viewportY >= b.baseY;     // viewport sits at the live edge
+    } catch (e) { return true; }
+  };
+  const _flushPending = () => {
+    if (!_pending.length) return;
+    const q = _pending; _pending = []; _pendingLen = 0;
+    for (const b of q) { try { t.write(b); } catch (e) {} }
+    try { t.scrollToBottom(); } catch (e) {}
+    if (_newBadge) _newBadge.style.display = 'none';
+  };
+  // "↓ live" badge: shows when output is paused because you scrolled up; click
+  // it (or scroll to the bottom) to resume.
+  let _newBadge = null;
+  try {
+    _newBadge = el('button', 'term-live-badge', '↓ live output paused');
+    _newBadge.style.display = 'none';
+    _newBadge.onclick = () => { try { t.scrollToBottom(); } catch (e) {} _flushPending(); };
+    container.appendChild(_newBadge);
+  } catch (e) {}
+  try {
+    t.onScroll(() => { if (_atBottom()) _flushPending(); });
+  } catch (e) {}
+  const _writeOrHold = (bytes) => {
+    if (_atBottom()) {
+      t.write(bytes);
+    } else {
+      _pending.push(bytes); _pendingLen += bytes.length;
+      // Cap the hold buffer so a long read doesn't grow it unbounded.
+      while (_pendingLen > _PENDING_CAP && _pending.length > 1) {
+        _pendingLen -= _pending.shift().length;
+      }
+      if (_newBadge) _newBadge.style.display = '';
+    }
+  };
   const tick = async () => {
     try {
       const d = await api(
@@ -2397,6 +2437,8 @@ function createRailTerm(session) {
       if (d.rotated) {
         t.reset();
         _offset = 0;
+        _pending = []; _pendingLen = 0;   // drop held bytes from the old session
+        if (_newBadge) _newBadge.style.display = 'none';
         delete _PANE_CACHE[session];     // stale history — start fresh
         // Agent was restarted server-side. Our last dimensions cache
         // is invalidated — force a re-push so the fresh tmux pane
@@ -2413,7 +2455,7 @@ function createRailTerm(session) {
       // with no delay, then fall back to the snappy/idle poll once caught up.
       const more = (typeof d.size === 'number' && (d.offset || 0) < d.size);
       if (bytes.length) {
-        t.write(bytes);
+        _writeOrHold(bytes);    // hold instead of write while user scrolled up
         _offset = d.offset || (_offset + bytes.length);
         _cacheAppend(bytes);    // remember for instant repaint on remount
         _idleMs = more ? 0 : 250;   // 0 = drain backlog ASAP; else stay snappy
