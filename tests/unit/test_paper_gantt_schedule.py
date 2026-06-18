@@ -31,6 +31,17 @@ def test_running_uses_remaining_time_not_full():
     assert t["start_sec"] == 0 and t["est_time_sec"] == 600
 
 
+def test_overrun_running_gets_visible_bar_not_sliver():
+    # remaining_sec <= 0 (run blew past its estimate): the bar must NOT collapse
+    # to ~0; it gets a 5-min "winding down" bar so the UI can show + flag it.
+    out = g.schedule([{"id": "r1", "status": "running",
+                       "est_time_sec": 12000, "remaining_sec": -37000}],
+                     n_gpus=3)
+    t = out["tasks"][0]
+    assert t["start_sec"] == 0
+    assert t["end_sec"] >= 300        # visible bar, not a 0/60s sliver
+
+
 def test_more_running_than_gpus_still_starts_at_now():
     # 4 running on 3 GPUs: all still pinned to now (over-subscribed is honest)
     runs = [{"id": f"r{i}", "status": "running", "est_time_sec": 1000}
