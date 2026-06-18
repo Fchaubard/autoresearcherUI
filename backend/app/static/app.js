@@ -2227,6 +2227,18 @@ function createRailTerm(session) {
   if (WebLinksAddon) t.loadAddon(new WebLinksAddon((e, uri) =>
     window.open(uri, '_blank', 'noopener')));
   t.open(container);
+  // GPU-accelerated renderer — dramatically smoother than the default DOM
+  // renderer for Claude Code's constant full-screen repaints (the cause of the
+  // "laggy scroll" feel). Guarded: if WebGL is unavailable or its context is
+  // lost, dispose the addon and fall back to the DOM renderer automatically.
+  try {
+    const Webgl = window.WebglAddon && window.WebglAddon.WebglAddon;
+    if (Webgl) {
+      const gl = new Webgl();
+      gl.onContextLoss(() => { try { gl.dispose(); } catch (e) {} });
+      t.loadAddon(gl);
+    }
+  } catch (e) { /* no WebGL → DOM renderer, still works */ }
   // Scrolling the author/agent terminal: Claude Code runs as a full-screen TUI
   // in the ALTERNATE screen, so xterm has no scrollback of its own. If there IS
   // scrollback (a plain program), scroll xterm; otherwise forward the wheel as
@@ -2384,16 +2396,22 @@ function createRailTerm(session) {
         if (t.cols && t.rows) pushSize(t.cols, t.rows);
       }
       const bytes = b64ToBytes(d.chunk);
+      // Is there still a backlog to drain (server has more bytes than we just
+      // received)? If so, fetch the NEXT chunk immediately — the old code
+      // waited 250ms between every chunk, so a fresh load of a multi-MB pane
+      // log took ~35 round-trips × 250ms ≈ 9s before anything showed. Drain
+      // with no delay, then fall back to the snappy/idle poll once caught up.
+      const more = (typeof d.size === 'number' && (d.offset || 0) < d.size);
       if (bytes.length) {
         t.write(bytes);
         _offset = d.offset || (_offset + bytes.length);
         _cacheAppend(bytes);    // remember for instant repaint on remount
-        _idleMs = 250;          // got data, stay snappy
+        _idleMs = more ? 0 : 250;   // 0 = drain backlog ASAP; else stay snappy
       } else {
         // Make sure we know where the file ends even if we got 0 bytes
         // (avoids re-fetching the same offset forever).
         if (typeof d.offset === 'number') _offset = d.offset;
-        _idleMs = Math.min(_idleMs * 1.5, 2000);
+        _idleMs = more ? 0 : Math.min(_idleMs * 1.5, 2000);
       }
     } catch (e) { _idleMs = Math.min(_idleMs * 1.5, 2000); }
     _streamTimer = setTimeout(tick, _idleMs);
