@@ -6993,6 +6993,9 @@ function _cpgInjectStyle() {
       background:transparent;border:1px solid rgba(34,197,94,.45);color:#22c55e;cursor:pointer;
       font-size:10px;font-weight:600;padding:0 7px;max-width:96%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
     .cpg-doneb:hover{background:rgba(34,197,94,.12)}
+    .cpg-end{position:absolute;top:5px;font-size:10px;color:#9aa0a8;white-space:nowrap;
+      pointer-events:none;line-height:15px}
+    .cpg-end.cpg-overdue{color:#f59e0b;font-weight:700}
   `;
   document.head.appendChild(s);
 }
@@ -7062,10 +7065,25 @@ function _cpgPaint(tableId, subId) {
     if (isSched(t)) {
       const x = Math.round((t.start_sec || 0) / 3600 * pph);
       const w = Math.max(8, Math.round(((t.end_sec || 0) - (t.start_sec || 0)) / 3600 * pph));
+      // Projected end-time label to the RIGHT of the bar so it's clear WHEN a
+      // run finishes. A running run past its estimate shows "overdue" instead
+      // of a bogus finish time.
+      let endLbl = '';
+      if (t.status === 'running' && t.overdue) {
+        const overSec = (t.elapsed_sec || 0) - (t.est_time_sec || 0);
+        endLbl = `<span class="cpg-end cpg-overdue" style="left:${x + w + 6}px" ` +
+          `title="running ${_cpgFmtDur(t.elapsed_sec || 0)} · est ${_cpgFmtDur(t.est_time_sec || 0)}">` +
+          `⚠ overdue +${_cpgFmtDur(overSec)}</span>`;
+      } else {
+        const endMs = now + (t.end_sec || 0) * 1000;
+        const lead = (t.status === 'running') ? 'ends ~' : 'ends ';
+        endLbl = `<span class="cpg-end" style="left:${x + w + 6}px" ` +
+          `title="projected end ${esc(t.end_iso || '')}">${lead}${esc(fmtAxis(endMs))}</span>`;
+      }
       inner = `${grl}<button class="cpg-bar ${c}" data-run="${rid}" ` +
         `data-start="${esc(t.start_iso || '')}" data-end="${esc(t.end_iso || '')}" ` +
         `style="left:${x}px;width:${w}px" ` +
-        `title="${enm} · click for plots + planned times">${enm}</button>`;
+        `title="${enm} · click for plots + planned times">${enm}</button>${endLbl}`;
     } else {
       inner = `${grl}<button class="cpg-doneb" data-run="${rid}" ` +
         `title="${enm} · click for plots + details">✓ ${enm}</button>`;
