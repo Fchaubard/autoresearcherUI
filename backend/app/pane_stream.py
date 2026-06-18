@@ -186,7 +186,7 @@ def sweep_enable_all() -> dict:
 
 
 def read_range(session: str, offset: int = 0,
-               max_bytes: int = 256 * 1024) -> Tuple[bytes, int, int]:
+               max_bytes: int = 1024 * 1024) -> Tuple[bytes, int, int]:
     """Return up to ``max_bytes`` from byte ``offset`` of the session's
     raw stream.
 
