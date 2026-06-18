@@ -2358,8 +2358,26 @@ function createRailTerm(session) {
   t.attachCustomKeyEventHandler((ev) => {
     if (ev.type !== 'keydown') return true;
     const k = ev.key, isMod = ev.metaKey || ev.ctrlKey;
-    // Allow these to behave normally (copy, paste, new tab etc).
-    if (isMod && /^[cvtnwqrlf]$/i.test(k)) return true;
+    // COPY: Cmd/Ctrl-C with an active selection copies it to the clipboard. The
+    // WebGL/canvas renderer has no DOM selection for the browser's own copy to
+    // grab, so we do it explicitly. Only with a selection — otherwise fall
+    // through so Ctrl-C still interrupts the agent.
+    if (isMod && /^c$/i.test(k)) {
+      try {
+        if (t.hasSelection && t.hasSelection()) {
+          const sel = t.getSelection();
+          if (sel) {
+            if (navigator.clipboard && navigator.clipboard.writeText)
+              navigator.clipboard.writeText(sel).catch(() => {});
+            ev.preventDefault();
+            return false;
+          }
+        }
+      } catch (e) {}
+      return true;
+    }
+    // Allow these to behave normally (paste, new tab etc).
+    if (isMod && /^[vtnwqrlf]$/i.test(k)) return true;
     // F1-F12 → swallow browser default + forward as escape sequence.
     if (/^F([1-9]|1[0-2])$/.test(k)) {
       const fnum = parseInt(k.slice(1), 10);
@@ -2413,6 +2431,25 @@ function createRailTerm(session) {
       return buf;
     } catch (e) { return new Uint8Array(0); }
   };
+  // SCROLL-LOCK: while the user has scrolled up to read history, HOLD incoming
+  // output instead of writing it (writing would drift the viewport down off the
+  // line they're reading). Flush + resume live tailing when they scroll back to
+  // the bottom. This is what makes "scroll up and read the whole conversation"
+  // actually usable while the agent is still streaming.
+  let _pending = [];
+  const _atBottom = () => {
+    try { const b = t.buffer && t.buffer.active; return !b || b.viewportY >= b.baseY; }
+    catch (e) { return true; }
+  };
+  const _flushPending = () => {
+    if (!_pending.length) return;
+    const q = _pending; _pending = [];
+    for (const b of q) { try { t.write(b); } catch (e) {} }
+  };
+  try { t.onScroll(() => { if (_atBottom()) _flushPending(); }); } catch (e) {}
+  const _writeOrHold = (bytes) => {
+    if (_atBottom()) t.write(bytes); else _pending.push(bytes);
+  };
   const tick = async () => {
     try {
       const d = await api(
@@ -2421,6 +2458,7 @@ function createRailTerm(session) {
       if (d.rotated) {
         t.reset();
         _offset = 0;
+        _pending = [];                   // drop held bytes from the old session
         delete _PANE_CACHE[session];     // stale history — start fresh
         // Agent was restarted server-side. Our last dimensions cache
         // is invalidated — force a re-push so the fresh tmux pane
@@ -2437,7 +2475,7 @@ function createRailTerm(session) {
       // with no delay, then fall back to the snappy/idle poll once caught up.
       const more = (typeof d.size === 'number' && (d.offset || 0) < d.size);
       if (bytes.length) {
-        t.write(bytes);
+        _writeOrHold(bytes);    // hold instead of write while user scrolled up
         _offset = d.offset || (_offset + bytes.length);
         _cacheAppend(bytes);    // remember for instant repaint on remount
         _idleMs = more ? 0 : 250;   // 0 = drain backlog ASAP; else stay snappy
