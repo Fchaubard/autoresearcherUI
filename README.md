@@ -409,13 +409,18 @@ A disk warning auto-appears in both email digests when free space is low.
 
 autoresearcherUI collects anonymous usage telemetry to understand which
 features are used. It uses raw PostHog HTTP capture (no SDK, no autocapture,
-no session replay, no cookies, no `identify()`, no stable user ID, no person
-profiles) — just anonymous event counts.
+no session replay, no cookies, no `identify()`, no PII). Each browser mints a
+**random anonymous id** stored in `localStorage` and reuses it, so PostHog's
+standard dashboards (daily/weekly active users, retention) work — that id is
+just a random UUID with no name, email, or personal data attached. Server-side
+events carry no browser id and never create a person profile.
 
 We collect:
 
-- event name (e.g. `app_started`, `paper_mode_entered`, `onboarding_completed`,
-  and anonymous frontend `app_loaded` / `page_view` with the view id)
+- event name — browser `$pageview` (with current URL/path) + a custom
+  `page_view` (the app's view id), plus `app_started`, `app_loaded`,
+  `paper_mode_entered`, `onboarding_completed`
+- a per-browser random anonymous id (no PII)
 - app version
 - OS / platform / arch
 - Python runtime version
