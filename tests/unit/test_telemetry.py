@@ -1,7 +1,7 @@
-"""Anonymous PostHog telemetry: opt-out logic, payload shape (no PII, no person
-profiles), and that it never raises / never blocks. No network in tests.
+"""PostHog telemetry: opt-out logic, payload shape (no PII; person profiles
+only for browser events with a stable anon id), never raises / never blocks.
+No network in tests.
 """
-import uuid
 
 
 def test_disabled_by_env(monkeypatch):
@@ -19,28 +19,35 @@ def test_disabled_by_env(monkeypatch):
     assert telemetry.telemetry_disabled() is True
 
 
-def test_payload_shape_and_no_person_profile():
+def test_server_event_is_person_less(arui_env):
     from backend.app import telemetry
     p = telemetry.build_payload("command_run",
                                 {"command": "train", "success": True})
     assert p["event"] == "command_run"
     assert p["api_key"].startswith("phc_")
-    uuid.UUID(p["distinct_id"])               # a valid random anon id
     props = p["properties"]
+    # server event (no browser id) -> never creates a person
     assert props["$process_person_profile"] is False
     assert props["project"] == "autoresearcherui"
     assert props["command"] == "train" and props["success"] is True
-    # no PII keys leak in
     for bad in ("username", "email", "repo_path", "api_key", "stack",
                 "filename", "hostname"):
         assert bad not in props
 
 
-def test_distinct_id_is_fresh_each_call():
+def test_browser_event_builds_person_with_stable_id(arui_env):
+    from backend.app import telemetry
+    p = telemetry.build_payload("$pageview", {"view": "dashboard"},
+                                distinct_id="browser-abc-123")
+    assert p["distinct_id"] == "browser-abc-123"   # the browser's stable id
+    assert p["properties"]["$process_person_profile"] is True
+
+
+def test_server_distinct_id_is_stable(arui_env):
     from backend.app import telemetry
     a = telemetry.build_payload("x")["distinct_id"]
     b = telemetry.build_payload("x")["distinct_id"]
-    assert a != b                              # no stable user id
+    assert a == b                              # stable per-install server id
 
 
 def test_capture_is_noop_when_disabled(monkeypatch):
@@ -60,7 +67,7 @@ def test_send_swallows_network_errors(monkeypatch):
     def _boom(*a, **k):
         raise OSError("network down")
     monkeypatch.setattr(telemetry.urllib.request, "urlopen", _boom)
-    telemetry._send("evt", {})                 # must not raise
+    telemetry._send("evt", {}, None)           # must not raise
 
 
 # ── frontend event endpoint (browser page views) ──────────────────────────
@@ -84,18 +91,20 @@ def test_event_endpoint_forwards_and_sanitizes(client, monkeypatch):
         monkeypatch.delenv(v, raising=False)
     rec = []
     monkeypatch.setattr(telemetry, "capture",
-                        lambda e, p=None: rec.append((e, p)))
+                        lambda e, p=None, distinct_id=None:
+                        rec.append((e, p, distinct_id)))
     r = client.post("/api/telemetry/event", json={
-        "event": "page_view",
+        "event": "$pageview", "distinct_id": "browser-xyz-9",
         "properties": {"view": "dashboard", "n": 3, "ok": True,
                        "nested": {"a": 1}, "big": "x" * 500}})
     assert r.json()["ok"] is True
-    assert rec and rec[0][0] == "page_view"
+    assert rec and rec[0][0] == "$pageview"     # $-prefixed standard event ok
     props = rec[0][1]
     assert props["view"] == "dashboard" and props["client"] == "browser"
     assert props["n"] == 3 and props["ok"] is True
     assert "nested" not in props               # non-scalar dropped
-    assert len(props["big"]) <= 120            # strings capped
+    assert len(props["big"]) <= 200            # strings capped
+    assert rec[0][2] == "browser-xyz-9"        # browser id forwarded
 
 
 def test_event_endpoint_rejects_bad_event_name(client):
