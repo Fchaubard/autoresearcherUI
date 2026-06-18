@@ -1,11 +1,13 @@
-"""Anonymous, opt-out usage telemetry via raw PostHog HTTP capture.
+"""Opt-out usage telemetry via raw PostHog HTTP capture.
 
 Deliberately minimal: NO PostHog JS SDK, no autocapture, no session replay, no
-cookies, no identify(), no stable user ID, no local id file, no person
-profiles, no PII. Every event gets a fresh random distinct_id and sets
-``$process_person_profile: false`` so PostHog never builds a person profile.
-It only ever sends coarse, boring event counts (which command/feature ran,
-success/failure, OS/runtime) so we can see what's used.
+cookies, no PII. We DO build person profiles now (so the standard PostHog
+dashboards — DAU/WAU/retention — work), but a "person" is only ever a STABLE
+RANDOM id: the browser mints an anonymous UUID once (localStorage) and reuses
+it; there are no names, emails, IPs-as-identity, or any personal data attached.
+Server-originated events carry no browser id and are sent with
+``$process_person_profile: false`` so they never create phantom people and
+never inflate the user counts.
 
 Opt out with any of:
     ARUI_TELEMETRY_DISABLED=1   (or =true)
@@ -38,17 +40,46 @@ def telemetry_disabled() -> bool:
     return _on("ARUI_TELEMETRY_DISABLED") or _on("DO_NOT_TRACK") or _on("CI")
 
 
-def build_payload(event: str, properties: dict | None = None) -> dict:
-    """Assemble the PostHog capture payload (pure; used by tests)."""
+def _server_distinct_id() -> str:
+    """A stable, anonymous per-install id for SERVER-originated events, so they
+    aren't a brand-new random id every time. Persisted under DATA_DIR. Best
+    effort — falls back to a fixed label if the file can't be written."""
+    try:
+        from .config import DATA_DIR
+        p = DATA_DIR / ".telemetry_id"
+        if p.exists():
+            v = (p.read_text(errors="ignore") or "").strip()
+            if v:
+                return v
+        v = str(uuid.uuid4())
+        try:
+            p.write_text(v)
+        except Exception:                                   # noqa: BLE001
+            pass
+        return v
+    except Exception:                                       # noqa: BLE001
+        return "arui-server"
+
+
+def build_payload(event: str, properties: dict | None = None,
+                  distinct_id: str | None = None) -> dict:
+    """Assemble the PostHog capture payload (pure; used by tests).
+
+    ``distinct_id`` is the browser's STABLE anonymous id when present. Person
+    profiles are created ONLY for those browser events — server events (no id)
+    are sent person-less so the DAU/WAU/retention counts reflect real visitors.
+    """
+    did = (distinct_id or "").strip()
+    is_browser = bool(did)
     return {
         "api_key": _POSTHOG_TOKEN,
         "event": event,
-        # No stable user ID: a fresh anonymous id for every single event.
-        "distinct_id": str(uuid.uuid4()),
+        "distinct_id": did or _server_distinct_id(),
         "properties": {
             **(properties or {}),
-            # CRITICAL: never create user/person profiles.
-            "$process_person_profile": False,
+            # Person profiles ON for browser visitors (DAU/WAU/retention),
+            # OFF for server events so they never inflate the user counts.
+            "$process_person_profile": is_browser,
             "project": _PROJECT,
             "version": _VERSION,
             "runtime": "python",
@@ -59,9 +90,10 @@ def build_payload(event: str, properties: dict | None = None) -> dict:
     }
 
 
-def _send(event: str, properties: dict | None) -> None:
+def _send(event: str, properties: dict | None,
+          distinct_id: str | None) -> None:
     try:
-        payload = build_payload(event, properties)
+        payload = build_payload(event, properties, distinct_id)
         req = urllib.request.Request(
             _POSTHOG_HOST,
             data=json.dumps(payload).encode("utf-8"),
@@ -73,18 +105,20 @@ def _send(event: str, properties: dict | None) -> None:
         pass
 
 
-def capture(event: str, properties: dict | None = None) -> None:
-    """Fire-and-forget an anonymous event. Non-blocking, never raises.
+def capture(event: str, properties: dict | None = None,
+            distinct_id: str | None = None) -> None:
+    """Fire-and-forget an event. Non-blocking, never raises.
 
-    Only send BORING things: an event name + coarse properties. Never pass
-    paths, prompts, file contents, repo names, usernames, emails, hostnames,
-    env vars, API keys, or stack traces. For failures send a coarse
-    ``error_type`` (e.g. "config_missing"), not a raw exception.
+    ``distinct_id``: the browser's stable anonymous id (frontend supplies it);
+    omit for server events. Only send BORING properties: an event name + coarse
+    properties. Never pass paths, prompts, file contents, repo names,
+    usernames, emails, hostnames, env vars, API keys, or stack traces.
     """
     if telemetry_disabled():
         return
     try:
-        threading.Thread(target=_send, args=(event, properties or {}),
+        threading.Thread(target=_send,
+                         args=(event, properties or {}, distinct_id),
                          daemon=True, name="telemetry").start()
     except Exception:
         pass
