@@ -2325,8 +2325,34 @@ function createRailTerm(session) {
   t.attachCustomKeyEventHandler((ev) => {
     if (ev.type !== 'keydown') return true;
     const k = ev.key, isMod = ev.metaKey || ev.ctrlKey;
-    // Allow these to behave normally (copy, paste, new tab etc).
-    if (isMod && /^[cvtnwqrlf]$/i.test(k)) return true;
+    // COPY: Cmd/Ctrl-C with an active selection copies that selection to the
+    // clipboard (with the WebGL/canvas renderer the selection isn't a DOM
+    // selection, so the browser's own copy would grab nothing). Only when there
+    // is NO selection do we fall through — so Ctrl-C can still interrupt the
+    // agent. This makes "scroll up, select, copy" work identically to the
+    // research terminal.
+    if (isMod && /^c$/i.test(k)) {
+      try {
+        if (t.hasSelection && t.hasSelection()) {
+          const sel = t.getSelection();
+          if (sel) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(sel).catch(() => {});
+            } else {
+              const ta = document.createElement('textarea');
+              ta.value = sel; document.body.appendChild(ta); ta.select();
+              try { document.execCommand('copy'); } catch (e) {}
+              document.body.removeChild(ta);
+            }
+            ev.preventDefault();
+            return false;            // consumed — don't send ^C to the agent
+          }
+        }
+      } catch (e) {}
+      return true;                   // no selection → normal (Ctrl-C interrupt)
+    }
+    // Allow these to behave normally (paste, new tab etc).
+    if (isMod && /^[vtnwqrlf]$/i.test(k)) return true;
     // F1-F12 → swallow browser default + forward as escape sequence.
     if (/^F([1-9]|1[0-2])$/.test(k)) {
       const fnum = parseInt(k.slice(1), 10);
@@ -2479,23 +2505,12 @@ function createRailTerm(session) {
       tick();
       return;
     }
-    // FRESH mount (e.g. hard refresh, no cache): SEED from the TAIL of the pane
-    // mirror (the backend returns the last ~512KB of real bytes), NOT just the
-    // current screen. The mirror replays in xterm's normal buffer, so this
-    // history is fully scrollable — seeding from it is what makes the terminal
-    // long and scrollable (matching the research terminal) while still loading
-    // fast because the tail is bounded.
-    try {
-      const d = await api('/agent/raw?session=' + encodeURIComponent(session)
-        + '&offset=0&seed=1');
-      if (d && d.seeded) {
-        try { t.reset(); } catch (e) {}
-        const bytes = b64ToBytes(d.chunk);
-        if (bytes.length) { t.write(bytes); _cacheAppend(bytes); }
-        _offset = d.offset || 0;
-      }
-    } catch (e) { /* no seed → tick() replays from 0 as a fallback */ }
-    if (_stopped) return;          // disposed/stopped during the seed fetch
+    // FRESH mount (no cache): replay the WHOLE pane mirror from the very first
+    // byte — _offset stays 0 and tick() drains the backlog fast (idleMs=0 while
+    // there's more to fetch). This is byte-for-byte the SAME path the research
+    // terminal uses, so the author and research terminals load, scroll, and
+    // select identically. No special "seed" snapshot — that was the only thing
+    // that made the author behave differently from research.
     tick();
   };
   let _stopped = false;
