@@ -561,9 +561,14 @@ function render() {
   }
   app.className = 'app';
   if (isPaperView) {
-    // Default the rail to the Author Agent on first visit to this view.
+    // Default the paper rail to the scrollable ACTIVITY FEED (same as the
+    // dashboard) instead of the Author Agent terminal. The terminal mirrors
+    // Claude Code's full-screen TUI, which has no scrollback and can't scroll
+    // back through history — the exact "stuck / can't scroll" complaint. The
+    // feed is native, scrollable, and shows the author's activity; the
+    // terminal is still one click away on the 'Author agent' tab.
     if (!S._railTabSetForPaper) {
-      S.railTab = 'author';
+      S.railTab = 'feed';
       S._railTabSetForPaper = true;
     }
     // viewPane() renders Write-the-paper into the LEFT column. We use
