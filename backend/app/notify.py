@@ -1849,19 +1849,29 @@ def maybe_email_tunnel_change() -> bool:
                    .filter(Setting.key == _TUNNEL_URL_KEY).first())
             prev = ((row.value or {}).get("url")
                     if row and isinstance(row.value, dict) else "")
-            if prev == cur:
-                return False
-            if row:
-                row.value = {"url": cur, "at": _dt_now_iso()}
-            else:
-                db.add(Setting(key=_TUNNEL_URL_KEY,
-                               value={"url": cur, "at": _dt_now_iso()}))
-            db.commit()
         finally:
             db.close()
-        if emails_paused():
+        if prev == cur:
             return False
         first = not prev
+
+        def _commit_baseline():
+            d2 = SessionLocal()
+            try:
+                r2 = (d2.query(Setting)
+                      .filter(Setting.key == _TUNNEL_URL_KEY).first())
+                if r2:
+                    r2.value = {"url": cur, "at": _dt_now_iso()}
+                else:
+                    d2.add(Setting(key=_TUNNEL_URL_KEY,
+                                   value={"url": cur, "at": _dt_now_iso()}))
+                d2.commit()
+            finally:
+                d2.close()
+
+        if emails_paused():
+            _commit_baseline()      # track silently; don't email while paused
+            return False
         subject = ("[autoresearcherUI] dashboard URL"
                    if first else
                    "[autoresearcherUI] dashboard URL changed")
@@ -1873,9 +1883,15 @@ def maybe_email_tunnel_change() -> bool:
             bullets.append("The previous link stopped working — cloudflare's "
                            "quick-tunnel rotated its hostname on reconnect.")
         bullets.append("Bookmark this one; I'll email again if it ever rotates.")
-        return send_alert(subject, headline, bullets=bullets,
-                          action_text="Open the dashboard with the button "
-                                      "below.", severity="info")
+        ok = send_alert(subject, headline, bullets=bullets,
+                        action_text="Open the dashboard with the button "
+                                    "below.", severity="info")
+        # Only commit the new baseline once the email actually went out — a
+        # failed send (SMTP hiccup) then retries on the next tick instead of
+        # silently swallowing the notification.
+        if ok:
+            _commit_baseline()
+        return ok
     except Exception as e:                                  # noqa: BLE001
         print(f"[notify] tunnel-change check failed: {e}", flush=True)
         return False
@@ -1918,6 +1934,16 @@ def _loop() -> None:
     last_sent = time.time()        # anchor: never fire instantly on boot
     last_cad: str | None = None
     last_stalled_send = 0.0        # debounce stalled override pings
+    # Check the tunnel URL IMMEDIATELY on boot (don't wait the first 60s). A
+    # quick-tunnel often rotates while the backend is bouncing (deploys /
+    # restarts), and if the process restarts again within a minute the 60s-
+    # delayed check would never run — so the rotation email gets missed. The
+    # short initial delay lets cloudflared finish printing its URL first.
+    try:
+        time.sleep(8)
+        maybe_email_tunnel_change()
+    except Exception as e:                               # noqa: BLE001
+        print(f"[notify] boot tunnel check failed: {e}", flush=True)
     while True:
         time.sleep(60)
         try:
