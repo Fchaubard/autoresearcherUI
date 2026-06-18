@@ -462,9 +462,22 @@ function pushView(viewId) {
     try { history.pushState({ view: viewId }, '', path); } catch (e) {}
   }
 }
-// Anonymous, opt-out frontend telemetry. Fire-and-forget POST through the
-// backend (which adds the standard props + honors the env opt-out). Respects
-// the browser Do-Not-Track signal too. Never throws, never blocks.
+// Opt-out frontend telemetry. Fire-and-forget POST through the backend (which
+// adds standard props + honors the env opt-out). Respects Do-Not-Track. Never
+// throws, never blocks. A STABLE anonymous id (random UUID in localStorage,
+// reused across visits) lets PostHog build person profiles for DAU/WAU/
+// retention — it carries no names/emails/PII, just a per-browser random id.
+function _anonId() {
+  try {
+    let id = localStorage.getItem('arui_anon_id');
+    if (!id) {
+      id = (crypto && crypto.randomUUID) ? crypto.randomUUID()
+        : 'a-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      localStorage.setItem('arui_anon_id', id);
+    }
+    return id;
+  } catch (e) { return ''; }   // private mode / no storage -> person-less
+}
 function track(event, props) {
   try {
     if (navigator.doNotTrack === '1' || window.doNotTrack === '1' ||
@@ -472,17 +485,29 @@ function track(event, props) {
     fetch('/api/telemetry/event', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ event: event, properties: props || {} }),
+      body: JSON.stringify({ event: event, properties: props || {},
+                             distinct_id: _anonId() }),
       keepalive: true,
     }).catch(() => {});
   } catch (e) { /* telemetry must never break the app */ }
+}
+// Page views go to PostHog's STANDARD $pageview event (with $current_url /
+// $pathname) so the built-in DAU/WAU/Growth/Retention dashboards populate. We
+// also keep the custom page_view (with the app's logical view name) for our
+// own breakdowns.
+function trackPageView(viewId) {
+  try {
+    track('$pageview', { '$current_url': location.href,
+                         '$pathname': location.pathname, view: viewId });
+  } catch (e) {}
+  track('page_view', { view: viewId });
 }
 
 // Public helper used everywhere a view changes — replaces S.view = X; render();
 function setView(viewId) {
   if (S.view === viewId) return;
   S.view = viewId;
-  track('page_view', { view: viewId });
+  trackPageView(viewId);
   pushView(viewId);
   render();
 }
@@ -498,13 +523,13 @@ async function enterPaperView() {
   try { S.mode = await api('/mode'); } catch (e) {}
   S.view = 'latex';
   S._railTabSetForPaper = false;
-  track('page_view', { view: 'latex' });
+  trackPageView('latex');
   pushView('latex');
   render();
 }
 window.addEventListener('popstate', () => {
   const v = viewFromPath(window.location.pathname);
-  if (v && S.view !== v) { S.view = v; track('page_view', { view: v }); render(); }
+  if (v && S.view !== v) { S.view = v; trackPageView(v); render(); }
 });
 
 function render() {
