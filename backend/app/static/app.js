@@ -2135,9 +2135,118 @@ if (!window._railDescDelegated) {
   });
 }
 let _termHost = null;        // active xterm.js wrapper for the rail
+let _agentTx = null;         // active transcript-feed view for the rail
 function stopTermPoll() {
   if (_termTimer) { clearInterval(_termTimer); _termTimer = null; }
   if (_termHost) { try { _termHost.dispose(); } catch (e) {} _termHost = null; }
+  if (_agentTx) { try { _agentTx.stop(); } catch (e) {} _agentTx = null; }
+}
+
+/* ── Agent body: Transcript (default) ⇆ Live terminal ──────────────────────
+   The live tmux terminal mirrors Claude Code's alt-screen TUI, which has NO
+   scrollback — you can only see the current screen, which is why the author
+   terminal felt "stuck, can't scroll". Claude Code writes the full
+   conversation to a JSONL transcript on disk; createTranscriptView renders it
+   as ONE long, scrollable feed. Same code path for the research + author
+   agents. Default to the transcript; the live terminal stays one click away.   */
+function mountAgentBody(host, session) {
+  if (!host) return;
+  if (!S._agentSub) S._agentSub = {};
+  const mode = S._agentSub[session] || 'transcript';
+  host.innerHTML = '';
+  const bar = el('div', 'atx-toggle');
+  [['transcript', '📜 Transcript'], ['terminal', '▶ Live terminal']]
+    .forEach(([k, lbl]) => {
+      const b = el('button', 'atx-tab' + (mode === k ? ' on' : ''), lbl);
+      b.onclick = () => { S._agentSub[session] = k; mountAgentBody(host, session); };
+      bar.append(b);
+    });
+  host.append(bar);
+  const body = el('div', 'atx-body-host');
+  host.append(body);
+  // tear down whichever sub-view was previously mounted
+  if (_termHost) { try { _termHost.dispose(); } catch (e) {} _termHost = null; }
+  if (_agentTx) { try { _agentTx.stop(); } catch (e) {} _agentTx = null; }
+  if (mode === 'terminal') {
+    const termHost = createRailTerm(session);
+    termHost.container.id = (session === 'author') ? 'authorterm-host' : 'term-host';
+    body.appendChild(termHost.container);
+    _termHost = termHost;
+    termHost.startStream();
+  } else {
+    const tx = createTranscriptView(session);
+    body.appendChild(tx.container);
+    _agentTx = tx;
+    tx.start();
+  }
+}
+
+/* createTranscriptView(session) — a long, scrollable conversation feed built
+   from the agent's Claude Code session transcript (/api/agent/transcript).
+   Returns { container, start(), stop() }. Live-tails via an `after` cursor and
+   only auto-scrolls when the user is already near the bottom.                  */
+function createTranscriptView(session) {
+  const wrap = el('div', 'agent-transcript');
+  const feed = el('div', 'atx-feed');
+  wrap.append(feed);
+  feed.innerHTML = '<div class="atx-empty">Loading transcript…</div>';
+  const KIND = {
+    user:        { cls: 'atx-user',  label: 'You' },
+    text:        { cls: 'atx-text',  label: 'Agent' },
+    thinking:    { cls: 'atx-think', label: 'thinking' },
+    tool:        { cls: 'atx-tool',  label: '⛭ tool' },
+    tool_result: { cls: 'atx-tres',  label: 'result' },
+    system:      { cls: 'atx-sys',   label: 'system' },
+  };
+  let _cursor = null, _timer = null, _stopped = false, _first = true;
+  const _seen = new Set();
+  const nearBottom = () =>
+    (feed.scrollHeight - feed.scrollTop - feed.clientHeight) < 90;
+  function append(entries) {
+    const stick = _first || nearBottom();
+    let added = 0;
+    for (const e of entries) {
+      if (!e || _seen.has(e.id)) continue;
+      _seen.add(e.id);
+      const m = KIND[e.kind] || KIND.text;
+      const row = el('div', 'atx-row ' + m.cls);
+      row.append(el('div', 'atx-head', esc(m.label)));
+      const body = el('div', 'atx-body-tx');
+      body.textContent = e.text;          // textContent: never interpret HTML
+      row.append(body);
+      feed.append(row);
+      added++;
+    }
+    if (added && stick) feed.scrollTop = feed.scrollHeight;
+    return added;
+  }
+  async function tick() {
+    if (_stopped) return;
+    try {
+      const q = '/agent/transcript?session=' + encodeURIComponent(session)
+        + (_cursor ? '&after=' + encodeURIComponent(_cursor)
+                   : '&limit=800');
+      const d = await api(q);
+      if (_stopped) return;
+      if (_first) {
+        feed.innerHTML = '';            // clear "Loading…"
+        if (!d || !d.entries || !d.entries.length) {
+          feed.innerHTML = '<div class="atx-empty">No transcript on disk yet '
+            + 'for this agent — it appears once the agent takes its first turn.'
+            + '</div>';
+        }
+      }
+      if (d && d.entries && d.entries.length) append(d.entries);
+      if (d && d.cursor) _cursor = d.cursor;
+      _first = false;
+    } catch (e) { /* keep last; retry */ }
+    if (!_stopped) _timer = setTimeout(tick, 2500);
+  }
+  return {
+    container: wrap,
+    start() { _stopped = false; _first = true; tick(); },
+    stop()  { _stopped = true; if (_timer) { clearTimeout(_timer); _timer = null; } },
+  };
 }
 
 function paintRail() {
@@ -2151,9 +2260,9 @@ function paintRail() {
     // only rebuild if the feed isn't there yet.
     if (!document.getElementById('feed')) renderFeed(c);
   } else if (S.railTab === 'author') {
-    if (!document.getElementById('authorterm-host')) { stopTermPoll(); renderAuthorLive(c); }
+    if (!document.getElementById('agentbody-author')) { stopTermPoll(); renderAuthorLive(c); }
   } else if (S.railTab === 'live') {
-    if (!document.getElementById('term-host')) { stopTermPoll(); renderLive(c); }
+    if (!document.getElementById('agentbody-agent')) { stopTermPoll(); renderLive(c); }
   } else if (S.railTab === 'sessions') {
     if (!c.querySelector('.sess-wrap')) { stopTermPoll(); renderSessions(c); }
   } else {
@@ -2498,11 +2607,9 @@ function renderAuthorLive(c) {
         'straight to the Claude session.' +
       '</div>' +
     '</div>';
-  const termHost = createRailTerm('author');
-  termHost.container.id = 'authorterm-host';
-  c.appendChild(termHost.container);
-  if (_termHost) { try { _termHost.dispose(); } catch (e) {} }
-  _termHost = termHost;
+  const bodyHost = el('div', 'agent-body'); bodyHost.id = 'agentbody-author';
+  c.appendChild(bodyHost);
+  mountAgentBody(bodyHost, 'author');
   const stat = document.getElementById('author-status');
   document.getElementById('author-restart').onclick = async () => {
     const ok = await aruiConfirm('Restart the Author Agent tmux? Anything mid-response will be lost.',
@@ -2512,11 +2619,6 @@ function renderAuthorLive(c) {
     await post('/paper/author/restart', {});
     stat.textContent = 'restarted';
   };
-  // Start streaming raw pane bytes (ANSI included) — this is what makes
-  // the terminal feel real. The /paper/author/terminal full-text poll is
-  // gone; instead we just hit /api/agent/raw incrementally inside
-  // termHost.startStream().
-  termHost.startStream();
   // Separate light status poll just for the "● running / ○ not running"
   // indicator. 4s is plenty — this isn't on the critical path of typing.
   const statusTick = async () => {
@@ -2563,11 +2665,9 @@ function renderLive(c) {
       '</div>' +
     '</div>' +
     pausedBanner;
-  const termHost = createRailTerm('agent');
-  termHost.container.id = 'term-host';
-  c.appendChild(termHost.container);
-  if (_termHost) { try { _termHost.dispose(); } catch (e) {} }
-  _termHost = termHost;
+  const bodyHost = el('div', 'agent-body'); bodyHost.id = 'agentbody-agent';
+  c.appendChild(bodyHost);
+  mountAgentBody(bodyHost, 'agent');
   const stat = document.getElementById('agent-status');
   document.getElementById('agent-restart').onclick = async () => {
     const ok = await aruiConfirm(
@@ -2584,12 +2684,9 @@ function renderLive(c) {
         { title: 'Could not restart agent' });
     }
   };
-  // Start streaming raw pane bytes — ANSI escapes included. xterm.js
-  // renders them natively, so colors / spinners / cursor moves all
-  // match what `tmux attach -t agent` would show.
-  termHost.startStream();
-  // Separate light status poll just for the "● running / ○ not running"
-  // indicator. 4s is plenty.
+  // Light status poll just for the "● running / ○ not running" indicator.
+  // 4s is plenty. (The body — transcript or live terminal — is mounted by
+  // mountAgentBody above and manages its own polling.)
   const statusTick = async () => {
     try {
       const d = await api('/agent/raw?session=agent&offset=999999999');

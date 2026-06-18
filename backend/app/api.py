@@ -1853,6 +1853,35 @@ def agent_raw_stream(session: str = "agent", offset: int = 0, seed: int = 0):
     }
 
 
+@router.get("/agent/transcript")
+def agent_transcript(session: str = "agent", after: str = "", limit: int = 400):
+    """Clean, scrollable conversation transcript for a tmux agent session.
+
+    The live ``/agent/raw`` terminal mirrors Claude Code's alt-screen TUI,
+    which has NO scrollback — you can only see the current screen. Claude Code
+    however writes the full conversation to a JSONL transcript on disk; this
+    endpoint parses the newest one for `session` ("agent" or "author") and
+    returns it as a list of small readable entries (user / assistant text,
+    thinking, tool calls + results). The frontend renders these as one long
+    scrollable feed, the same way for both the research and author agents.
+
+    Pass back ``after`` (the previous ``cursor``) to fetch only new entries.
+    """
+    from . import transcript
+    if not session or len(session) > 80 or not _SAFE_NAME.match(session):
+        return {"error": "bad session"}
+    try:
+        limit = max(1, min(int(limit), 2000))
+    except Exception:                                       # noqa: BLE001
+        limit = 400
+    try:
+        return transcript.read_transcript(session, after=(after or None),
+                                          limit=limit)
+    except Exception as e:                                  # noqa: BLE001
+        return {"entries": [], "cursor": after or None, "file": None,
+                "cwd": None, "error": str(e)}
+
+
 @router.get("/agent/terminal")
 def agent_terminal():
     """Live contents of the agent's tmux session — drives the rail Live tab."""

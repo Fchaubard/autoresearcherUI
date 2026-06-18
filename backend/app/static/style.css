@@ -1789,6 +1789,55 @@ textarea.onb-in{resize:vertical;line-height:1.5}
   color:#FDE68A;font-size:11.5px;line-height:1.55}
 .rail-paused-banner b{color:#FBBF24;font-weight:600}
 
+/* ── Agent body: Transcript ⇆ Live terminal ─────────────────────────────── */
+.agent-body{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.atx-toggle{display:flex;gap:6px;padding:7px 12px 0;flex:0 0 auto}
+.atx-tab{font:inherit;font-size:11.5px;cursor:pointer;padding:4px 11px;
+  border-radius:999px;border:1px solid var(--border);background:transparent;
+  color:var(--muted)}
+.atx-tab:hover{color:var(--text)}
+.atx-tab.on{background:var(--accent,#6366F1);border-color:var(--accent,#6366F1);
+  color:#fff}
+.atx-body-host{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;
+  padding:8px 0 0}
+
+/* the scrollable conversation feed */
+.agent-transcript{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.atx-feed{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;
+  padding:4px 12px 16px;display:flex;flex-direction:column;gap:9px;
+  scroll-behavior:auto}
+.atx-empty{color:var(--muted);font-size:12px;padding:18px 6px;line-height:1.55}
+.atx-row{display:flex;flex-direction:column;gap:3px}
+.atx-head{font-size:10px;text-transform:uppercase;letter-spacing:.05em;
+  color:var(--muted);font-weight:600}
+.atx-body-tx{font-size:12.5px;line-height:1.5;white-space:pre-wrap;
+  word-break:break-word;border-radius:8px;padding:8px 11px}
+/* assistant prose */
+.atx-text .atx-body-tx{background:var(--panel,#15181d);color:var(--text);
+  border:1px solid var(--border)}
+/* user / PI nudges typed into the session */
+.atx-user{align-items:flex-end}
+.atx-user .atx-head{color:#A5B4FC}
+.atx-user .atx-body-tx{background:rgba(99,102,241,.14);
+  border:1px solid rgba(99,102,241,.45);color:#E0E7FF;max-width:88%}
+/* thinking — dim + italic */
+.atx-think .atx-head{color:#7C8595}
+.atx-think .atx-body-tx{background:transparent;color:#8b93a1;font-style:italic;
+  border:1px dashed var(--border);font-size:12px}
+/* tool calls — monospace chip */
+.atx-tool .atx-head{color:#34D399}
+.atx-tool .atx-body-tx{background:rgba(16,185,129,.07);
+  border:1px solid rgba(16,185,129,.3);color:#A7F3D0;
+  font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px}
+/* tool results — dim monospace, collapsed-ish */
+.atx-tres .atx-head{color:#6b7280}
+.atx-tres .atx-body-tx{background:rgba(255,255,255,.02);
+  border:1px solid var(--border);color:#9aa3b2;
+  font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;
+  max-height:180px;overflow-y:auto}
+.atx-sys .atx-body-tx{background:rgba(251,191,36,.06);
+  border:1px solid rgba(251,191,36,.3);color:#FDE68A;font-size:11.5px}
+
 /* Critical Path — Milestones (primary view) */
 .ms-list{display:flex;flex-direction:column;gap:6px;margin-top:8px}
 .ms-row{display:flex;gap:11px;align-items:center;padding:9px 12px;
