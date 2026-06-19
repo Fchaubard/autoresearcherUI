@@ -11,7 +11,7 @@ import os
 import subprocess
 import tempfile
 
-_SSH_DIR = "/root/.ssh"
+_SSH_DIR = os.path.expanduser("~/.ssh")
 _AUTH = os.path.join(_SSH_DIR, "authorized_keys")
 _KEY_TYPES = (
     "ssh-ed25519", "ssh-rsa", "ssh-dss",

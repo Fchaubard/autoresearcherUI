@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import shlex
 import subprocess
 import threading
 import time
@@ -140,7 +141,8 @@ def _launch_run(db, run: Run, gpu_idx: int) -> None:
     try:
         subprocess.run(
             ["tmux", "new-session", "-d", "-s", run.id,
-             f"cd {folder} && CUDA_VISIBLE_DEVICES={gpu_idx} {cmd} 2>&1"],
+             f"cd {shlex.quote(str(folder))} && "
+             f"CUDA_VISIBLE_DEVICES={gpu_idx} {cmd} 2>&1"],
             capture_output=True, timeout=10)
         # Proactively wire pane_stream so the user can click the run's
         # tab in the Sessions rail and instantly see live bytes — no

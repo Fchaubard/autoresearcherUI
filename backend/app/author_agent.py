@@ -511,7 +511,39 @@ def _looks_busy(session: str) -> bool:
     return any(m in low for m in _BUSY_MARKERS)
 
 
+# Per-session feed lock: start(), refeed_if_idle(), and the watchdog restart
+# can each spawn a feed_brief thread for the same `author` pane. Two feeders
+# racing tmux send-keys interleave keystrokes and garble the brief. Serialize
+# them: if a feed is already in flight for this session, the new one bows out.
+_FEED_LOCKS: dict[str, threading.Lock] = {}
+_FEED_LOCKS_GUARD = threading.Lock()
+
+
+def _feed_lock(session: str) -> threading.Lock:
+    with _FEED_LOCKS_GUARD:
+        lk = _FEED_LOCKS.get(session)
+        if lk is None:
+            lk = _FEED_LOCKS[session] = threading.Lock()
+        return lk
+
+
 def feed_brief(session: str = None, brief: str = None,
+               ready_timeout: int = 70) -> bool:
+    """Hand the author its brief, serialized per session so two feeders never
+    interleave keystrokes into the same pane. Returns False immediately if a
+    feed is already in flight for this session."""
+    session = session or SESSION
+    lock = _feed_lock(session)
+    if not lock.acquire(blocking=False):
+        return False
+    try:
+        return _feed_brief_inner(session=session, brief=brief,
+                                 ready_timeout=ready_timeout)
+    finally:
+        lock.release()
+
+
+def _feed_brief_inner(session: str = None, brief: str = None,
                ready_timeout: int = 70) -> bool:
     """Reliably hand the author its brief. Returns True if the agent looks
     busy afterward. Safe to call again (re-feed) on an idle-but-alive author."""

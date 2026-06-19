@@ -109,20 +109,22 @@ def _emit(phase_key: str, severity: str, message: str) -> None:
     """Persist an Event + publish to SSE. Best-effort — drops on DB error."""
     try:
         db = SessionLocal()
-        ev = Event(
-            id=_event_id(),
-            type="agent_phase",
-            severity=severity,
-            actor="research_agent",
-            message=message,
-            run_id="",
-            idea_id="",
-            created_at=_iso(),
-        )
-        db.add(ev)
-        db.commit()
-        payload = ev.dict()
-        db.close()
+        try:
+            ev = Event(
+                id=_event_id(),
+                type="agent_phase",
+                severity=severity,
+                actor="research_agent",
+                message=message,
+                run_id="",
+                idea_id="",
+                created_at=_iso(),
+            )
+            db.add(ev)
+            db.commit()
+            payload = ev.dict()
+        finally:
+            db.close()
         bus.publish("events", "event", payload)
         bus.publish("events", "runs_changed", {})  # refresh activity feed
         print(f"[agent_watcher] emitted {phase_key}: {message}", flush=True)
@@ -253,7 +255,12 @@ def _check_auth_zombie(session: str) -> None:
         return
     if not text:
         return
-    if not any(m in text for m in _AUTH_ZOMBIE_MARKERS):
+    # Only treat the pane as a wedged auth-zombie when a marker is on the LAST
+    # few non-empty lines (the live prompt) — not anywhere in scrollback. The
+    # agent can legitimately print these strings mid-run, and matching them in
+    # history caused false-positive restarts that killed busy sessions.
+    _tail = "\n".join([ln for ln in text.splitlines() if ln.strip()][-3:])
+    if not any(m in _tail for m in _AUTH_ZOMBIE_MARKERS):
         return
     # Markers present. Don't restart if cooldown is active.
     if now - _last_restart.get(session, 0.0) < _RESTART_COOLDOWN_S:

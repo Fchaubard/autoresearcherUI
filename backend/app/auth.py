@@ -27,6 +27,7 @@ gate start enforcing.
 """
 from __future__ import annotations
 
+import hmac
 from typing import Iterable
 
 from fastapi import Request
@@ -37,6 +38,15 @@ from .models import Setting
 
 
 COOKIE_NAME = "arui_pc"
+
+
+def ct_eq(a: str, b: str) -> bool:
+    """Constant-time string compare (avoids timing oracles on the passcode)."""
+    try:
+        return hmac.compare_digest((a or "").encode("utf-8"),
+                                   (b or "").encode("utf-8"))
+    except Exception:                                  # noqa: BLE001
+        return False
 
 # Path prefixes that are ALWAYS public (no passcode required).
 _PUBLIC_PREFIXES: tuple[str, ...] = (
@@ -110,7 +120,7 @@ async def passcode_middleware(request: Request, call_next):
     if _is_public(path):
         return await call_next(request)
     supplied = _extract_passcode(request)
-    if supplied and supplied == saved:
+    if supplied and ct_eq(supplied, saved):
         response = await call_next(request)
         # If they came in via ?p= or header, set the cookie so subsequent
         # navigations don't need to repeat it.
@@ -135,7 +145,7 @@ def login(request: Request, supplied: str) -> tuple[bool, str]:
     saved = _saved_passcode()
     if not saved:
         return True, "no passcode set — gate is off"
-    if (supplied or "").strip() == saved:
+    if ct_eq((supplied or "").strip(), saved):
         return True, "ok"
     return False, "wrong passcode"
 

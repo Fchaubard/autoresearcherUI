@@ -7,6 +7,7 @@ import glob
 import json
 import math
 import os
+import hmac
 import random
 import re
 import shlex
@@ -2309,7 +2310,9 @@ def diag():
             ["tmux", "capture-pane", "-t", "agent", "-p", "-J", "-S", "-40"],
             capture_output=True, text=True, timeout=4)
         out["agent_tmux_alive"] = (r.returncode == 0)
-        out["agent_tmux_tail"] = (r.stdout or "")[-2400:]
+        # NOTE: deliberately do NOT return the pane scrollback here — /api/diag
+        # is public (pre-auth health check) and the agent pane can contain
+        # prompts, repo paths, or echoed tokens. Only the liveness bool ships.
     except Exception as e:                              # noqa: BLE001
         out["agent_tmux_error"] = str(e)
     # 5. per-session raw byte stream sizes — these are what the rail
@@ -2406,6 +2409,21 @@ async def post_onboarding(request: Request):
     from fastapi.responses import JSONResponse
     from . import auth as _auth
     cfg = await request.json()
+    if not isinstance(cfg, dict):
+        return JSONResponse({"detail": "bad payload"}, status_code=400)
+    # SECURITY: /api/onboarding is public so a fresh node can be configured
+    # before any passcode exists. But once a passcode IS set, this endpoint
+    # must not let an unauthenticated caller overwrite settings or the gate
+    # itself. Require the current passcode to re-onboard, and never let a save
+    # silently clear the passcode (which would re-open the whole dashboard).
+    _existing_pc = _auth._saved_passcode()
+    if _existing_pc:
+        if not _auth.ct_eq(_auth._extract_passcode(request), _existing_pc):
+            return JSONResponse(
+                {"detail": "passcode required to change settings"},
+                status_code=401)
+        if not str(cfg.get("passcode") or "").strip():
+            cfg["passcode"] = _existing_pc
     db = SessionLocal()
     row = db.query(Setting).filter(Setting.key == "onboarding").first()
     if row:
@@ -2605,11 +2623,44 @@ async def scope_skip_ep(request: Request):
 _FILE_MAX_READ = 2_000_000   # 2 MB cap — anything bigger, open it in a terminal
 
 
+# ── file-browser path confinement ────────────────────────────────────────────
+# The file browser/editor must never become an arbitrary-filesystem read/write
+# primitive (it is reachable over the public tunnel). Confine every path to the
+# repo / workspace / data roots, follow symlinks before checking, and refuse
+# secret material (.deploy, .git, ssh keys, *.env, *.pem) even inside a root.
+_FS_ALLOWED_ROOTS = tuple(
+    os.path.realpath(str(_r)) for _r in (ROOT, WORKSPACE_DIR, DATA_DIR))
+_FS_DENY_COMPONENTS = {".git", ".deploy", ".ssh", "secrets"}
+_FS_DENY_BASENAMES = {"keys.env", "github.env", ".env", "onboarding.env",
+                      "id_ed25519", "id_rsa"}
+_FS_DENY_SUFFIXES = (".pem", ".key")
+
+
+def _resolve_fs_path(path: str):
+    """Resolve a file-browser path and confine it to the allowlisted roots,
+    refusing secret files. Returns (ok: bool, resolved: str, error: str)."""
+    try:
+        rp = os.path.realpath(os.path.abspath(os.path.expanduser(path or "")))
+    except Exception:                                  # noqa: BLE001
+        return False, "", "bad path"
+    if not any(rp == root or rp.startswith(root + os.sep)
+               for root in _FS_ALLOWED_ROOTS):
+        return False, rp, "path is outside the allowed roots"
+    if set(rp.split(os.sep)) & _FS_DENY_COMPONENTS:
+        return False, rp, "path is not accessible"
+    base = os.path.basename(rp)
+    if base in _FS_DENY_BASENAMES or base.endswith(_FS_DENY_SUFFIXES):
+        return False, rp, "path is not accessible"
+    return True, rp, ""
+
+
 @router.get("/files/list")
 def files_list(path: str = str(ROOT)):
     """List a directory for the file browser. Dirs first, then name."""
+    ok, p, err = _resolve_fs_path(path or str(ROOT))
+    if not ok:
+        return {"ok": False, "error": err, "path": p}
     try:
-        p = os.path.abspath(os.path.expanduser(path or "/"))
         if not os.path.isdir(p):
             return {"ok": False, "error": "not a directory", "path": p}
         entries = []
@@ -2639,8 +2690,10 @@ def files_list(path: str = str(ROOT)):
 @router.get("/files/read")
 def files_read(path: str):
     """Read a text file for the editor (size + binary guarded)."""
+    ok, p, err = _resolve_fs_path(path)
+    if not ok:
+        return {"ok": False, "error": err, "path": p}
     try:
-        p = os.path.abspath(os.path.expanduser(path))
         if not os.path.isfile(p):
             return {"ok": False, "error": "not a file", "path": p}
         sz = os.path.getsize(p)
@@ -2672,8 +2725,10 @@ async def files_write(request: Request):
     content = body.get("content")
     if not path or content is None:
         return {"ok": False, "error": "path and content are required"}
+    ok, p, err = _resolve_fs_path(path)
+    if not ok:
+        return {"ok": False, "error": err, "path": p}
     try:
-        p = os.path.abspath(os.path.expanduser(path))
         if os.path.isdir(p):
             return {"ok": False, "error": "path is a directory", "path": p}
         d = os.path.dirname(p)
@@ -3099,24 +3154,32 @@ async def extra_nodes_check(request: Request):
     targets = body.get("targets") or []
     if isinstance(targets, str):
         targets = [t.strip() for t in targets.splitlines() if t.strip()]
+    # Only accept plain [user@]host[:port] targets. Reject anything that ssh
+    # could read as an OPTION (leading '-', e.g. -oProxyCommand=...) — that
+    # would be argument injection / SSRF with the node's SSH key.
+    _TARGET_RX = re.compile(r"^[A-Za-z0-9._\-]+(@[A-Za-z0-9._\-]+)?(:[0-9]{1,5})?$")
+    _key_path = os.path.expanduser("~/.ssh/id_ed25519")
     out = []
     for t in targets[:16]:
         host = t.strip()
         if not host:
             continue
+        if host.startswith("-") or not _TARGET_RX.match(host):
+            out.append({"target": host, "ok": False,
+                        "error": "invalid target (expected [user@]host[:port])"})
+            continue
         port = "22"
         user_host = host
-        if ":" in host and "@" in host.split(":")[-1] is False:  # user@h:p
-            try:
-                user_host, port = host.rsplit(":", 1)
-                int(port)
-            except Exception:
-                user_host, port = host, "22"
-        cmd = ["ssh", "-i", "/root/.ssh/id_ed25519", "-p", port,
+        # split a trailing :port only when the tail is purely numeric
+        if ":" in host:
+            cand_host, _, cand_port = host.rpartition(":")
+            if cand_host and cand_port.isdigit():
+                user_host, port = cand_host, cand_port
+        cmd = ["ssh", "-i", _key_path, "-p", port,
                "-o", "StrictHostKeyChecking=accept-new",
                "-o", "ConnectTimeout=8",
                "-o", "BatchMode=yes",
-               user_host,
+               "--", user_host,
                "nvidia-smi --query-gpu=name --format=csv,noheader || hostname"]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
@@ -4843,8 +4906,8 @@ def paper_share_view(token: str):
             Setting.key == _share_token_key()).first()
     finally:
         db.close()
-    if not row or not isinstance(row.value, dict) or \
-            row.value.get("token") != token:
+    if not row or not isinstance(row.value, dict) or not hmac.compare_digest(
+            str(row.value.get("token") or ""), str(token or "")):
         return {"ok": False, "detail": "invalid token"}
     # Build a redacted state payload.
     from . import paper as _paper
@@ -4881,8 +4944,8 @@ def paper_share_pdf(token: str):
             Setting.key == _share_token_key()).first()
     finally:
         db.close()
-    if not row or not isinstance(row.value, dict) or \
-            row.value.get("token") != token:
+    if not row or not isinstance(row.value, dict) or not hmac.compare_digest(
+            str(row.value.get("token") or ""), str(token or "")):
         return {"ok": False, "detail": "invalid token"}
     from . import paper_compile
     data = paper_compile.pdf_bytes()

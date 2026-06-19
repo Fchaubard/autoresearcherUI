@@ -10,6 +10,8 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import base64
+import shlex
 import re
 import subprocess
 import threading
@@ -336,16 +338,25 @@ def commit_paper_changes(folder: Path, message: str,
         if branch:
             origin = _run_git(root, "remote", "get-url", "origin")
             if origin.startswith("https://github.com/"):
-                authed = origin.replace(
-                    "https://github.com/",
-                    f"https://x-access-token:{tok}@github.com/")
+                # Authenticate via an http.extraHeader passed through the
+                # environment (GIT_CONFIG_*), NOT embedded in the remote URL.
+                # This keeps the token out of the URL, the process argv (ps),
+                # and git's own error output.
+                hdr = "Authorization: Basic " + base64.b64encode(
+                    f"x-access-token:{tok}".encode()).decode()
+                _env = dict(os.environ)
+                _env["GIT_CONFIG_COUNT"] = "1"
+                _env["GIT_CONFIG_KEY_0"] = "http.extraHeader"
+                _env["GIT_CONFIG_VALUE_0"] = hdr
                 out = subprocess.run(
-                    ["git", "-C", str(root), "push", authed,
+                    ["git", "-C", str(root), "push", origin,
                      f"HEAD:{branch}"], capture_output=True, text=True,
-                    timeout=90)
+                    timeout=90, env=_env)
                 if out.returncode != 0:
-                    print(f"[paper] push failed: {out.stderr[-300:]}",
-                          flush=True)
+                    err = (out.stderr or "")[-300:]
+                    if tok:
+                        err = err.replace(tok, "***")
+                    print(f"[paper] push failed: {err}", flush=True)
         return sha
     except Exception as e:                                  # noqa: BLE001
         print(f"[paper] commit/push failed: {e}", flush=True)
@@ -675,7 +686,7 @@ def _default_run_cmd_for_project(role: str, suffix: str, seed: int,
     # does for the research agent — without it the project's `import arui`
     # in train.py raises ModuleNotFoundError and the run crashes immediately.
     workspace = str(folder.parent)
-    return (f"cd {workspace} && "
+    return (f"cd {shlex.quote(workspace)} && "
             + paper_ingest_env_prefix(folder.parent.name) + " "
             + f"python train.py --mode {mode} "
             + f"--name pr_{suffix}_s{seed} --seed {seed}")

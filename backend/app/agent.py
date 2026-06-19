@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+import threading
 
 from . import repo
 
@@ -479,7 +480,20 @@ if [ "$sent_brief" -eq 0 ]; then
   tmux send-keys -t "$SESS" Enter >/dev/null 2>&1
 fi
 """
-            subprocess.Popen(["sh", "-c", script])
+            # Run the consent-automation script in a reaped daemon thread
+            # rather than a detached fire-and-forget Popen: the script polls
+            # for up to ~90s, and an unwaited Popen leaves a zombie `sh` that
+            # accumulates on every (re)start. subprocess.run inside the thread
+            # reaps the child; the timeout bounds it if tmux never settles.
+            def _run_consent():
+                try:
+                    subprocess.run(["sh", "-c", script], timeout=150,
+                                   stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL)
+                except Exception:                          # noqa: BLE001
+                    pass
+            threading.Thread(target=_run_consent, daemon=True,
+                             name="agent-consent").start()
         return self.session
 
     def alive(self) -> bool:

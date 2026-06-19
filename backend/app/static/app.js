@@ -33,8 +33,12 @@ window.addEventListener('unhandledrejection', e => _report(
 
 const el = (t, c, h) => { const n = document.createElement(t);
   if (c) n.className = c; if (h != null) n.innerHTML = h; return n; };
-const esc = (s) => String(s == null ? '' : s).replace(/[&<>]/g,
-  m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[m]));
+// esc — HTML-entity escaper safe for BOTH element text and quoted attribute
+// values (escapes quotes too, so untrusted agent/onboarding strings can't
+// break out of a `title="..."` / `value="..."` attribute and inject markup).
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
+  m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;',
+          '"': '&quot;', "'": '&#39;' }[m]));
 const fmt = (v, d = 4) => (v == null || isNaN(v)) ? '—' : (+v).toFixed(d);
 // _fmtCfgVal — render a config value for the drawer's "Config — what changed"
 // section. Long strings (>80 chars) or many-item comma lists (>3) get
@@ -5440,7 +5444,7 @@ function renderFiles(c) {
       }
     });
   }
-  loadFilesDir(FilesState.cwd || '/root/autoresearcherUI');
+  loadFilesDir(FilesState.cwd || '');
   // Re-attach any tabs that were open before this remount. Deferred a tick so
   // the freshly-built container is in the document — renderFiles may run before
   // viewPane swaps `c` into the DOM, and activateTab needs the editor host node.
@@ -5653,7 +5657,7 @@ function _updateSaveBar() {
   if (save) save.disabled = !FilesState.file || !FilesState.dirty;
 }
 async function newFileFlow() {
-  const dir = FilesState.cwd || '/root/autoresearcherUI';
+  const dir = FilesState.cwd || '';
   const name = await aruiPrompt('New file name (created in ' + dir + '):',
     { title: 'New file', okText: 'Create' });
   if (!name) return;

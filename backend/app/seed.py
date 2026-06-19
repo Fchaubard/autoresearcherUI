@@ -110,8 +110,8 @@ def seed_all() -> None:
         return
 
     db.add(Project(
-        id=PROJECT_ID, name="bs1learning",
-        repo_url="https://github.com/Fchaubard/bs1learning",
+        id=PROJECT_ID, name="example-project",
+        repo_url="https://github.com/your-org/your-research-repo",
         purpose="Uncover a new paradigm for meaningful learning from a single "
                 "example (effective batch size = 1) without catastrophic "
                 "forgetting - getting ML closer to how humans learn.",

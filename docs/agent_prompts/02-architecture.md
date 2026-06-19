@@ -190,15 +190,10 @@ autoresearcherui/
 ├── arui/                        # the pip-installable tracking SDK (doc 06)
 │   ├── __init__.py              # init() / log() / finish() / log_artifact()
 │   └── ...
-├── frontend/
-│   ├── src/
-│   │   ├── routes/              # Onboarding, Bootstrap, Experiments, Detail, ...
-│   │   ├── components/          # charts, tables, terminal, chat, markdown
-│   │   ├── lib/                 # api client, ws client, types
-│   │   └── main.tsx
-│   ├── index.html
-│   ├── vite.config.ts
-│   └── package.json
+├── backend/app/static/         # the SHIPPING frontend: a single vanilla-JS
+│   ├── app.js                  #   dashboard (no build step, no framework).
+│   ├── index.html              #   NOTE: the Vite/React `frontend/` tree below
+│   └── style.css               #   was an early design and is not what ships.
 ├── docs/
 │   └── agent_prompts/           # design docs + agent prompt templates
 │       ├── setup_prompt.md.j2       # Jinja template for the agent bootstrap prompt

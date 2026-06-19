@@ -221,6 +221,7 @@ class Orchestrator:
         # ensure the experiment repo can `import arui` even if it is not
         # pip-installed (a real cloned experiment repo, or the test fixture)
         env["PYTHONPATH"] = str(ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+        proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 sys.executable, "train.py", cwd=self.project_dir, env=env,
@@ -236,6 +237,14 @@ class Orchestrator:
             return headline, ok, text[-800:]
         except (asyncio.TimeoutError, OSError) as e:
             return None, False, f"launch error: {e}"
+        finally:
+            # On timeout OR task cancellation (e.g. /api/reset cancels the
+            # loop), kill the train.py subprocess instead of orphaning it.
+            if proc is not None and proc.returncode is None:
+                try:
+                    proc.kill()
+                except Exception:                          # noqa: BLE001
+                    pass
 
     # ── the loop ───────────────────────────────────────────────────────────
     async def run(self) -> None:
