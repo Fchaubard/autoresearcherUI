@@ -2456,24 +2456,29 @@ function createRailTerm(session) {
   //     (→ snap to bottom, no text selection/copy, and a flooded channel that
   //     made typing laggy). Stripping it gives back native select + copy.
   // (capture-pane seed text has none of these, so the filter is a no-op there.)
+  // The sequences to strip are pure ASCII, so we work on a "byte string" (one
+  // char per byte, latin1) only to locate + delete them, then convert straight
+  // BACK to a Uint8Array and hand xterm raw bytes — so multibyte UTF-8 (the box
+  // drawing chars ╭─╯ ● └) is preserved and xterm decodes it correctly.
   const _STRIP_RE = /\x1b\[\?(1049|1047|1046|47|1000|1001|1002|1003|1004|1005|1006|1015|1016)[hl]/g;
-  let _carry = '';
+  let _carry = '';            // trailing partial-escape bytes held across chunks
   const _filter = (bytes) => {
     let s = '';
-    for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i] & 0xff);
     s = _carry + s; _carry = '';
-    // Hold back a trailing PARTIAL escape so we never split a sequence across
-    // chunks (which would defeat the strip and leak a half-sequence to xterm).
     const esc = s.lastIndexOf('\x1b');
     if (esc !== -1 && /^\x1b\[?[0-9;?]*$/.test(s.slice(esc))) {
       _carry = s.slice(esc); s = s.slice(0, esc);
     }
-    return s.replace(_STRIP_RE, '');
+    s = s.replace(_STRIP_RE, '');
+    const out = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i) & 0xff;
+    return out;
   };
   const _writeOrHold = (bytes) => {
-    const txt = _filter(bytes);
-    if (!txt) return;
-    if (_atBottom()) t.write(txt); else _pending.push(txt);
+    const out = _filter(bytes);
+    if (!out.length) return;
+    if (_atBottom()) t.write(out); else _pending.push(out);
   };
   const tick = async () => {
     try {
