@@ -12,7 +12,7 @@ from .db import SessionLocal
 from .models import ChatMessage, Event, Gpu, Idea, JournalEntry, Project, Run
 
 GPU_COUNT = 4
-PROJECT_ID = "proj-bs1learning"
+PROJECT_ID = "proj-example"
 _rng = random.Random(7)
 
 
@@ -212,7 +212,7 @@ def seed_all() -> None:
 
     for d, title, body, age in [
         ("Day 1", "Setup & baseline",
-         "Created the bs1learning repo, wrote train.py for batch-size-1 "
+         "Created the example-project repo, wrote train.py for batch-size-1 "
          "continual learning on LFW, and seeded ideas.md. Baseline landed at "
          "0.412 at5_acc - the number to beat.", 6),
         ("Day 3", "Memory beats gradients",
