@@ -1817,9 +1817,14 @@ def agent_raw_stream(session: str = "agent", offset: int = 0, seed: int = 0):
     if seed and alive:
         snap = b""
         try:
+            # Seed from tmux's RENDERED scrollback (text grid + history), not the
+            # raw byte log. tmux has already resolved the TUI's cursor-addressing
+            # into clean lines, so xterm gets scrollable text — and because the
+            # session runs with alternate-screen off, this includes real history
+            # (-S -3000) the user can scroll up through.
             cp = subprocess.run(
                 ["tmux", "capture-pane", "-t", session, "-e", "-p",
-                 "-S", "-400"],
+                 "-S", "-3000"],
                 capture_output=True, timeout=5)
             if cp.returncode == 0:
                 snap = (cp.stdout or b"").replace(b"\n", b"\r\n")

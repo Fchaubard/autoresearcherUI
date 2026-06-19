@@ -2447,8 +2447,33 @@ function createRailTerm(session) {
     for (const b of q) { try { t.write(b); } catch (e) {} }
   };
   try { t.onScroll(() => { if (_atBottom()) _flushPending(); }); } catch (e) {}
+  // STRIP the control sequences that make the LIVE Claude TUI hostile to a
+  // browser terminal:
+  //   - alt-screen enter/leave (?1049/?1047/?47): keeps xterm in the NORMAL
+  //     buffer so the seeded scrollback stays scrollable (no snap-to-one-screen).
+  //   - mouse tracking (?1000/?1002/?1003/?1006/?1015/?1016): without this,
+  //     ?1003 "any-motion" made xterm fire a keystroke POST on every mouse MOVE
+  //     (→ snap to bottom, no text selection/copy, and a flooded channel that
+  //     made typing laggy). Stripping it gives back native select + copy.
+  // (capture-pane seed text has none of these, so the filter is a no-op there.)
+  const _STRIP_RE = /\x1b\[\?(1049|1047|1046|47|1000|1001|1002|1003|1004|1005|1006|1015|1016)[hl]/g;
+  let _carry = '';
+  const _filter = (bytes) => {
+    let s = '';
+    for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    s = _carry + s; _carry = '';
+    // Hold back a trailing PARTIAL escape so we never split a sequence across
+    // chunks (which would defeat the strip and leak a half-sequence to xterm).
+    const esc = s.lastIndexOf('\x1b');
+    if (esc !== -1 && /^\x1b\[?[0-9;?]*$/.test(s.slice(esc))) {
+      _carry = s.slice(esc); s = s.slice(0, esc);
+    }
+    return s.replace(_STRIP_RE, '');
+  };
   const _writeOrHold = (bytes) => {
-    if (_atBottom()) t.write(bytes); else _pending.push(bytes);
+    const txt = _filter(bytes);
+    if (!txt) return;
+    if (_atBottom()) t.write(txt); else _pending.push(txt);
   };
   const tick = async () => {
     try {
@@ -2494,7 +2519,7 @@ function createRailTerm(session) {
     // only net-new bytes are fetched (no slow "buffer in from the top").
     const c = _PANE_CACHE[session];
     if (c && c.bytes && c.bytes.length) {
-      try { t.write(c.bytes); } catch (e) {}
+      try { t.write(_filter(c.bytes)); } catch (e) {}   // strip mouse/alt-screen
       _offset = c.offset || _offset;
       tick();
       return;
@@ -2509,7 +2534,7 @@ function createRailTerm(session) {
       if (d && d.seeded) {
         try { t.reset(); } catch (e) {}
         const bytes = b64ToBytes(d.chunk);
-        if (bytes.length) { t.write(bytes); _cacheAppend(bytes); }
+        if (bytes.length) { t.write(_filter(bytes)); _cacheAppend(bytes); }
         _offset = d.offset || 0;
       }
     } catch (e) { /* no seed → tick() replays from 0 as a fallback */ }
