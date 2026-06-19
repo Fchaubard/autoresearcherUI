@@ -693,14 +693,13 @@ def start(proposal_id: str = "") -> dict:
     if cmd_override:
         inner = cmd_override
     else:
-        # --ax-screen-reader: render flat INLINE text (no fullscreen/alt-screen
-        # TUI). claude 2.1.x's default TUI repaints one screen in place, so the
-        # tmux pane has NO scrollback — you can't scroll back through the
-        # conversation, and the rail terminal feels "stuck". The screen-reader
-        # renderer streams plain newline-delimited text instead, so the pane
-        # accumulates real scrollback (scroll to the first message + select +
-        # copy) while staying fully interactive (you can still type into it).
-        inner = "claude --dangerously-skip-permissions --ax-screen-reader"
+        # DEFAULT claude — its normal pretty TUI (boxes, ● bullets, tree lines),
+        # exactly like the research agent. We get scrollback NOT by changing how
+        # claude renders, but by telling tmux to IGNORE the alternate screen (see
+        # `alternate-screen off` below): the full-screen TUI then paints into the
+        # NORMAL buffer, so the pane keeps real scrollback (scroll to the first
+        # message + select + copy) while looking exactly like Claude Code should.
+        inner = "claude --dangerously-skip-permissions"
         # Make sure Claude uses the API key (set in env) instead of
         # falling into its OAuth flow. See agent.RealAgent._ensure_claude_settings
         # for the full explanation.
@@ -715,12 +714,18 @@ def start(proposal_id: str = "") -> dict:
         # Kill any stale session first (cleanup).
         subprocess.run(["tmux", "kill-session", "-t", SESSION],
                        capture_output=True, timeout=5)
-        # Initial size: frontend xterm.js will POST its real dimensions
-        # to /api/agent/resize. 120x40 is a safe default that won't look
-        # garbled in any reasonable rail width before the resize.
+        # Create the session as a bare shell, turn OFF tmux's alternate-screen
+        # for this window (so Claude Code's TUI renders into the scrollback-
+        # bearing normal buffer), THEN launch Claude. Order matters: the option
+        # must be set before claude emits its alt-screen-enter sequence.
         subprocess.run(["tmux", "new-session", "-d", "-s", SESSION,
-                        "-x", "120", "-y", "40", full],
+                        "-x", "120", "-y", "40"],
                        capture_output=True, timeout=10)
+        subprocess.run(["tmux", "set-window-option", "-t", SESSION,
+                        "alternate-screen", "off"],
+                       capture_output=True, timeout=5)
+        subprocess.run(["tmux", "send-keys", "-t", SESSION, full, "Enter"],
+                       capture_output=True, timeout=5)
         # Mirror the pane to BOTH the per-session raw-byte file (rail
         # xterm.js streaming source) AND author.log (per-workspace
         # persistent log). See backend/app/pane_stream.py.

@@ -317,24 +317,24 @@ class RealAgent:
             pf = os.path.join(self.workspace, "_setup_prompt.txt")
             with open(pf, "w") as f:
                 f.write(self.setup_prompt)
-            # --ax-screen-reader: flat inline rendering (no fullscreen TUI) so
-            # the pane keeps real scrollback — scroll back to the first message,
-            # select + copy — while staying interactive. See author_agent.start
-            # for the full rationale.
-            inner = "claude --dangerously-skip-permissions --ax-screen-reader"
+            # DEFAULT claude — its normal pretty TUI. Scrollback comes from
+            # turning OFF tmux's alternate-screen (below) so the full-screen TUI
+            # paints into the scrollback-bearing normal buffer. See
+            # author_agent.start for the full rationale.
+            inner = "claude --dangerously-skip-permissions"
 
         full = f"cd {shlex.quote(self.workspace)} && {exports} {inner}"
         subprocess.run(["tmux", "kill-session", "-t", self.session],
                        capture_output=True)
-        # Initial tmux pane size. The frontend's xterm.js will POST its
-        # real dimensions to /api/agent/resize on connect, which calls
-        # `tmux resize-window` to match. We start at 120x40 — wider
-        # than most rail layouts but narrow enough that initial paint
-        # before the resize-handshake completes is still legible. (The
-        # old 210x52 default made first-paint look garbled in any rail
-        # narrower than 210 cols.)
+        # Create a bare shell, disable tmux's alternate-screen for this window
+        # (so Claude Code's TUI renders into the normal scrollback buffer), then
+        # launch Claude. The option must be set before claude enters alt-screen.
         subprocess.run(["tmux", "new-session", "-d", "-s", self.session,
-                        "-x", "120", "-y", "40", full], check=True)
+                        "-x", "120", "-y", "40"], check=True)
+        subprocess.run(["tmux", "set-window-option", "-t", self.session,
+                        "alternate-screen", "off"], capture_output=True)
+        subprocess.run(["tmux", "send-keys", "-t", self.session, full, "Enter"],
+                       capture_output=True)
         # Mirror the live pane into BOTH a per-session raw-byte file
         # (`pane_stream.term_file(session)`) — what the rail xterm.js
         # streams from for true ANSI rendering — AND `agent.log` for a
