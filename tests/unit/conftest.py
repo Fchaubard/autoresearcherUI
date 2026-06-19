@@ -79,6 +79,14 @@ def arui_env(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("ARUI_DATA_DIR", str(data_dir))
+    # Don't let the production background daemon loops (paper-runner, author
+    # feed, telemetry, notify scheduler) spawn during unit tests. They are
+    # `while True` daemons that outlive the test, then keep hitting whichever DB
+    # is current — racing the test under inspection (e.g. a paper-runner tick
+    # calls lifecycle.set_phase, which resets the remediation counter the
+    # supervisor test just incremented → order-dependent failures). Tests drive
+    # the tick/worker functions directly, so they never need the loops.
+    monkeypatch.setenv("ARUI_DISABLE_BG", "1")
     # Keep the project workspace under the tmp data dir for test isolation.
     # Pointing it at <data>/workspace makes WORKSPACE_DIR/<name> resolve to
     # the historical data/workspace/<name> layout the tests construct, so the
@@ -96,6 +104,34 @@ def arui_env(tmp_path, monkeypatch):
     for k in ("GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
         monkeypatch.delenv(k, raising=False)
     yield data_dir
+    # Drain any short-lived worker threads a test spawned (council reviewers,
+    # author feeders, etc.) so they cannot outlive the test, re-resolve
+    # SessionLocal to the NEXT test's DB, and race it (writing leases / phases
+    # that flip assertions). The long-running daemon LOOPS are disabled via
+    # ARUI_DISABLE_BG above, so the only live threads here are workers that
+    # finish quickly; we give them a short bounded join.
+    import threading
+    import time
+    deadline = time.time() + 1.0
+    for thr in list(threading.enumerate()):
+        if thr is threading.main_thread() or not thr.is_alive():
+            continue
+        try:
+            thr.join(timeout=max(0.0, deadline - time.time()))
+        except Exception:                              # noqa: BLE001
+            pass
+    # A test may spawn a REAL tmux session (author_agent.start / agent start,
+    # the paper handoff). tmux sessions persist on the server and leak into the
+    # next test: a leftover "author" session makes supervisor.tick() believe
+    # paper mode has a live author and call set_phase(PAPER), which resets the
+    # remediation counter a later test just set. Kill the arui-owned sessions.
+    import subprocess
+    for _sess in ("author", "agent"):
+        try:
+            subprocess.run(["tmux", "kill-session", "-t", _sess],
+                           capture_output=True, timeout=5)
+        except Exception:                              # noqa: BLE001
+            pass
     _purge_backend_modules()
 
 

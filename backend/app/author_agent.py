@@ -572,6 +572,8 @@ def refeed_if_idle() -> bool:
         return False
     if _looks_busy(SESSION):
         return False
+    if os.environ.get("ARUI_DISABLE_BG"):
+        return False
     threading.Thread(target=feed_brief, daemon=True,
                      name="author-refeed").start()
     return True
@@ -741,7 +743,7 @@ def start(proposal_id: str = "") -> dict:
         # polling feeder (waits for readiness, dismisses consent only if it
         # shows, verifies the brief was accepted, retries if it sits queued).
         # Run in a background thread so start() returns immediately.
-        if not cmd_override:
+        if not cmd_override and not os.environ.get("ARUI_DISABLE_BG"):
             threading.Thread(target=feed_brief, daemon=True,
                              name="author-feed").start()
     except Exception as e:

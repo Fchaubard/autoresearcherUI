@@ -1901,6 +1901,9 @@ def _dt_now_iso() -> str:
 
 def start_scheduler() -> None:
     """Start the once-per-process background digest scheduler."""
+    import os
+    if os.environ.get("ARUI_DISABLE_BG"):        # unit tests: no leaked daemons
+        return
     global _started
     with _lock:
         if _started:

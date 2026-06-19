@@ -46,6 +46,9 @@ def _settings() -> dict:
 
 def start() -> None:
     """Spawn the once-per-process scheduler thread."""
+    import os
+    if os.environ.get("ARUI_DISABLE_BG"):        # unit tests: no leaked daemons
+        return
     global _STARTED
     with _LOCK:
         if _STARTED:

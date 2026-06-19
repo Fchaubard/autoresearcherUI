@@ -3335,12 +3335,14 @@ def review_completion_async(evidence_run_ids: list[str],
             severity="info", actor="council")
     except Exception:                                   # noqa: BLE001
         pass
-    threading.Thread(target=_completion_review_worker,
-                     args=(list(evidence_run_ids or []),
-                           summary or "",
-                           answer_to_purpose or "",
-                           recommendation or ""),
-                     daemon=True, name="council-completion").start()
+    import os
+    if not os.environ.get("ARUI_DISABLE_BG"):       # unit tests: no leaked daemons
+        threading.Thread(target=_completion_review_worker,
+                         args=(list(evidence_run_ids or []),
+                               summary or "",
+                               answer_to_purpose or "",
+                               recommendation or ""),
+                         daemon=True, name="council-completion").start()
     return conclusion_state()
 
 

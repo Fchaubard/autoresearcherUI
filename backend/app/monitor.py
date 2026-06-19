@@ -74,6 +74,9 @@ def _safe_name(name: str) -> bool:
 
 def start() -> None:
     """Start the once-per-process monitor thread."""
+    import os
+    if os.environ.get("ARUI_DISABLE_BG"):        # unit tests: no leaked daemons
+        return
     global _STARTED
     with _LOCK:
         if _STARTED:
