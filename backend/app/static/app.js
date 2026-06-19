@@ -2537,124 +2537,104 @@ function createRailTerm(session) {
 }
 
 /* ── Author Agent rail (paper mode) ─────────────────────────────────────── */
-function renderAuthorLive(c) {
-  c.innerHTML =
-    '<div class="author-rail-hd">' +
-      '<span>📝 Author Agent</span>' +
-      '<span class="author-rail-status" id="author-status">checking…</span>' +
-      '<button class="btn xs" id="author-restart" title="Kill the author tmux and spawn a fresh one">↻ restart</button>' +
-    '</div>' +
-    '<div class="rail-agent-desc collapsed" data-rail-desc>' +
-      '<button class="rail-agent-desc-toggle" data-rail-desc-toggle>' +
-        'what is this agent?</button>' +
-      '<div class="rail-agent-desc-body">' +
-        '<b>What it does:</b> autonomous Claude Code loop that owns the paper ' +
-        'end-to-end — plans cross-dataset ablations, queues runs (via ' +
-        '<code>/paper/runs/queue</code>), kills divergers, integrates each ' +
-        'finished run into <code>main.tex</code> automatically, maintains ' +
-        '<code>claims.md</code> + <code>refs.bib</code>, recompiles the PDF. ' +
-        'Files <i>strategic</i> decisions only — citations, kill_claim, ' +
-        'approve_text, approve_figure. Ablation runs do NOT need your ' +
-        'approval. The <b>PI agent</b> watches it every hour and nudges if it ' +
-        'drifts. Click in the terminal below and type — keystrokes go ' +
-        'straight to the Claude session.' +
-      '</div>' +
-    '</div>';
-  const termHost = createRailTerm('author');
-  termHost.container.id = 'authorterm-host';
-  c.appendChild(termHost.container);
-  if (_termHost) { try { _termHost.dispose(); } catch (e) {} }
-  _termHost = termHost;
-  const stat = document.getElementById('author-status');
-  document.getElementById('author-restart').onclick = async () => {
-    const ok = await aruiConfirm('Restart the Author Agent tmux? Anything mid-response will be lost.',
-      { title: 'Restart Author Agent' });
-    if (!ok) return;
-    stat.textContent = 'restarting…';
-    await post('/paper/author/restart', {});
-    stat.textContent = 'restarted';
-  };
-  // Start streaming raw pane bytes (ANSI included) — this is what makes
-  // the terminal feel real. The /paper/author/terminal full-text poll is
-  // gone; instead we just hit /api/agent/raw incrementally inside
-  // termHost.startStream().
-  termHost.startStream();
-  // Separate light status poll just for the "● running / ○ not running"
-  // indicator. 4s is plenty — this isn't on the critical path of typing.
-  const statusTick = async () => {
-    try {
-      const d = await api('/agent/raw?session=author&offset=999999999');
-      const running = !!d.alive;
-      stat.textContent = running ? '● running' : '○ not running';
-      stat.style.color = running ? 'var(--ok)' : 'var(--muted)';
-    } catch (e) { /* keep last */ }
-  };
-  statusTick();
-  _termTimer = setInterval(statusTick, 4000);
-}
+/* ── ONE shared agent-rail renderer ────────────────────────────────────────
+   The Research Agent (dashboard) and the Author Agent (write-the-paper) are now
+   rendered by the SAME function with the SAME terminal, status poll, restart
+   flow, and behavior — only the label / description / restart endpoint differ
+   (they are genuinely different tmux sessions). There is exactly ONE code path,
+   so the two panels can never drift apart again. renderAuthorLive / renderLive
+   are thin wrappers kept only so paintRail's host-id checks still work.        */
+const _AGENT_RAIL = {
+  agent: {
+    session: 'agent', icon: '🔬', name: 'Research Agent',
+    statusId: 'agent-status', restartId: 'agent-restart', hostId: 'term-host',
+    restartPath: '/agent/restart', restartTitle: 'Restart Research Agent',
+    restartConfirm:
+      'Restart the Research Agent tmux? Anything mid-response will be lost. ' +
+      'Use this if the session got stuck on the Claude Code "Bypass ' +
+      'Permissions" consent screen.',
+    pausesInPaperMode: true,
+    desc:
+      '<b>What it does:</b> autonomous Claude Code loop that reads ' +
+      '<code>ideas.md</code>, decides what to try next, launches training ' +
+      'runs, kills divergers, and writes <code>lessons.md</code>. The ' +
+      '<b>PI agent</b> watches it every hour and types short nudges into ' +
+      'this tmux when GPUs go idle, runs diverge, or it ignores the ' +
+      'council. Click the terminal and type — keystrokes go straight to ' +
+      'the Claude session. <b>Job: discovery</b>; pauses automatically ' +
+      'when you flip to paper mode.',
+  },
+  author: {
+    session: 'author', icon: '📝', name: 'Author Agent',
+    statusId: 'author-status', restartId: 'author-restart',
+    hostId: 'authorterm-host',
+    restartPath: '/paper/author/restart', restartTitle: 'Restart Author Agent',
+    restartConfirm:
+      'Restart the Author Agent tmux? Anything mid-response will be lost.',
+    pausesInPaperMode: false,
+    desc:
+      '<b>What it does:</b> autonomous Claude Code loop that owns the paper ' +
+      'end-to-end — plans cross-dataset ablations, queues runs (via ' +
+      '<code>/paper/runs/queue</code>), kills divergers, integrates each ' +
+      'finished run into <code>main.tex</code> automatically, maintains ' +
+      '<code>claims.md</code> + <code>refs.bib</code>, recompiles the PDF. ' +
+      'Files <i>strategic</i> decisions only — citations, kill_claim, ' +
+      'approve_text, approve_figure. Ablation runs do NOT need your ' +
+      'approval. The <b>PI agent</b> watches it every hour and nudges if it ' +
+      'drifts. Click in the terminal below and type — keystrokes go ' +
+      'straight to the Claude session.',
+  },
+};
 
-function renderLive(c) {
+function renderAgentRail(c, which) {
+  const cfg = _AGENT_RAIL[which];
   const isPaperMode = (S.mode && S.mode.mode === 'paper');
-  const pausedBanner = isPaperMode ? (
+  const pausedBanner = (cfg.pausesInPaperMode && isPaperMode) ? (
     '<div class="rail-paused-banner">' +
-      '⏸ <b>Research agent is paused</b> because you\'re in paper mode. ' +
+      '⏸ <b>' + cfg.name + ' is paused</b> because you\'re in paper mode. ' +
       'Showing the last tmux scrollback below for reference. ' +
       'Flip to Research mode (toggle on Write-the-paper page) to resume.' +
     '</div>'
   ) : '';
   c.innerHTML =
     '<div class="author-rail-hd">' +
-      '<span>🔬 Research Agent</span>' +
-      '<span class="author-rail-status" id="agent-status">checking…</span>' +
-      '<button class="btn xs" id="agent-restart" ' +
-        'title="Kill the research tmux and spawn a fresh one — fixes a ' +
-        'session stuck on the Claude Code consent prompt">↻ restart</button>' +
+      '<span>' + cfg.icon + ' ' + cfg.name + '</span>' +
+      '<span class="author-rail-status" id="' + cfg.statusId + '">checking…</span>' +
+      '<button class="btn xs" id="' + cfg.restartId + '" ' +
+        'title="Kill this agent\'s tmux and spawn a fresh one">↻ restart</button>' +
     '</div>' +
     '<div class="rail-agent-desc collapsed" data-rail-desc>' +
       '<button class="rail-agent-desc-toggle" data-rail-desc-toggle>' +
         'what is this agent?</button>' +
-      '<div class="rail-agent-desc-body">' +
-        '<b>What it does:</b> autonomous Claude Code loop that reads ' +
-        '<code>ideas.md</code>, decides what to try next, launches training ' +
-        'runs, kills divergers, and writes <code>lessons.md</code>. The ' +
-        '<b>PI agent</b> watches it every hour and types short nudges into ' +
-        'this tmux when GPUs go idle, runs diverge, or it ignores the ' +
-        'council. Click the terminal and type — keystrokes go straight to ' +
-        'the Claude session. <b>Job: discovery</b>; pauses automatically ' +
-        'when you flip to paper mode.' +
-      '</div>' +
+      '<div class="rail-agent-desc-body">' + cfg.desc + '</div>' +
     '</div>' +
     pausedBanner;
-  const termHost = createRailTerm('agent');
-  termHost.container.id = 'term-host';
+  const termHost = createRailTerm(cfg.session);
+  termHost.container.id = cfg.hostId;
   c.appendChild(termHost.container);
   if (_termHost) { try { _termHost.dispose(); } catch (e) {} }
   _termHost = termHost;
-  const stat = document.getElementById('agent-status');
-  document.getElementById('agent-restart').onclick = async () => {
-    const ok = await aruiConfirm(
-      'Restart the Research Agent tmux? Anything mid-response will be lost. ' +
-      'Use this if the session got stuck on the Claude Code "Bypass ' +
-      'Permissions" consent screen.',
-      { title: 'Restart Research Agent' });
+  const stat = document.getElementById(cfg.statusId);
+  document.getElementById(cfg.restartId).onclick = async () => {
+    const ok = await aruiConfirm(cfg.restartConfirm, { title: cfg.restartTitle });
     if (!ok) return;
     stat.textContent = 'restarting…';
-    const r = await post('/agent/restart', {});
-    stat.textContent = (r && r.ok) ? 'restarted' : 'restart failed';
-    if (r && !r.ok) {
+    const r = await post(cfg.restartPath, {});
+    const failed = r && r.ok === false;
+    stat.textContent = failed ? 'restart failed' : 'restarted';
+    if (failed) {
       aruiAlert(r.error || 'unknown error',
         { title: 'Could not restart agent' });
     }
   };
-  // Start streaming raw pane bytes — ANSI escapes included. xterm.js
-  // renders them natively, so colors / spinners / cursor moves all
-  // match what `tmux attach -t agent` would show.
+  // Stream raw pane bytes (ANSI included) — xterm renders colors / spinners /
+  // cursor moves natively, matching `tmux attach`.
   termHost.startStream();
-  // Separate light status poll just for the "● running / ○ not running"
-  // indicator. 4s is plenty.
+  // Light status poll for the "● running / ○ not running" indicator (4s).
   const statusTick = async () => {
     try {
-      const d = await api('/agent/raw?session=agent&offset=999999999');
+      const d = await api('/agent/raw?session=' + encodeURIComponent(cfg.session)
+        + '&offset=999999999');
       const running = !!d.alive;
       if (stat) {
         stat.textContent = running ? '● running' : '○ not running';
@@ -2665,6 +2645,9 @@ function renderLive(c) {
   statusTick();
   _termTimer = setInterval(statusTick, 4000);
 }
+
+function renderAuthorLive(c) { renderAgentRail(c, 'author'); }
+function renderLive(c) { renderAgentRail(c, 'agent'); }
 
 function renderSessions(c) {
   c.innerHTML =
