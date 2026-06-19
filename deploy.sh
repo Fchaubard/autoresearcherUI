@@ -13,8 +13,12 @@
 #     ARUI_NODE=root@1.2.3.4 ARUI_SSH_PORT=22 ARUI_SSH_KEY=~/.ssh/id_rsa bash deploy.sh
 set -euo pipefail
 
-NODE="${ARUI_NODE:-root@194.68.245.190}"
-PORT="${ARUI_SSH_PORT:-22149}"
+if [ -z "${ARUI_NODE:-}" ]; then
+  echo "ARUI_NODE is required, e.g. ARUI_NODE=root@1.2.3.4 ARUI_SSH_PORT=22 bash deploy.sh" >&2
+  exit 1
+fi
+NODE="${ARUI_NODE}"
+PORT="${ARUI_SSH_PORT:-22}"
 KEY="${ARUI_SSH_KEY:-$HOME/.ssh/id_ed25519}"
 REMOTE="/root/autoresearcherui"
 HERE="$(cd "$(dirname "$0")" && pwd)"

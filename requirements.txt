@@ -1,7 +1,12 @@
-fastapi
-uvicorn[standard]
-sqlalchemy
-duckdb
-python-multipart
-psutil
-matplotlib
+# Runtime dependencies. Source of truth is pyproject.toml; `pip install -e .`
+# is the recommended install. This file mirrors the runtime deps for tooling
+# that expects a requirements.txt.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+sqlalchemy>=2.0
+duckdb>=0.10
+jinja2>=3.1
+python-multipart>=0.0.9
+psutil>=5.9
+matplotlib>=3.7
+httpx>=0.27

@@ -861,19 +861,3 @@ def days_till_deadline() -> float | None:
     # no conference deadline concept. Always None so no "N days till deadline"
     # countdown / progress bar / email ever renders.
     return None
-    db = SessionLocal()                                # noqa: F811  (dead code kept for ref)
-    try:
-        meta = _meta(db)
-        if not meta or not meta.deadline_iso:
-            return None
-        try:
-            t = dt.datetime.fromisoformat(meta.deadline_iso.replace(
-                "Z", "+00:00"))
-        except Exception:
-            return None
-        if t.tzinfo is None:
-            t = t.replace(tzinfo=dt.timezone.utc)
-        delta = (t - dt.datetime.now(dt.timezone.utc)).total_seconds()
-        return round(delta / 86400.0, 2)
-    finally:
-        db.close()

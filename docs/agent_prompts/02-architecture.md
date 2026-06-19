@@ -199,9 +199,10 @@ autoresearcherui/
 │   ├── index.html
 │   ├── vite.config.ts
 │   └── package.json
-├── prompts/
-│   ├── setup_prompt.md.j2       # Jinja template for the agent bootstrap prompt
-│   └── program_template.md.j2   # template the agent adapts into program.md
+├── docs/
+│   └── agent_prompts/           # design docs + agent prompt templates
+│       ├── setup_prompt.md.j2       # Jinja template for the agent bootstrap prompt
+│       └── program_template.md.j2   # template the agent adapts into program.md
 └── data/                        # created at runtime (gitignored)
     ├── autoresearch.db          # SQLite
     ├── metrics/<run_id>.parquet # per-run metric streams

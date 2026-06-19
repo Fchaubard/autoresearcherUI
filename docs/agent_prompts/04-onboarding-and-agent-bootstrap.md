@@ -104,10 +104,10 @@ large textarea and a **Parse & fill** button.
 Canonical bulk-paste format:
 
 ```
-email: fchaubard@gmail.com
+email: you@example.com
 github_token: ghp_xxx
 github_username: Fchaubard
-github_email: fchaubard@gmail.com
+github_email: you@example.com
 repo_name: bs1learning
 claude_token: sk-ant-xxx
 gemini_token: xxx
@@ -118,7 +118,7 @@ metric_direction: maximize
 alert_cadence: 4h
 smtp_host: smtp.gmail.com
 smtp_port: 587
-smtp_user: fchaubard@gmail.com
+smtp_user: you@example.com
 smtp_pass: xxxx xxxx xxxx xxxx
 dashboard_passcode:
 purpose: |
@@ -179,7 +179,7 @@ Claude Code: `claude` plus `--dangerously-skip-permissions` if the checkbox was
 set. The session is named `agent` and registered in the `tmux_session` table.
 
 **Step 3 — Feed the setup prompt.**
-The backend renders the **setup prompt** (§4.7) from `prompts/setup_prompt.md.j2`
+The backend renders the **setup prompt** (§4.7) from `setup_prompt.md.j2`
 with the onboarding values, and sends it into the agent's tmux pane.
 
 **Step 4 — Watch the agent bootstrap.**
@@ -215,7 +215,7 @@ the `events` WebSocket. A failed step shows the error, the relevant log, and a
 
 The setup prompt is the programmatic equivalent of the giant metaprompts in the
 project brief (the "batch size 1 learning" and "ARC PRIZE V3" examples). It is a
-Jinja template, `prompts/setup_prompt.md.j2`, rendered with onboarding values.
+Jinja template, `setup_prompt.md.j2`, rendered with onboarding values.
 
 Its structure:
 

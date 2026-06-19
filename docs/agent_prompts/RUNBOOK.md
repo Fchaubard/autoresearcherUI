@@ -16,20 +16,20 @@ The simplest path — push to GitHub from your Mac, then clone on the pod:
 
 ```bash
 # on your Mac, in the repo
-cd ~/Documents/Claude/Projects/AutoresearchUI
+cd /path/to/autoresearcherui
 git remote add origin https://github.com/Fchaubard/autoresearcherui.git
 git push -u origin main
 ```
 
 ```bash
 # on the pod
-ssh root@194.68.245.190 -p 22149 -i ~/.ssh/id_ed25519
+ssh root@<your-node-ip> -p <ssh-port> -i ~/.ssh/id_ed25519
 git clone https://github.com/Fchaubard/autoresearcherui.git
 cd autoresearcherui
 ```
 
 (Or, since the direct-TCP connection supports SCP:
-`scp -P 22149 -i ~/.ssh/id_ed25519 -r ~/Documents/Claude/Projects/AutoresearchUI root@194.68.245.190:~/autoresearcherui`)
+`scp -P <ssh-port> -i ~/.ssh/id_ed25519 -r /path/to/autoresearcherui root@<your-node-ip>:~/autoresearcherui`)
 
 ---
 
@@ -93,7 +93,7 @@ orchestrator + research loop, the GPU-slot scheduler, the e2e gate, and the
 **The remaining milestone (M3 real-mode):** `backend/app/agent.py :: RealAgent`
 is a documented stub. To run a *real* research project on the 10×A40s it needs:
 its `bootstrap()` to launch `claude --dangerously-skip-permissions` in a tmux
-session and feed it `prompts/setup_prompt.md.j2` (creating the GitHub repo and
+session and feed it `setup_prompt.md.j2` (creating the GitHub repo and
 writing `program.md`/`train.py`/`ideas.md`), and `implement()` to have the agent
 edit `train.py` per idea. The orchestrator, scheduler, tracking, and UI it plugs
 into are all done and tested — `RealAgent` is the one seam left.

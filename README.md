@@ -32,6 +32,14 @@ earth. You can specify a passcode as you need to lock down the node.
 Re-running `setup.sh` is safe; if `~/.claude/` already has credentials
 the OAuth step is skipped. Re-runs restart everything else.
 
+> **Important — set up email so you never lose the dashboard URL.** The
+> cloudflared quick-tunnel URL is **not stable**: it can rotate whenever the
+> tunnel reconnects or the backend restarts. When it changes, autoresearcherUI
+> **emails you the new URL automatically** — but only if email is configured.
+> Install your [Gmail app password](#getting-a-gmail-app-password) (or a Resend
+> key) during onboarding so a rotated URL is always one email away. Without it,
+> a rotation can leave you locked out until you SSH in to read the new URL.
+
 ## What you get
 
 It's five tools collapsed into one self-hosted process. Bring your own GPU box;
@@ -368,6 +376,10 @@ view.
   read-only co-author share link.
 - Delivery auto-detects: Resend if a key is present, otherwise SMTP (Gmail
   app-password works out of the box).
+- **Tunnel URL rotation** — if the cloudflared URL changes (tunnel reconnect or
+  backend restart), you get an email with the new link. This is the main reason
+  to configure email before you walk away from the node: it is how you get back
+  in after a rotation.
 
 ### Getting a Gmail app password
 

@@ -1,7 +1,7 @@
 [project]
 name = "autoresearcherui"
 version = "0.1.0"
-description = "Autoresearcher + wandb + datadog + overleaf + claude code. All local, all free, no API keys."
+description = "Autoresearcher + wandb + datadog + overleaf + claude code. Runs on your own GPU node; bring your own model API keys."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

@@ -165,7 +165,7 @@ class Setting(Base):
 
 # ════════════════════════════════════════════════════════════════════════
 # Paper Mode — additive tables (doc 13). Research mode never touches these.
-# Phase A1 of the Paper Mode rollout per docs/13-paper-mode-spec-v3.md.
+# Phase A1 of the Paper Mode rollout per docs/agent_prompts/13-paper-mode-spec-v3.md.
 # ════════════════════════════════════════════════════════════════════════
 
 

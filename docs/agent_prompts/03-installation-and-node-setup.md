@@ -151,12 +151,12 @@ ARUI_PASSCODE_HASH=<bcrypt hash>      # empty hash => no passcode (open dashboar
 ARUI_SESSION_SECRET=<random 32 bytes> # signs session cookies
 
 # ── Researcher identity (onboarding) ───────────────────────────────
-ARUI_RESEARCHER_EMAIL=fchaubard@gmail.com
+ARUI_RESEARCHER_EMAIL=you@example.com
 
 # ── GitHub (onboarding) ────────────────────────────────────────────
 GITHUB_TOKEN=ghp_xxx
 GITHUB_USERNAME=Fchaubard
-GITHUB_EMAIL=fchaubard@gmail.com
+GITHUB_EMAIL=you@example.com
 ARUI_NEW_REPO_NAME=bs1learning
 
 # ── Model providers (onboarding) ───────────────────────────────────
@@ -182,7 +182,7 @@ ARUI_BASELINE_METHODS_FILE=data/config/baseline_methods.md
 ARUI_ALERT_CADENCE=4h                 # off | immediate | 1h | 4h | 12h | 24h
 ARUI_SMTP_HOST=smtp.gmail.com         # email-sending relay (see doc 09)
 ARUI_SMTP_PORT=587
-ARUI_SMTP_USER=fchaubard@gmail.com
+ARUI_SMTP_USER=you@example.com
 ARUI_SMTP_PASS=<app password>
 # -- or, instead of SMTP --
 ARUI_RESEND_API_KEY=re_xxx

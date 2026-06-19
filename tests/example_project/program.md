@@ -21,4 +21,4 @@ momentum, and step count.
 ## The loop
 The orchestrator runs the `baseline` idea first, then the remaining ideas
 highest-EV first, comparing each `val_mse` to the baseline and keeping or
-discarding accordingly. See `docs/05-autoresearch-engine.md`.
+discarding accordingly. See `docs/agent_prompts/05-autoresearch-engine.md`.

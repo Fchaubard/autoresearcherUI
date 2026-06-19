@@ -3004,7 +3004,7 @@ def metrics_key_coverage(key: str = "", limit: int = 50):
 async def metrics_batch(request: Request):
     """Server-bucketed multi-run, multi-key time-series. The single endpoint
     powering the Analysis tab's panel grid. Schema in
-    docs/12-analysis-v2-spec-final.md."""
+    docs/agent_prompts/12-analysis-v2-spec-final.md."""
     body = await request.json()
     run_ids = body.get("run_ids") or []
     keys_wanted = body.get("keys") or []
@@ -5123,7 +5123,7 @@ def authkeys_list(db: Session = Depends(get_session)):
     if host and port == "22" and not overridden:
         hint = (" — note: this is the INTERNAL sshd port. On RunPod / "
                 "vast.ai the public port is usually a high port (e.g. "
-                "22149); set node_ssh_port in Settings to override.")
+                "e.g. 22001); set node_ssh_port in Settings to override.")
     cmd = (f"ssh {user}@{host} -p {port}" if host
            else f"ssh {user}@<node-ip> -p {port}  (set node_ssh_host in "
                 "Settings — public IP auto-detect failed)")

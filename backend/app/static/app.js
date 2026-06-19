@@ -1616,7 +1616,7 @@ async function openPaperOnboard(proposalId) {
     `<option>ACL 2026</option><option>EMNLP 2026</option>` +
     `<option>Workshop</option></select></div>` +
     `<div class="onb-field"><label class="onb-lbl">Author name</label>` +
-    `<input class="onb-in" id="po-author-name" placeholder="Francois Chaubard"/></div>` +
+    `<input class="onb-in" id="po-author-name" placeholder="Your name"/></div>` +
     `<div class="onb-field"><label class="onb-lbl">Author affiliation</label>` +
     `<input class="onb-in" id="po-author-aff" placeholder="Stanford"/></div>` +
     `<div class="onb-field"><label class="onb-check"><input type="checkbox" id="po-anon" checked/> Anonymize for review</label></div>` +
@@ -4120,7 +4120,6 @@ PASSCODE=`;
     const now = Date.now();
     if (now - _lastFire < 200) return;
     _lastFire = now;
-    console.log('[onb] parse&fill triggered via', label);
     parseAndFill();
   };
   // Capture phase + click — runs before any later-attached handler can
@@ -8223,7 +8222,7 @@ function renderAuthkeys(c) {
 
 /* ── analysis: multi-run comparison ───────────────────────────────────── */
 /* ── Analysis v2 — W&B-style multi-panel dashboard ─────────────────────────
-   Architecture (see docs/12-analysis-v2-spec-final.md):
+   Architecture (see docs/agent_prompts/12-analysis-v2-spec-final.md):
    - Runs table (left) with sort, regex search, status filter, baseline tag
      stored in localStorage, solo button, multi-select via checkboxes.
    - Panel grid (right) — each panel is a BucketChart that fetches
