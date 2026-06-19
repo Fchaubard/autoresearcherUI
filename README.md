@@ -1,10 +1,10 @@
 # autoresearcherUI
 
-**`v0.0.2`** &nbsp;·&nbsp; **MIT** &nbsp;·&nbsp; **self-hosted** &nbsp;·&nbsp; 
+**`v0.1.0`** &nbsp;·&nbsp; **MIT** &nbsp;·&nbsp; **self-hosted** &nbsp;·&nbsp; **bring your own GPU**
 
 > **AutoresearcherUI = Autoresearcher + wandb + datadog + overleaf + iTerm + claude code. All local and all free! Just boot up a node, git clone, bash setup.sh, fill out the onboarding form and let it research rip! Login to the research cockpit URL anywhere on earth.**
 
-AutoresearcherUI is a opensource, single-binary cockpit that makes you the PI with as many autonomous researchers as you want writing papers for you. 
+AutoresearcherUI is an open-source, single-binary cockpit that makes you the PI with as many autonomous researchers as you want writing papers for you. 
 
 Basic AutoresearcherUI flow per node:
 1. Rent a GPU box
@@ -49,7 +49,7 @@ none of these services need to be reachable, paid for, or signed up for.
 |---|---|
 | **karpathy-style autoresearcher agent + iTerm + council** | Same `program.md` / `train.py` / `ideas.md` philosophy, plus a web terminal UI that allows you to control the node, a scheduler that keeps every GPU saturated, and a research journal that writes itself. We also have a council of agents (Gemini/GPT/Claude) to review work and improve code/ideas. |
 | **wandb / neptune / mlflow** | for tracking and analysis. The `arui` SDK (drop-in `wandb`-compatible API) writing into local DuckDB, live charts with shared-hover, an Analysis tab with filters/eye-toggles, and a per-run drawer with full plots and logs. |
-| **datadog / grafana** | Live per-GPU utilization and memory monitoring, run reconciler, system-stats block (disk / RAM / GPU) alerts in every email and systems. |
+| **datadog / grafana** | Live per-GPU utilization and memory monitoring, run reconciler, system-stats block (disk / RAM / GPU) alerts in every email. |
 | **overleaf** | Paper Mode: a real LaTeX repo under `paper/`, an Author Agent that takes runs that win and ablates them to see if they will scale, hardening claims, and integrates finished ablations into figures and sections. |
 | **PI Agent / Council** | An hourly PI Agent that nags whichever one is active (research agent or author agent), and a Council (Gemini + GPT-5, Claude tiebreaker) to review all code and reviewing every kept run to generate lessons and next ideas to try. |
 
@@ -149,7 +149,7 @@ arXiv + Semantic Scholar. Flip back to Research at any time.
   off the paper's claims) — the up-front review is cached and reused.
 - **Paper Runner** — daemon that reads paper-mode `Run` rows with
   `status='queued'`, resolves deps, bin-packs onto the GPU table, launches
-  them. Local backend in v0.0.2; SLURM/K8s pluggable later.
+  them. Local backend in v0.1.0; SLURM/K8s pluggable later.
 
 ## Scoping gate (Phase 0) — plan before you compute
 
@@ -407,7 +407,7 @@ hand-tuning the agent's setup prompt.
 
 ## Disk maintenance
 
-Pods fill up fast with checkpoints and logs (we recommend a least 1TB on the node for this reason) — tmux scrollback and checkpoints. Two one-click cleanups
+Pods fill up fast with checkpoints and logs (we recommend at least 1TB on the node for this reason) — tmux scrollback and checkpoints. Two one-click cleanups
 in System Stats if you need:
 
 - **Purge old run logs** — drops stdout/stderr files of bottom-half runs older
@@ -459,7 +459,7 @@ CI=true
 
 One FastAPI process (`backend/main.py`) serves REST, SSE, the `arui` ingest,
 and the static dashboard (vanilla JS, no build step). Metrics in **DuckDB**
-(`data/metrics.duckdb`), metadata in **SQLite** (`data/arui.sqlite`). The
+(`data/metrics.duckdb`), metadata in **SQLite** (`data/autoresearch.db`). The
 orchestrator launches `train.py` subprocesses against a GPU-slot scheduler.
 Agents run as **tmux** sessions (`agent`, `author`) — observable, killable,
 attachable. Background services: `monitor` (GPU telemetry + reconciliation),
