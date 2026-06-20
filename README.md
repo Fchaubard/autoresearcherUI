@@ -276,6 +276,7 @@ council), the *Scoping agent* model dropdown (Gemini default), the project's
 research question, seed ideas, validation metric, baseline, the
 dangerously-skip-permissions toggle, and the agent's raw `program.md`.
 Everything is editable later from the Settings modal.
+
 ![Onboarding / Settings](docs/screenshots/onboarding-settings.png)
 
 
