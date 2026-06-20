@@ -1,8 +1,9 @@
 """autoresearcherUI backend - Uvicorn entrypoint.
 
 Single process: serves the REST API, the SSE streams, the arui ingest
-endpoints, and the static dashboard. In demo mode it also seeds a realistic
-project and runs the live simulator so the dashboard is populated and animated.
+endpoints, and the static dashboard. When AUTORUN is set and no project
+exists yet, it boots the bundled example project through the real
+orchestrator so a fresh install has something live to look at.
 """
 from __future__ import annotations
 
@@ -85,7 +86,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="autoresearcherUI", version="0.0.2", lifespan=lifespan)
+app = FastAPI(title="autoresearcherUI", version="0.1.0", lifespan=lifespan)
 # Passcode gate runs BEFORE the router so a missing/wrong passcode 401s
 # immediately. The gate is a no-op when no passcode is configured, so
 # fresh installs and pre-onboarding flows work exactly as before.
