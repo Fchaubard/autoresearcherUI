@@ -1,18 +1,20 @@
 # autoresearcherUI
 
-**`v0.1.0`** &nbsp;·&nbsp; **MIT** &nbsp;·&nbsp; **self-hosted** &nbsp;·&nbsp; **bring your own GPU**
+**`v0.1.0`** &nbsp;·&nbsp; **MIT** &nbsp;·&nbsp; **self-hosted**
 
-> **AutoresearcherUI = Autoresearcher + wandb + datadog + overleaf + iTerm + claude code. All local and all free! Just boot up a node, git clone, bash setup.sh, fill out the onboarding form and let it research rip! Login to the research cockpit URL anywhere on earth.**
+> **AutoresearcherUI = Autoresearcher + wandb + datadog + overleaf + iTerm + claude code. All local and all free! Just boot up a node, git clone, bash setup.sh, fill out the onboarding form and let the research rip! Login to the research cockpit URL anywhere on earth.**
 
-AutoresearcherUI is an open-source, single-binary cockpit that makes you the PI with as many autonomous researchers as you want writing papers for you. 
+AutoresearcherUI is an open-source, single-binary cockpit that makes you the PI with as many autonomous researchers as you want writing papers for you.
+
+![The autoresearcherUI cockpit](docs/screenshots/cockpit.png)
 
 Basic AutoresearcherUI flow per node:
 1. Rent a GPU box
-2. git clone
-3. `bash setup.sh`
-4. copy the URL
+2. Clone the repo
+3. Run `bash setup.sh`
+4. Copy the URL
 5. Open it and fill out the onboarding form (namely the research purpose and objective function)
-6. **Scope the research before any GPU spins up.** On submit, a scoping agent runs a literature review (arXiv + Semantic Scholar), synthesizes the state of the art, and adversarially pressure-tests your direction — proposing novel, citation-grounded ideas each with a cheap kill test. You confirm or refine the plan in a modal (chat back-and-forth; the plan re-synthesizes itself). See [*Scoping gate*](#scoping-gate-phase-0--plan-before-you-compute) below.
+6. **Scope the research before any GPU spins up.** On submit, a scoping agent runs a literature review (arXiv + Semantic Scholar), synthesizes the state of the art, and adversarially pressure-tests your direction - proposing novel, citation-grounded ideas each with a cheap kill test. You confirm or refine the plan in a modal (chat back-and-forth; the plan re-synthesizes itself). See [*Scoping gate*](#scoping-gate-phase-0--plan-before-you-compute) below.
 7. Then the research agent is good to go! Leave it alone and let it hillclimb. It will create a fresh research repo, write the `train.py`, spin up a council of agents to review the code, do a baseline run, then try to beat it, maintain a priority queue of ideas, and runs them around the clock updating you via email and the live dashboard until you are ready for your research to stop exploring and start writing the paper. Then the researcher agent will hand off the control of the GPUs to an author agent to nail down and prove specific claims and auto-draft the LaTeX paper and do all required ablation runs to support the claims of the paper. More detail below.
 
 ---
@@ -32,10 +34,10 @@ earth. You can specify a passcode as you need to lock down the node.
 Re-running `setup.sh` is safe; if `~/.claude/` already has credentials
 the OAuth step is skipped. Re-runs restart everything else.
 
-> **Important — set up email so you never lose the dashboard URL.** The
+> **Important - set up email so you never lose the dashboard URL.** The
 > cloudflared quick-tunnel URL is **not stable**: it can rotate whenever the
 > tunnel reconnects or the backend restarts. When it changes, autoresearcherUI
-> **emails you the new URL automatically** — but only if email is configured.
+> **emails you the new URL automatically** - but only if email is configured.
 > Install your [Gmail app password](#getting-a-gmail-app-password) (or a Resend
 > key) during onboarding so a rotated URL is always one email away. Without it,
 > a rotation can leave you locked out until you SSH in to read the new URL.
@@ -115,10 +117,10 @@ arXiv + Semantic Scholar. Flip back to Research at any time.
                                      └──────────────────────────┘
 ```
 
-- **Scoping Agent (Phase 0)** — runs **before** the Research Agent, server-side
+- **Scoping Agent (Phase 0)** - runs **before** the Research Agent, server-side
   (no tmux session of its own). On onboarding submit it drives the **Lit Agent**
-  (arXiv + Semantic Scholar) and the **Council** — using the model you choose in
-  onboarding (the *Scoping agent* dropdown, **Gemini by default**) — to review
+  (arXiv + Semantic Scholar) and the **Council** - using the model you choose in
+  onboarding (the *Scoping agent* dropdown, **Gemini by default**) - to review
   the literature, synthesize the state of the art, and adversarially
   pressure-test your direction, proposing novel ideas each with a cheap kill
   test. You confirm or refine the plan in a chat modal (it re-synthesizes itself
@@ -127,35 +129,35 @@ arXiv + Semantic Scholar. Flip back to Research at any time.
   time), and *then* launches the Research Agent. On by default;
   `ARUI_SCOPING_GATE=0` skips it. Full detail in
   [Scoping gate](#scoping-gate-phase-0--plan-before-you-compute).
-- **Research Agent** — Claude Code in `tmux:agent`. Owns `train.py` and works
+- **Research Agent** - Claude Code in `tmux:agent`. Owns `train.py` and works
   the **`directives.jsonl`** queue (seeded by the Scoping Agent, extended by the
   Council; `ideas.md` is its human-readable render of that queue). Edits the
   script, launches runs, kills divergers.
-- **Author Agent** — Claude Code in `tmux:author`. Owns the ablation queue
+- **Author Agent** - Claude Code in `tmux:author`. Owns the ablation queue
   and the LaTeX. Each finished paper-mode run is integrated into figures and
   sections in real time via a tmux poke from `/api/track/finish`.
-- **PI Agent** — hourly. Reads GPU saturation, the last ~12 runs, the agent's
+- **PI Agent** - hourly. Reads GPU saturation, the last ~12 runs, the agent's
   recent output, and the top of `ideas.md`; types short concrete nudges.
   Switches persona by mode.
-- **The Council** — runs in three places. **(1)** Up front in the
+- **The Council** - runs in three places. **(1)** Up front in the
   **scoping gate** (see below) to synthesize the SOTA and pressure-test the
   plan before any GPU runs. **(2)** Once at project start as the
   **code-bless gate**. **(3)** After every kept run (batched every N), Gemini
   and GPT-5 independently review then debate up to N rounds; consensus
   applies, deadlocks go to Claude. Every round is persisted on the run.
-- **Lit Agent** — pulls candidates from arXiv + Semantic Scholar, ranks by
+- **Lit Agent** - pulls candidates from arXiv + Semantic Scholar, ranks by
   relevance, files cite-candidate decisions. Runs both up front (the scoping
   gate's literature review, keyed off your purpose) and in paper mode (keyed
-  off the paper's claims) — the up-front review is cached and reused.
-- **Paper Runner** — daemon that reads paper-mode `Run` rows with
+  off the paper's claims) - the up-front review is cached and reused.
+- **Paper Runner** - daemon that reads paper-mode `Run` rows with
   `status='queued'`, resolves deps, bin-packs onto the GPU table, launches
   them. Local backend in v0.1.0; SLURM/K8s pluggable later.
 
-## Scoping gate (Phase 0) — plan before you compute
+## Scoping gate (Phase 0) - plan before you compute
 
 **Before the research agent ever spawns, you and a scoping agent agree on a
 literature-grounded, novelty-checked plan.** This is on by default (set
-`ARUI_SCOPING_GATE=0` to skip it). It exists to stop "research theater" —
+`ARUI_SCOPING_GATE=0` to skip it). It exists to stop "research theater" -
 burning GPUs on a direction that's already been done or won't beat the state
 of the art.
 
@@ -166,13 +168,13 @@ backend: instead of spawning the research agent, starts a scoping phase
 Lit Agent: sweeps arXiv + Semantic Scholar off your PURPOSE + seed ideas,
            caching PaperCitation rows (reused later at paper time)
 Council:   the scoping model (your onboarding dropdown; Gemini by default)
-           synthesizes the SOTA and adversarially assesses the direction —
+           synthesizes the SOTA and adversarially assesses the direction -
            an honest read on each of YOUR seed ideas + new orthogonal ideas,
            every one carrying its closest prior work (cited by key, validated
-           against what was actually retrieved — no hallucinated citations)
+           against what was actually retrieved - no hallucinated citations)
            and a cheap kill test (a <~1 GPU-hour experiment that would
            falsify it fast)
-you:       review it in a full-screen modal — papers + preflight on the left,
+you:       review it in a full-screen modal - papers + preflight on the left,
            the plan in the center, a back-and-forth chat on the right, and an
            editable "confirmed research direction" + Confirm at the bottom.
            Push back in the chat; the plan re-synthesizes itself after each
@@ -189,14 +191,14 @@ artifacts and *then* launches the research agent:
    redoing the search;
 3. `start_real()` spawns the Research Agent, which scaffolds
    `program.md` / `train.py` / `ideas.md`, runs your baseline, and works the
-   seeded queue — exactly the normal flow, just no longer guessing from a raw
+   seeded queue - exactly the normal flow, just no longer guessing from a raw
    prompt.
 
 Escape hatches in the modal: **Skip the review** (start immediately from the
-raw onboarding brief) and **Back to onboarding** (edit the form — it's restored
+raw onboarding brief) and **Back to onboarding** (edit the form - it's restored
 exactly as you left it). An in-progress scope also resumes if you reload the
 page. The scoping model is chosen in onboarding (*Scoping agent* dropdown,
-Gemini default — it's fast, which matters because the plan re-synthesizes after
+Gemini default - it's fast, which matters because the plan re-synthesizes after
 every chat message).
 ![Scoping gate](docs/screenshots/scoping.png)
 
@@ -267,7 +269,7 @@ fresh review.
 
 ## Screens
 
-**Onboarding & Settings** — one form is the entire config surface. Email
+**Onboarding & Settings** - one form is the entire config surface. Email
 for alerts, optional GitHub creds for repo sync, optional Claude / Gemini /
 OpenAI tokens (Claude unlocks the agents; Gemini + OpenAI unlock the
 council), the *Scoping agent* model dropdown (Gemini default), the project's
@@ -278,7 +280,7 @@ Everything is editable later from the Settings modal.
 
 
 
-**Dashboard** — the live cockpit. Headline metric vs. baseline plotted
+**Dashboard** - the live cockpit. Headline metric vs. baseline plotted
 across every experiment ever run, a per-GPU heat strip up top, the
 running-best vs. baseline summary cards, a sortable / filterable table of
 all runs, and the right-rail Research Agent terminal so you can see what
@@ -288,7 +290,7 @@ agent is intentionally paused (paper mode).
 
 
 
-**Analysis** — W&B-style multi-run charts. Eye-toggle column to control
+**Analysis** - W&B-style multi-run charts. Eye-toggle column to control
 which runs are drawn, filter modal (status / metric / config), shared-hover
 across every panel, two-way row↔line hover, smoothing slider, log toggle,
 and expand-any-panel-to-full-pane. Click a row to open the per-run drawer
@@ -297,7 +299,7 @@ with every plot, the raw logs, and the council's review.
 
 
 
-**Lessons learned** — auto-written by the Council after each strategic
+**Lessons learned** - auto-written by the Council after each strategic
 review. Every entry summarizes a batch of runs ("twelfth batch in a row
 repeats the same y=5 bf16 diffusion jobs…"), names what to do next, and
 links the run ids it's reasoning over. The Research Agent reads these on
@@ -307,7 +309,7 @@ failed.
 
 
 
-**Sessions** — live tmux output for any training run, the research agent,
+**Sessions** - live tmux output for any training run, the research agent,
 or the author agent. Useful for the times when a specific run is
 misbehaving and you want raw stdout/stderr instead of the aggregated
 metric view.
@@ -315,16 +317,16 @@ metric view.
 
 
 
-**Files** — a JupyterLab-style file browser + code editor (Monaco, the VS Code
+**Files** - a JupyterLab-style file browser + code editor (Monaco, the VS Code
 engine) over the agent's workspace. Browse the whole tree, open files with
 syntax highlighting, edit and save (Ctrl/Cmd-S), create new files, and open
-several at once as tabs that you can switch between — open tabs survive both
+several at once as tabs that you can switch between - open tabs survive both
 in-app navigation and a full page reload. Handy for peeking at or hand-fixing
 `train.py` / `program.md` / `directives.jsonl` without SSH.
 ![Files](docs/screenshots/files.png)
 
 
-**Write the paper (Paper Mode)** — flip the toggle and the Research Agent
+**Write the paper (Paper Mode)** - flip the toggle and the Research Agent
 pauses, the Author Agent starts. Live LaTeX PDF preview on the left,
 sub-tabs across the bottom (Today, Claim Coverage, Paper Plan, Critical
 Path, Related Work, Versions, Rebuttal, Share), and the Author Agent
@@ -333,7 +335,7 @@ draft in real time.
 ![Write the paper](docs/screenshots/write-the-paper.png)
 
 
-**Read-only share link** at `/p/<token>` — mint it from the Share tab,
+**Read-only share link** at `/p/<token>` - mint it from the Share tab,
 send it to a co-author. They see the latest PDF, the claims (with
 evidence-strength chips), and the section-status pills: no login, no
 write access, no risk of someone editing your in-flight LaTeX.
@@ -341,7 +343,7 @@ write access, no risk of someone editing your in-flight LaTeX.
 
 
 
-**System Stats** — per-GPU utilization + VRAM + temperature, host CPU /
+**System Stats** - per-GPU utilization + VRAM + temperature, host CPU /
 RAM / disk-free, API latency. Two **Maintenance** buttons that have saved
 my pod twice this week: *Purge old run logs* (configurable age + bottom-%)
 and *Keep SOTA only* (aggressive: drops every checkpoint except the
@@ -349,7 +351,7 @@ project-best run).
 ![System Stats](docs/screenshots/system-stats.png)
 
 
-**Research-mode email digest** — hourly by default (configurable
+**Research-mode email digest** - hourly by default (configurable
 `immediate` / `1h` / `4h` / `12h` / `24h` / `off`). Headline progress
 chart, what beat baseline, what's training now with ETAs, what's next on
 deck. The "node health" block at the bottom (not shown here) shows disk
@@ -357,7 +359,7 @@ and RAM with a warning chip if anything is low.
 ![Research-mode email](docs/screenshots/email-researcher.png)
 
 
-**Paper-mode email digest** — daily. Different content: claims completed,
+**Paper-mode email digest** - daily. Different content: claims completed,
 days to deadline, decisions waiting on you, citations the Lit Agent
 pulled, ablations finished and integrated, author-agent commits. The
 forward-to-co-author button drops them straight onto the read-only share
@@ -365,26 +367,41 @@ view.
 ![Paper-mode email](docs/screenshots/email-author.png)
 
 
+**Mobile view** - load it from anywhere and talk to your Claude Code instance right from your phone.
+
+<p>
+  <img src="docs/screenshots/iphone1.png" width="45%" alt="autoresearcherUI on mobile - dashboard" />
+  &nbsp;
+  <img src="docs/screenshots/iphone2.png" width="45%" alt="autoresearcherUI on mobile - agent" />
+</p>
+
+
 ## Emails
 
-- **Research Mode** — hourly digest by default (configurable: `immediate` /
+- **Research Mode** - hourly digest by default (configurable: `immediate` /
   `1h` / `4h` / `12h` / `24h` / `off`). `immediate` sends the moment a run
   beats the project's best metric.
-- **Paper Mode** — daily 9-section digest: progress, claims coverage,
+- **Paper Mode** - daily 9-section digest: progress, claims coverage,
   decisions waiting on you, recent ablations, figure integration status,
   related-work additions, the council's latest take, system-stats, and a
   read-only co-author share link.
 - Delivery auto-detects: Resend if a key is present, otherwise SMTP (Gmail
   app-password works out of the box).
-- **Tunnel URL rotation** — if the cloudflared URL changes (tunnel reconnect or
+- **Tunnel URL rotation** - if the cloudflared URL changes (tunnel reconnect or
   backend restart), you get an email with the new link. This is the main reason
   to configure email before you walk away from the node: it is how you get back
   in after a rotation.
 
+<p>
+  <img src="docs/screenshots/email1.png" width="45%" alt="Email digest" />
+  &nbsp;
+  <img src="docs/screenshots/email2.png" width="45%" alt="Email digest" />
+</p>
+
 ### Getting a Gmail app password
 
 If you want emails, you need to set `EMAIL` to a Gmail address during onboarding, you need an **app password** from
-`GMAIL_APP_PW` (your normal login won't work — Google blocks SMTP for it).
+`GMAIL_APP_PW` (your normal login won't work - Google blocks SMTP for it).
 
 1. Turn on **2-Step Verification** at
    [myaccount.google.com/security](https://myaccount.google.com/security).
@@ -407,12 +424,12 @@ hand-tuning the agent's setup prompt.
 
 ## Disk maintenance
 
-Pods fill up fast with checkpoints and logs (we recommend at least 1TB on the node for this reason) — tmux scrollback and checkpoints. Two one-click cleanups
+Pods fill up fast with checkpoints and logs (we recommend at least 1TB on the node for this reason) - tmux scrollback and checkpoints. Two one-click cleanups
 in System Stats if you need:
 
-- **Purge old run logs** — drops stdout/stderr files of bottom-half runs older
+- **Purge old run logs** - drops stdout/stderr files of bottom-half runs older
   than N days. Run rows, metrics, reviews stay. Frees GBs in seconds.
-- **Keep SOTA only** — walks each run's checkpoint folder and deletes
+- **Keep SOTA only** - walks each run's checkpoint folder and deletes
   everything that isn't the SOTA for that run.
 
 A disk warning auto-appears in both email digests when free space is low.
@@ -423,13 +440,13 @@ autoresearcherUI collects anonymous usage telemetry to understand which
 features are used. It uses raw PostHog HTTP capture (no SDK, no autocapture,
 no session replay, no cookies, no `identify()`, no PII). Each browser mints a
 **random anonymous id** stored in `localStorage` and reuses it, so PostHog's
-standard dashboards (daily/weekly active users, retention) work — that id is
+standard dashboards (daily/weekly active users, retention) work - that id is
 just a random UUID with no name, email, or personal data attached. Server-side
 events carry no browser id and never create a person profile.
 
 We collect:
 
-- event name — browser `$pageview` (with current URL/path) + a custom
+- event name - browser `$pageview` (with current URL/path) + a custom
   `page_view` (the app's view id), plus `app_started`, `app_loaded`,
   `paper_mode_entered`, `onboarding_completed`
 - a per-browser random anonymous id (no PII)
@@ -461,7 +478,7 @@ One FastAPI process (`backend/main.py`) serves REST, SSE, the `arui` ingest,
 and the static dashboard (vanilla JS, no build step). Metrics in **DuckDB**
 (`data/metrics.duckdb`), metadata in **SQLite** (`data/autoresearch.db`). The
 orchestrator launches `train.py` subprocesses against a GPU-slot scheduler.
-Agents run as **tmux** sessions (`agent`, `author`) — observable, killable,
+Agents run as **tmux** sessions (`agent`, `author`) - observable, killable,
 attachable. Background services: `monitor` (GPU telemetry + reconciliation),
 `pi` (hourly oversight), `paper_runner`, `paper_watcher`, `notify`. The
 **scoping gate** (`scoping.py` + `/api/scope/*`) is server-side and runs the
@@ -489,7 +506,7 @@ surface. `orchestrator.py` is the research loop. `agent.py` has the
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT - see [LICENSE](LICENSE).
 
 ## Credits
 
