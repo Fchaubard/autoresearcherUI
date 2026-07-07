@@ -1341,6 +1341,11 @@ const aruiPrompt = (msg, opts={}) =>
    "Restart With Feedback" (re-scope, PI+council must re-approve) or
    "Continue and Ignore Feedback" (resume the runs). */
 async function openHaltModal() {
+  // Close any modal already open (e.g. the Settings modal, when Halt is
+  // triggered from the settings control) so the halt flow — and the scoping
+  // screen / dashboard it routes to — isn't left hidden behind it. Without
+  // this, clicking Halt from Settings looked like "nothing happened".
+  document.querySelectorAll('.mscrim').forEach(x => x.remove());
   const sure = await aruiConfirm(
     'This STOPS all research and every running experiment immediately. ' +
     'You can then update the purpose + seed ideas and relaunch.',
