@@ -461,7 +461,28 @@ def _supervise_research_agent() -> None:
         # Agent is working (reset) or a guard is active (skip) -> forget any
         # idle tracking so the next genuine park starts fresh.
         if state:
+            was_escalated = bool(state.get("escalated"))
             _agent_idle_save(None)
+            # Self-heal: if WE had hard-stalled the agent and it is now making
+            # progress again, clear the stall so the dashboard doesn't sit red
+            # forever. Only recover a stall WE set (match the blocker text) so
+            # we never clobber another subsystem's HARD_STALLED.
+            if decision == "reset" and was_escalated:
+                try:
+                    st = lifecycle.status()
+                    if (st.get("health") == lifecycle.HARD_STALLED
+                            and "research agent parked at its prompt"
+                            in (st.get("blocker_reason") or "")):
+                        lifecycle.set_health(
+                            lifecycle.HEALTHY,
+                            "research agent resumed work after auto-continue")
+                        lifecycle.emit_event(
+                            "agent_auto_recovered",
+                            "Research agent resumed making progress on its own "
+                            "— cleared the earlier hard-stall.",
+                            severity="info", actor="supervisor")
+                except Exception:                           # noqa: BLE001
+                    pass
         return
 
     if decision == "wait":

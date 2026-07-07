@@ -386,3 +386,30 @@ def test_first_park_tick_waits_then_nudges():
                   idle_prompt=True, nudge_age=1e9, strikes=0)
     assert sv._should_nudge_idle_agent(idle_age=0, **common) == "wait"
     assert sv._should_nudge_idle_agent(idle_age=46, **common) == "nudge"
+
+
+def test_hard_stall_health_self_heals_when_agent_resumes(arui_env, monkeypatch):
+    """A HARD_STALLED set by the idle watchdog must clear back to HEALTHY once
+    the agent is working again — otherwise a transient/false stall pins the
+    dashboard red forever."""
+    import backend.app.supervisor as sv
+    from backend.app import lifecycle as lc, notify, council
+    # reach the real "reset" branch: bg enabled, not halted/paused/concluding,
+    # agent alive, pane BUSY (active spinner).
+    monkeypatch.delenv("ARUI_DISABLE_BG", raising=False)
+    monkeypatch.setattr(notify, "research_halted", lambda: (False, ""))
+    monkeypatch.setattr(notify, "research_paused", lambda: False)
+    monkeypatch.setattr(council, "conclusion_state", lambda: {"status": "none"})
+    monkeypatch.setattr(sv, "_agent_alive", lambda *a, **k: True)
+    monkeypatch.setattr(sv, "_agent_pane_low",
+                        lambda *a, **k: "improvising… (12s · esc to interrupt)")
+    # simulate: we escalated the agent to hard-stall
+    sv._agent_idle_save({"idle_since": "2020-01-01T00:00:00+00:00",
+                         "last_nudge": "2020-01-01T00:00:00+00:00",
+                         "strikes": 3, "escalated": True})
+    lc.set_health(lc.HARD_STALLED,
+                  "research agent parked at its prompt through 3 auto-continues")
+    assert lc.status()["health"] == lc.HARD_STALLED
+    sv._supervise_research_agent()
+    assert lc.status()["health"] == lc.HEALTHY   # self-healed
+    assert sv._agent_idle_state() == {}          # idle row cleared
