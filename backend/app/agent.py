@@ -412,6 +412,7 @@ BRIEF={shlex.quote(msg)}
 sent_apikey=0
 sent_trust=0
 sent_bypass=0
+sent_fullscreen=0
 sent_brief=0
 for i in $(seq 1 90); do
   sleep 1
@@ -432,6 +433,21 @@ for i in $(seq 1 90); do
       sleep 0.4
       tmux send-keys -t "$SESS" Enter >/dev/null 2>&1
       sent_apikey=1
+      sleep 2
+      continue
+    fi
+  fi
+
+  # (a2) "Try the new fullscreen renderer?" (Claude Code 2.1.202+). Its
+  # fullscreen renderer forces the alternate screen, which fights our
+  # alternate-screen-OFF scrollback setup — so decline it: option 2 = "Not now".
+  if [ "$sent_fullscreen" -eq 0 ]; then
+    if printf "%s" "$PANE" | grep -qiE 'fullscreen renderer' \
+       && printf "%s" "$PANE" | grep -qiE 'Not now'; then
+      tmux send-keys -t "$SESS" '2' >/dev/null 2>&1
+      sleep 0.4
+      tmux send-keys -t "$SESS" Enter >/dev/null 2>&1
+      sent_fullscreen=1
       sleep 2
       continue
     fi
