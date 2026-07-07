@@ -166,14 +166,57 @@ def message_agent(text: str) -> None:
 
 # ──────────────────────────── GPU telemetry ────────────────────────────────
 
-def _poll_gpus() -> None:
-    out = subprocess.run(
-        ["nvidia-smi",
-         "--query-gpu=index,name,utilization.gpu,memory.used,memory.total,"
-         "temperature.gpu",
-         "--format=csv,noheader,nounits"],
-        capture_output=True, text=True, timeout=15)
+def _clear_gpus() -> None:
+    """CPU-only node: drop any stale Gpu rows from a previous GPU run and
+    publish an empty GPU state. No-op (no publish) when already empty."""
+    db = SessionLocal()
+    try:
+        n = db.query(Gpu).delete()
+        if n:
+            db.commit()
+    finally:
+        db.close()
+    if n:
+        bus.publish("gpus", "gpus", {})
+
+
+def gpu_count() -> int:
+    """Number of visible NVIDIA GPUs (0 on a CPU-only node / MacBook). Shells
+    out to nvidia-smi directly so callers get a live answer even before the
+    poller has run. Never raises - any failure means CPU-only (0)."""
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=10)
+    except Exception:                                      # noqa: BLE001
+        return 0
     if out.returncode != 0:
+        return 0
+    return len([l for l in (out.stdout or "").splitlines() if l.strip()])
+
+
+def _poll_gpus() -> None:
+    """Poll nvidia-smi -> Gpu table.
+
+    A missing ``nvidia-smi`` (e.g. a MacBook), zero visible GPUs, or a failed
+    NVIDIA query is a VALID CPU-only node - not an error. In every one of those
+    cases we clear any stale GPU rows and publish an empty GPU state instead of
+    raising or leaving phantom GPUs behind."""
+    try:
+        out = subprocess.run(
+            ["nvidia-smi",
+             "--query-gpu=index,name,utilization.gpu,memory.used,memory.total,"
+             "temperature.gpu",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=15)
+    except (FileNotFoundError, OSError):
+        _clear_gpus()                       # no nvidia-smi -> CPU-only
+        return
+    except Exception:                       # noqa: BLE001  (timeout etc.)
+        _clear_gpus()
+        return
+    if out.returncode != 0:
+        _clear_gpus()                       # driver/query failure -> CPU-only
         return
     rows = []
     for line in out.stdout.splitlines():
@@ -189,6 +232,7 @@ def _poll_gpus() -> None:
         except ValueError:
             continue
     if not rows:
+        _clear_gpus()                       # 0 visible GPUs -> CPU-only
         return
     db = SessionLocal()
     try:

@@ -122,16 +122,22 @@ def _run_preflight() -> dict:
     add("anthropic_key", bool(os.environ.get("ANTHROPIC_API_KEY")))
     add("council_key", bool(os.environ.get("GEMINI_API_KEY")
                             or os.environ.get("OPENAI_API_KEY")))
-    # GPU availability via nvidia-smi
+    # GPU availability via nvidia-smi. A missing nvidia-smi (e.g. a MacBook),
+    # zero GPUs, or a failed query is a VALID CPU-only node - report success
+    # with a clear "CPU-only mode" detail rather than a red preflight failure.
     try:
         out = subprocess.run(
             ["nvidia-smi", "--query-gpu=index,memory.used,utilization.gpu",
              "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=12)
-        gpus = [l for l in (out.stdout or "").strip().splitlines() if l.strip()]
-        add("gpu", bool(gpus), f"{len(gpus)} GPU(s) visible")
-    except Exception as e:                                  # noqa: BLE001
-        add("gpu", False, f"nvidia-smi failed: {e}")
+        gpus = ([l for l in (out.stdout or "").strip().splitlines() if l.strip()]
+                if out.returncode == 0 else [])
+    except Exception:                                      # noqa: BLE001
+        gpus = []
+    if gpus:
+        add("gpu", True, f"{len(gpus)} GPU(s) visible")
+    else:
+        add("gpu", True, "CPU-only mode (no GPU detected)")
     # arxiv reachability
     try:
         import urllib.request

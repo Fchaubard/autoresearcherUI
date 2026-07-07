@@ -56,8 +56,9 @@ def _derive_name_from_purpose(purpose: str) -> str:
 DEFAULT_AGENT_INSTRUCTIONS = """# Your task
 Conduct this research autonomously in this directory. Create program.md,
 train.py, prepare.py and ideas.md. Run the baseline first, then explore one
-idea per experiment, keeping every idle GPU busy. Do not stop — keep
-researching.
+idea per experiment. On a GPU node keep every idle GPU busy; on a CPU-only
+node (see COMPUTE CONTEXT) run CPU-sized experiments instead. Do not stop —
+keep researching.
 
 ## PHASE REPORTING (mandatory at every transition)
 You MUST call `arui.phase(...)` at every lifecycle transition so the
@@ -496,6 +497,34 @@ $ARUI_REPO — read $ARUI_REPO/arui/__init__.py for SDK details.
 """
 
 
+def _compute_context_note() -> str:
+    """A prominent COMPUTE CONTEXT block injected into agent prompts so a
+    CPU-only node (e.g. a MacBook, or a GPU box whose GPUs went away) does not
+    make the agent think 'no GPUs' means 'stop'. On CPU-only it explicitly
+    voids every 'keep GPUs busy' instruction and redirects to CPU-sized work."""
+    try:
+        from . import monitor
+        n = monitor.gpu_count()
+    except Exception:                                      # noqa: BLE001
+        n = 0
+    if n > 0:
+        return (f"# COMPUTE CONTEXT\nThis node has {n} GPU(s). Keep them busy: "
+                "run one experiment per free GPU and never leave a GPU idle "
+                "while there is science to run.")
+    return (
+        "# COMPUTE CONTEXT\n"
+        "This node is CPU-ONLY - there are NO GPUs. IGNORE every 'keep GPUs "
+        "busy' / 'saturate the GPUs' / 'never leave a GPU idle' instruction "
+        "below; they DO NOT apply here. 'No GPU' does NOT mean 'stop'. You "
+        "must still do real work: scaffold the repo "
+        "(program.md/train.py/prepare.py/ideas.md), implement the data + "
+        "evaluation plumbing, run CPU smoke tests, and run tiny CPU-sized "
+        "baselines/probes whenever feasible (small models, small batches, "
+        "short runs). Only if the research GENUINELY cannot proceed without a "
+        "GPU, state that clearly as a hardware blocker and stop spending "
+        "compute - but keep making CPU-sized progress until then.")
+
+
 def _setup_prompt(cfg: dict) -> str:
     """Build the agent's brief. The 'meta' instructions (logging rules, GPU
     saturation, ideas.md format, …) come from cfg['agent_instructions'] if the
@@ -516,6 +545,8 @@ def _setup_prompt(cfg: dict) -> str:
 
 # Purpose
 {cfg.get('purpose', '')}
+
+{_compute_context_note()}
 
 # Baseline method
 {cfg.get('baseline', '')}
@@ -577,6 +608,8 @@ been restored into this directory.
 # Purpose
 {cfg.get('purpose', '')}
 
+{_compute_context_note()}
+
 Validation metric: {metric}.
 
 # You are RESUMING — do NOT restart from scratch
@@ -595,10 +628,11 @@ NEW run rather than editing the old one.
 # Then continue the research
 Work the ideas.md queue and keep going. Every experiment logs via the arui SDK
 and MUST set arui.summary["{metric}"] before arui.finish(). Launch each run in
-its own tmux session named after the run id. SATURATE the GPUs — run
-`nvidia-smi` and keep every idle GPU running an experiment at all times; the
-instant one frees up, launch the next idea on it. Do not stop — keep
-researching.
+its own tmux session named after the run id. If this node has GPUs, SATURATE
+them — run `nvidia-smi` and keep every idle GPU running an experiment at all
+times; the instant one frees up, launch the next idea on it. On a CPU-only node
+(see COMPUTE CONTEXT) skip the GPU-saturation rule and make CPU-sized progress
+instead. Do not stop — keep researching.
 """
 
 
