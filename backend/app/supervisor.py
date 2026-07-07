@@ -247,7 +247,12 @@ _AGENT_BUSY_MARKERS = (
 # paren ("Cogitated for 5m 15s"). So "(<n>s" / "(<n>m" is the single most
 # reliable "actively generating" signal, catching active states that don't
 # happen to render "esc to interrupt" in the captured tail.
-_AGENT_SPINNER_RE = _re.compile(r"\(\d+\s*[ms]\b")
+# The elapsed time ALWAYS ends in seconds — "(35s", "(2m 3s", "(5m 15s" — and
+# is followed by " · ". We must NOT match Claude Code's model-context label
+# "opus 4.8 (1m context)" in the "Welcome back" chrome: "(1m" with no trailing
+# seconds. Requiring a seconds field (optionally preceded by a minutes field)
+# excludes it. "esc to interrupt" remains a substring backstop for any format.
+_AGENT_SPINNER_RE = _re.compile(r"\(\d+s\b|\(\d+m\s+\d+s\b")
 # Boot / consent / auth screens — handled by realrun spawn + agent_watcher's
 # auth-zombie recovery, NOT by this watchdog. Don't nudge over them.
 # ONLY strings that appear during real boot / consent / auth — NOT the

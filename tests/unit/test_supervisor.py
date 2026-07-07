@@ -413,3 +413,20 @@ def test_hard_stall_health_self_heals_when_agent_resumes(arui_env, monkeypatch):
     sv._supervise_research_agent()
     assert lc.status()["health"] == lc.HEALTHY   # self-healed
     assert sv._agent_idle_state() == {}          # idle row cleared
+
+
+def test_model_context_label_is_not_a_spinner():
+    """Claude Code's 'Welcome back' chrome shows 'opus 4.8 (1m context)'. The
+    '(1m' there must NOT be mistaken for the live spinner '(35s · …)', or the
+    watchdog treats a parked agent (with that chrome in view) as busy forever."""
+    from backend.app import supervisor as sv
+    chrome = "│  opus 4.8 (1m     │ what's new                 │"
+    assert sv._agent_busy(chrome.lower()) is False
+    # real spinners still detected:
+    assert sv._agent_busy("(35s · thinking)".lower()) is True
+    assert sv._agent_busy("(2m 3s · ↓ 11k tokens)".lower()) is True
+    # a genuinely parked pane that also contains the chrome reads idle:
+    parked = ("│ opus 4.8 (1m context) │\n❯ \n"
+              "  ⏵⏵ bypass permissions on (shift+tab to cycle")
+    assert sv._agent_busy(parked.lower()) is False
+    assert sv._agent_idle_prompt(parked.lower()) is True
