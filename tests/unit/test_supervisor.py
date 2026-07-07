@@ -317,3 +317,19 @@ def test_busy_and_boot_markers():
     assert sv._agent_busy("✳ improvising… (39s · esc to interrupt)".lower())
     assert sv._agent_boot_screen("Do you trust the files in this folder?".lower())
     assert not sv._agent_busy("❯ bypass permissions on")
+
+
+def test_past_tense_completion_line_is_not_busy():
+    """The parked pane shows a PAST-TENSE completion line + the bypass footer.
+    That must read as idle (not busy) or the watchdog would never un-park it."""
+    from backend.app import supervisor as sv
+    parked = ("  call.\n"
+              "✻ Cogitated for 5m 15s\n"
+              "──────────\n"
+              "❯ \n"
+              "  ⏵⏵ bypass permissions on (shift+tab to cycle ·")
+    low = parked.lower()
+    assert sv._agent_busy(low) is False        # 'cogitated' must NOT be busy
+    assert sv._agent_idle_prompt(low) is True
+    # and the active form still reads busy:
+    assert sv._agent_busy("improvising… (39s · esc to interrupt)".lower()) is True

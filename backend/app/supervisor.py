@@ -220,10 +220,21 @@ _AGENT_IDLE_MAX_STRIKES = 3         # after N nudges with no progress -> human
 _AGENT_IDLE_KEY = "research_agent_idle_watch"
 
 # Substrings that mean Claude Code is actively working (do NOT nudge).
+# Claude Code shows "esc to interrupt" (and a live "(Ns · ↑/↓ N tokens …)"
+# stream) ONLY while it is actively generating. When it finishes it prints a
+# PAST-TENSE completion line — "Cogitated for 5m 15s", "Sautéed for 39s" — and
+# drops back to the idle prompt whose footer reads "bypass permissions on
+# (shift+tab to cycle)". So we must NOT key "busy" off the verb stems
+# (cogitat/improvis/sauté/…): those appear in the finished-and-parked pane too
+# and would make the watchdog think a parked agent is still working (it never
+# nudges). Only the active-generation markers below are reliable.
 _AGENT_BUSY_MARKERS = (
-    "esc to interrupt", "thinking", "cogitat", "improvis", "cultivat",
-    "waddl", "sauté", "pondering", "compacting", "summarizing", "tokens)",
-    "running…", "running ", "↑",
+    "esc to interrupt",
+    "tokens · esc",
+    "↑ ",            # live "↑ N tokens" stream
+    "↓ ",            # live "↓ N tokens" stream
+    "compacting conversation",
+    "esc to interrupt to",
 )
 # Boot / consent / auth screens — handled by realrun spawn + agent_watcher's
 # auth-zombie recovery, NOT by this watchdog. Don't nudge over them.
