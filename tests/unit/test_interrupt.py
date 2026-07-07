@@ -117,3 +117,38 @@ def test_lessons_append_writes(arui_env):
     p = council._lessons_path()
     if ok:
         assert "focus on the loss function" in p.read_text()
+
+
+def test_restart_with_feedback_truly_resets(arui_env, monkeypatch):
+    """Restart With Feedback must WIPE all run results, keep the updated
+    purpose/seeds, and re-enter scoping - not leave stale runs behind."""
+    from backend.app import interrupt, scoping, tmux_safe, metrics
+    from backend.app.db import SessionLocal
+    from backend.app.models import Setting, Run
+    # seed onboarding + a pile of old runs
+    db = SessionLocal()
+    db.add(Setting(key="onboarding",
+                   value={"purpose": "old purpose", "seed_ideas": "old",
+                          "repo_name": "qa"}))
+    db.close()
+    for i in range(5):
+        _mk_run(SessionLocal(), f"old-{i}", "kept")
+    assert SessionLocal().query(Run).count() == 5
+    scoped = {}
+    monkeypatch.setattr(scoping, "start", lambda cfg: scoped.update(cfg=cfg))
+    monkeypatch.setattr(tmux_safe, "kill_session", lambda *a, **k: (True, "ok"))
+    monkeypatch.setattr(metrics, "reset", lambda: None)
+
+    out = interrupt.restart_with_feedback(
+        purpose="NEW purpose - only linear models",
+        seed_ideas="ridge only", feedback="stop the tree models")
+
+    assert out["ok"] and out["status"] == "scoping" and out.get("reset") is True
+    # all old runs wiped
+    assert SessionLocal().query(Run).count() == 0
+    # onboarding updated + preserved through the wipe
+    ob = SessionLocal().query(Setting).filter(Setting.key == "onboarding").first()
+    assert ob.value["purpose"] == "NEW purpose - only linear models"
+    assert ob.value["seed_ideas"] == "ridge only"
+    # scoping was re-entered with the new cfg
+    assert scoped["cfg"]["purpose"] == "NEW purpose - only linear models"

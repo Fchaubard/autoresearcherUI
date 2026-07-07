@@ -1384,9 +1384,16 @@ async function openHaltModal() {
         seed_ideas:m.querySelector('#halt-seeds').value,
         feedback:  m.querySelector('#halt-feedback').value });
       sc.remove();
-      await aruiAlert('Re-scoping started. The PI + council must re-approve ' +
-        'the updated direction before research continues.',
-        { title: 'Restarting with feedback' });
+      // Route straight to the scoping screen so the operator picks up the
+      // fresh scope (results are already cleared server-side). Without this the
+      // dashboard just sat on stale results.
+      if (r && (r.status === 'scoping')) {
+        showScopingModal();
+      } else {
+        await aruiAlert('Restart requested but scoping did not start: ' +
+          ((r && r.status) || 'unknown') + '. Try reloading.',
+          { title: 'Restart' });
+      }
     } catch (e) {
       busy.textContent = 'Failed: ' + e;
       m.querySelectorAll('button,textarea').forEach(x => x.disabled = false);

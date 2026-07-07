@@ -166,22 +166,51 @@ def restart_with_feedback(purpose: str, seed_ideas: str,
     kills the main agent so it re-spawns clean under the new scope, and
     re-enters the scoping gate (which re-requires PI + council approval). The
     agent prunes off-purpose code + commits/pushes per the directive."""
-    from . import tmux_safe
+    from . import tmux_safe, notify, orchestrator, realrun, metrics
+    from .db import engine
+    from .models import Base
+
+    # 1) Snapshot the onboarding and fold in the updated purpose + seeds.
     cfg = _onboarding()
     cfg["purpose"] = (purpose or cfg.get("purpose", "")).strip()
     cfg["seed_ideas"] = (seed_ideas or cfg.get("seed_ideas", "")).strip()
-    # A restart is a fresh scoping cycle: clear the stale bless + conclusion.
+
+    # 2) Stop the world: cancel loops, kill every killable run, kill the main
+    #    agent (allowed only on this deliberate restart path).
+    for fn in (orchestrator.stop, realrun.stop):
+        try:
+            fn()
+        except Exception:                                  # noqa: BLE001
+            pass
+    kill_killable_runs()
+    tmux_safe.kill_session("agent", allow_protected=True)
+    tmux_safe.kill_session("author", allow_protected=True)
+
+    # 3) TRUE RESET - wipe ALL research results (runs, ideas, events, metrics,
+    #    lifecycle/phase, bless, halt/pause, conclusion, scope state) so the
+    #    dashboard genuinely starts over, then re-insert the UPDATED onboarding
+    #    row so the project config (with the new purpose/seeds) survives.
+    try:
+        Base.metadata.drop_all(engine)
+        Base.metadata.create_all(engine)
+        metrics.reset()
+    except Exception as e:                                 # noqa: BLE001
+        print(f"[interrupt] reset wipe error: {e}", flush=True)
     _save_onboarding(cfg)
+
+    # 4) Clear the stale directive queue, then re-anchor on the operator's
+    #    feedback (lessons.md is a workspace file, survives the DB wipe).
+    try:
+        from . import directives
+        directives._write_all([])
+    except Exception:                                      # noqa: BLE001
+        pass
     lessons_append("RESTART WITH FEEDBACK\n" + (feedback or ""))
     set_interrupt_focus_directive(cfg["purpose"], cfg["seed_ideas"], feedback)
 
-    kill_killable_runs()
-    # Kill the main agent (allowed only here, the deliberate restart path) so
-    # it comes back fresh under the new scope brief.
-    tmux_safe.kill_session("agent", allow_protected=True)
-
-    from . import notify
-    notify.set_research_paused(False)   # scoping runs server-side pre-agent
+    # 5) Fresh state + re-enter the scoping gate (PI + council must re-approve).
+    notify.set_research_halted(False)
+    notify.set_research_paused(False)
     from . import scoping
     try:
         scoping.start(cfg)
@@ -190,7 +219,9 @@ def restart_with_feedback(purpose: str, seed_ideas: str,
         status = f"scoping_error: {e}"
     _publish("events", "research_restart_with_feedback",
              {"purpose": cfg["purpose"]})
-    return {"ok": True, "status": status, "purpose": cfg["purpose"]}
+    _publish("runs", "runs_changed", {})
+    return {"ok": True, "status": status, "purpose": cfg["purpose"],
+            "reset": True}
 
 
 def resume_from_interrupt() -> dict:
