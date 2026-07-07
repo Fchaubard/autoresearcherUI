@@ -340,6 +340,10 @@ def test_onboarding_triggers_scoping_when_gate_on(client, monkeypatch):
     monkeypatch.setattr(scoping, "start",
                         lambda cfg, **k: scope_calls.append(cfg) or {"status": "scoping"})
     monkeypatch.setattr(realrun, "start_real", lambda cfg, **k: agent_calls.append(cfg))
+    from backend.app import token_check
+    monkeypatch.setattr(token_check, "check_all",
+                        lambda cfg: {"claude": {"ok": True},
+                                     "advisor": {"provider": "claude"}})
     r = client.post("/api/onboarding", json={
         "repo_name": "p", "metric": "m", "claude_token": "sk-ant-x", "purpose": "y"})
     assert r.json()["status"] == "scoping"
@@ -353,6 +357,10 @@ def test_onboarding_starts_agent_directly_when_gate_off(client, monkeypatch):
     scope_calls, agent_calls = [], []
     monkeypatch.setattr(scoping, "start", lambda cfg, **k: scope_calls.append(cfg))
     monkeypatch.setattr(realrun, "start_real", lambda cfg, **k: agent_calls.append(cfg))
+    from backend.app import token_check
+    monkeypatch.setattr(token_check, "check_all",
+                        lambda cfg: {"claude": {"ok": True},
+                                     "advisor": {"provider": "claude"}})
     r = client.post("/api/onboarding", json={
         "repo_name": "p", "metric": "m", "claude_token": "sk-ant-x", "purpose": "y"})
     assert r.json()["status"] == "started"

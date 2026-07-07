@@ -3803,7 +3803,7 @@ const OB_FIELDS = [
     + 'format, …). Edit to customise; blank uses the default.', 'area', ''],
   ['research_agent_model', 'Research agent model (Claude variant)', 'select',
     'claude-opus-4-6|claude-sonnet-4-6|claude-haiku-4-5|claude-opus-4-1|'
-    + 'claude-sonnet-4-5'],
+    + 'claude-sonnet-4-5|fable'],
   ['sec', 'Review council — runs after every experiment'],
   ['council_enable_gemini', 'Enable Gemini in council', 'check', ''],
   ['council_gemini_model', 'Council — Gemini model', 'select',
@@ -3817,7 +3817,7 @@ const OB_FIELDS = [
     'Enable Claude tiebreaker (only used when reviewers disagree)',
     'check', ''],
   ['council_claude_model', 'Council — Claude tiebreaker model', 'select',
-    'claude-opus-4-6|claude-sonnet-4-6|claude-haiku-4-5'],
+    'claude-opus-4-6|claude-sonnet-4-6|claude-haiku-4-5|fable'],
   ['run_debate', 'Run debate between reviewers (per-run reviews only)',
     'check', ''],
   ['debate_max_rounds', 'Debate max rounds (before tiebreaker)', 'select',
@@ -3857,7 +3857,7 @@ const OB_FIELDS = [
   ['pi_agent_enabled', 'Run the PI agent on a schedule', 'check', ''],
   ['pi_agent_model', 'PI agent model', 'select',
     'gemini-2.5-pro|gemini-2.5-flash|gpt-5|gpt-5-mini|claude-opus-4-6|'
-    + 'claude-sonnet-4-6'],
+    + 'claude-sonnet-4-6|fable'],
   ['pi_cadence_minutes', 'PI cadence (minutes between checks)', 'select',
     '60|15|30|120|240'],
   ['sec', 'Email alerts — optional (leave the app password blank for none)'],

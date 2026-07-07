@@ -2459,6 +2459,33 @@ async def post_onboarding(request: Request):
     # a Claude token (or the test hook) -> launch the real autonomous agent
     token = (cfg.get("claude_token") or "").strip()
     if token or os.environ.get("ARUI_CLAUDE_BIN"):
+        # Validate ALL configured tokens (auth + configured-model visibility)
+        # BEFORE we launch anything. Skipped under the test/dev ARUI_CLAUDE_BIN
+        # hook so unit tests never hit the network. On any failure we block the
+        # launch and return the structured per-provider results so the UI can
+        # point at exactly which key/model is wrong.
+        if not os.environ.get("ARUI_CLAUDE_BIN"):
+            from . import token_check
+            results = token_check.check_all(cfg)
+            bad = token_check.blocking_failures(results)
+            if bad:
+                return _maybe_set_cookie(JSONResponse(
+                    {"status": "invalid_tokens", "failed": bad,
+                     "tokens": results}, status_code=400))
+            # Pin the EFFECTIVE scoping advisor from the keys present (e.g. the
+            # only-Claude path resolves to Claude, not a Gemini default).
+            adv = (results.get("advisor") or {})
+            if adv.get("provider"):
+                cfg["scoping_model"] = adv["provider"]
+                _db2 = SessionLocal()
+                try:
+                    _r2 = _db2.query(Setting).filter(
+                        Setting.key == "onboarding").first()
+                    if _r2:
+                        _r2.value = cfg
+                    _db2.commit()
+                finally:
+                    _db2.close()
         # Scoping gate (Phase 0): instead of spawning the research agent
         # immediately, run a literature review + direction-confirmation pass
         # first. start_real() is deferred until scoping.confirm()/skip().
