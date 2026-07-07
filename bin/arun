@@ -44,6 +44,9 @@ for v in ARUI_REPO ARUI_INGEST_URL ARUI_INGEST_TOKEN ARUI_PROJECT ARUI_KILL_CRIT
   eval "val=\${$v:-}"
   [ -n "$val" ] && ENVARGS+=(-e "$v=$val")
 done
-tmux new-session -d -s "$SESS" "${ENVARGS[@]}" \
+# ${ENVARGS[@]+"${ENVARGS[@]}"} expands to nothing when the array is empty —
+# a plain "${ENVARGS[@]}" trips "unbound variable" under `set -u` on macOS's
+# bash 3.2 when no env vars were forwarded (found live-testing on a MacBook).
+tmux new-session -d -s "$SESS" ${ENVARGS[@]+"${ENVARGS[@]}"} \
   "cd '$WS' && PYTHONUNBUFFERED=1 stdbuf -oL -eL $CMD 2>&1 | tee '$LOG'"
 echo "arun: launched '$SESS' — live in the Sessions tab; log at $LOG"
