@@ -49,12 +49,67 @@ else
   warn "no NVIDIA GPU detected — UI will still work, agent will run on CPU"
 fi
 
-# ── 2. system packages ──────────────────────────────────────────────────
+# ── 2. system packages (cross-distro + macOS) ───────────────────────────
+# Detect an available package manager so a fresh macOS laptop (brew) works the
+# same as a Linux GPU box (apt/dnf/yum/apk/pacman).
+PKG=""
+if   command -v apt-get >/dev/null 2>&1; then PKG=apt
+elif command -v dnf     >/dev/null 2>&1; then PKG=dnf
+elif command -v yum     >/dev/null 2>&1; then PKG=yum
+elif command -v apk     >/dev/null 2>&1; then PKG=apk
+elif command -v pacman  >/dev/null 2>&1; then PKG=pacman
+elif command -v brew    >/dev/null 2>&1; then PKG=brew
+fi
+[ -n "$PKG" ] && ok "package manager: $PKG" \
+  || warn "no supported package manager (apt/dnf/yum/apk/pacman/brew) found"
+
+pkg_install() {   # pkg_install <pkg> [pkg...]  - best-effort, never aborts
+  case "$PKG" in
+    apt)    $SUDO apt-get install -y -qq "$@" >/dev/null 2>&1 ;;
+    dnf)    $SUDO dnf install -y -q "$@"      >/dev/null 2>&1 ;;
+    yum)    $SUDO yum install -y -q "$@"      >/dev/null 2>&1 ;;
+    apk)    $SUDO apk add --quiet "$@"        >/dev/null 2>&1 ;;
+    pacman) $SUDO pacman -Sy --noconfirm "$@" >/dev/null 2>&1 ;;
+    brew)   brew install "$@"                 >/dev/null 2>&1 ;;  # brew: no sudo
+    *)      return 1 ;;
+  esac
+}
+
 step "installing system packages (python3, tmux, curl, TeX Live)…"
-if command -v apt-get >/dev/null 2>&1; then
-  $SUDO apt-get update -qq >/dev/null 2>&1 || true
-  $SUDO apt-get install -y -qq python3 python3-venv python3-pip tmux curl \
-    ca-certificates >/dev/null 2>&1 || warn "some apt packages may have failed"
+[ "$PKG" = "apt" ] && { $SUDO apt-get update -qq >/dev/null 2>&1 || true; }
+
+# tmux is REQUIRED - both agents run inside tmux sessions. Try to install it via
+# whatever package manager exists, then hard-fail with clear guidance if it is
+# still missing (the app cannot run without it).
+if ! command -v tmux >/dev/null 2>&1; then
+  step "installing tmux (required - agents run in tmux sessions)…"
+  pkg_install tmux || true
+fi
+if ! command -v tmux >/dev/null 2>&1; then
+  warn "tmux could not be installed automatically."
+  {
+    echo "  autoresearcherUI runs its agents inside tmux and cannot continue"
+    echo "  without it. Install tmux, then re-run: bash setup.sh"
+    echo "    macOS:          brew install tmux"
+    echo "    Debian/Ubuntu:  sudo apt-get install tmux"
+    echo "    Fedora/RHEL:    sudo dnf install tmux"
+    echo "    Alpine:         sudo apk add tmux"
+    echo "    Arch:           sudo pacman -S tmux"
+  } >&2
+  exit 1
+fi
+ok "tmux $(tmux -V 2>/dev/null | awk '{print $2}') present"
+
+if [ -n "$PKG" ]; then
+  # python3 + curl are needed too; best-effort across managers (already present
+  # on most systems). On apt we also want the venv/pip extras.
+  if [ "$PKG" = "apt" ]; then
+    $SUDO apt-get install -y -qq python3 python3-venv python3-pip curl \
+      ca-certificates >/dev/null 2>&1 || warn "some apt packages may have failed"
+  else
+    command -v python3 >/dev/null 2>&1 || pkg_install python3 || true
+    command -v curl    >/dev/null 2>&1 || pkg_install curl    || true
+  fi
   # TeX Live for Paper Mode's pdflatex build. Without this, every paper
   # render shows "TeX Live not installed" and the PDF iframe stays
   # empty — Francois hit this on the live pod 2026-06-06. The
@@ -63,13 +118,16 @@ if command -v apt-get >/dev/null 2>&1; then
   # graphicx + hyperref + booktabs + geometry). We swallow failures
   # because TeX Live isn't required for research-mode — the warning
   # surfaces in the UI instead.
-  if ! command -v pdflatex >/dev/null 2>&1; then
+  if [ "$PKG" = "apt" ] && ! command -v pdflatex >/dev/null 2>&1; then
     step "installing TeX Live (pdflatex — needed by Paper Mode)…"
     $SUDO apt-get install -y -qq --no-install-recommends \
       texlive-latex-recommended texlive-fonts-recommended \
       texlive-latex-extra >/dev/null 2>&1 \
       && ok "pdflatex installed" \
       || warn "TeX Live install failed — Paper Mode PDF builds will warn"
+  elif ! command -v pdflatex >/dev/null 2>&1; then
+    warn "pdflatex not found — install a TeX distribution for Paper Mode PDFs" \
+         "(macOS: brew install --cask mactex-no-gui)"
   fi
 fi
 

@@ -415,7 +415,12 @@ sent_bypass=0
 sent_brief=0
 for i in $(seq 1 90); do
   sleep 1
-  PANE=$(tmux capture-pane -t "$SESS" -p -J -S -300 2>/dev/null || true)
+  # Capture ONLY the visible pane (no -S scrollback). Matching 300 lines of
+  # history meant a just-answered "Trust this folder" prompt still sat in the
+  # buffer when a LATER prompt (e.g. bypass-permissions, whose default action
+  # EXITS) became active - and the automation would press Enter on the wrong
+  # prompt. The live screen is the single source of truth for what's asking.
+  PANE=$(tmux capture-pane -t "$SESS" -p -J 2>/dev/null || true)
 
   # (a) "Do you want to use this API key?" — pick 1 (Yes). The
   # default 2 (No, recommended) would REFUSE the key. Detect via

@@ -2914,12 +2914,13 @@ def run_logs(run_id: str, tail: int = 800):
 
 @router.post("/runs/{run_id}/kill")
 def run_kill(run_id: str):
-    """Kill a run's tmux session (the monitor then marks it crashed)."""
-    if not _SAFE_NAME.match(run_id or ""):
-        return {"ok": False, "error": "bad run id"}
-    subprocess.run(["tmux", "kill-session", "-t", run_id],
-                   capture_output=True)
-    return {"ok": True}
+    """Kill a run's tmux session (the monitor then marks it crashed).
+
+    Goes through tmux_safe so a generic run-kill can never take down the
+    main research ``agent``/``author`` or the backend/tunnel by name."""
+    from . import tmux_safe
+    ok, msg = tmux_safe.kill_session(run_id or "")
+    return {"ok": ok, "error": None if ok else msg}
 
 
 @router.get("/system")
@@ -4098,8 +4099,8 @@ def paper_run_kill(rid: str):
         if not r or r.context != "paper":
             return {"ok": False, "detail": "not a paper run"}
         if r.tmux_session:
-            subprocess.run(["tmux", "kill-session", "-t", r.tmux_session],
-                           capture_output=True, timeout=5)
+            from . import tmux_safe
+            tmux_safe.kill_session(r.tmux_session)
         r.status = "crashed"
         r.ended_at = dt.datetime.now(dt.timezone.utc).isoformat()
         cfg = dict(r.config) if isinstance(r.config, dict) else {}
