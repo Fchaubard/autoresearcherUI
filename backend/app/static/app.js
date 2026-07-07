@@ -1317,6 +1317,80 @@ const aruiPrompt = (msg, opts={}) =>
                 defaultValue: opts.defaultValue || '',
                 okText: opts.okText });
 
+/* ── Halt Research: durable interrupt + resume flow ─────────────────────
+   Big-red-scary stop. Confirm -> hard interrupt (stops ALL runs) -> a
+   non-dismissable modal that lets you edit purpose + seeds, then choose
+   "Restart With Feedback" (re-scope, PI+council must re-approve) or
+   "Continue and Ignore Feedback" (resume the runs). */
+async function openHaltModal() {
+  const sure = await aruiConfirm(
+    'This STOPS all research and every running experiment immediately. ' +
+    'You can then update the purpose + seed ideas and relaunch.',
+    { title: '⛔ Halt Research?', danger: true, okText: 'Yes, halt everything' });
+  if (!sure) return;
+  let d;
+  try { d = await post('/research/interrupt', { feedback: '' }); }
+  catch (e) { await aruiAlert('Could not halt: ' + e); return; }
+
+  const sc = el('div', 'mscrim');            // NOTE: no scrim-click / Esc close
+  const m  = el('div', 'modal arui-dlg danger');
+  m.innerHTML =
+    `<div class="arui-dlg-hd">⛔ Research halted — ${(d.killed||[]).length} run(s) ` +
+      `stopped, ${d.discarded||0} queued discarded</div>` +
+    `<div class="arui-dlg-bd">Everything is stopped. Tighten the purpose and ` +
+      `seed ideas below if you want to steer the research, then choose how to ` +
+      `proceed. You must pick one option to continue.</div>` +
+    `<label class="halt-lbl">Purpose</label>` +
+    `<textarea id="halt-purpose" class="halt-ta" rows="4">${esc(d.purpose||'')}</textarea>` +
+    `<label class="halt-lbl">Seed ideas</label>` +
+    `<textarea id="halt-seeds" class="halt-ta" rows="4">${esc(d.seed_ideas||'')}</textarea>` +
+    `<label class="halt-lbl">Feedback — what went wrong / the new focus</label>` +
+    `<textarea id="halt-feedback" class="halt-ta" rows="3" ` +
+      `placeholder="e.g. stop trying width/depth sweeps; focus on the loss ` +
+      `function per the seeds"></textarea>` +
+    `<div class="arui-dlg-actions" style="flex-wrap:wrap;gap:8px">` +
+      `<button id="halt-restart" class="btn pri danger">Restart With Feedback</button>` +
+      `<button id="halt-continue" class="btn">Continue and Ignore Feedback</button>` +
+    `</div>` +
+    `<div id="halt-busy" class="set-email-hint" style="margin-top:8px"></div>`;
+  sc.append(m); document.body.append(sc);
+  const busy = m.querySelector('#halt-busy');
+  const disableAll = () => m.querySelectorAll('button,textarea')
+    .forEach(x => x.disabled = true);
+
+  m.querySelector('#halt-restart').onclick = async () => {
+    disableAll(); busy.textContent = 'Re-scoping against the updated purpose…';
+    try {
+      const r = await post('/research/restart_with_feedback', {
+        purpose:   m.querySelector('#halt-purpose').value,
+        seed_ideas:m.querySelector('#halt-seeds').value,
+        feedback:  m.querySelector('#halt-feedback').value });
+      sc.remove();
+      await aruiAlert('Re-scoping started. The PI + council must re-approve ' +
+        'the updated direction before research continues.',
+        { title: 'Restarting with feedback' });
+    } catch (e) {
+      busy.textContent = 'Failed: ' + e;
+      m.querySelectorAll('button,textarea').forEach(x => x.disabled = false);
+    }
+  };
+  m.querySelector('#halt-continue').onclick = async () => {
+    disableAll(); busy.textContent = 'Resuming the research runs…';
+    try {
+      const r = await post('/research/resume_from_interrupt', {});
+      if (r && r.blocked) {
+        busy.textContent = 'Cannot resume: ' + (r.detail || r.reason);
+        m.querySelectorAll('button,textarea').forEach(x => x.disabled = false);
+        return;
+      }
+      sc.remove();
+    } catch (e) {
+      busy.textContent = 'Failed: ' + e;
+      m.querySelectorAll('button,textarea').forEach(x => x.disabled = false);
+    }
+  };
+}
+
 /* ── Paper Mode flip + proposal + onboard + revert ────────────────────── */
 
 async function openPaperProposal() {
@@ -1749,6 +1823,10 @@ function left() {
       seg.append(b);
     });
   bar.append(seg);
+  const halt = el('button', 'halt-btn', '⛔ Halt Research');
+  halt.title = 'Stop all research + runs and update the purpose / seed ideas';
+  halt.onclick = openHaltModal;
+  bar.append(halt);
   const srch = el('input', 'search'); srch.placeholder = 'Search ideas…';
   srch.value = S.search;
   srch.oninput = () => { S.search = srch.value; paintTable(); };
@@ -5047,7 +5125,7 @@ async function openSettings() {
      In-flight runs keep going; use /api/reset for a hard stop. */
   const resBar = el('div', 'set-email-bar');
   const resLbl = el('div', 'set-email-lbl', 'Autonomous research loop');
-  const resBtn = el('button', 'btn xs', 'Pause research');
+  const resBtn = el('button', 'btn xs halt-btn', '⛔ Halt Research');
   const resHint = el('div', 'set-email-hint', '');
   resBar.append(resLbl, resBtn, resHint);
   const refreshResBtn = async () => {
@@ -5068,15 +5146,8 @@ async function openSettings() {
       }
     } catch (e) { /* keep last */ }
   };
-  resBtn.onclick = async () => {
-    resBtn.disabled = true;
-    const wasPaused = resBtn.textContent.includes('Resume');
-    try {
-      await post(wasPaused ? '/research/resume' : '/research/pause', {});
-      await refreshResBtn();
-    } finally { resBtn.disabled = false; }
-  };
-  refreshResBtn();
+  resBtn.onclick = openHaltModal;   // same durable interrupt flow as the
+                                    // experiments-table Halt button
   m.append(resBar);
 
   /* ── Watchdog config panel (PR 5 of state-control rewrite) ─────────

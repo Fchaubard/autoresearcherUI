@@ -49,6 +49,7 @@ _RELOAD_MODULES = [
     "backend.app.scoping",
     "backend.app.lifecycle",
     "backend.app.supervisor",
+    "backend.app.interrupt",
     "backend.app.api",
     "backend.app",
     "backend",

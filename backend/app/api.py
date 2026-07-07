@@ -1778,6 +1778,43 @@ async def research_resume():
             "sessions_interrupted": res.get("sessions_interrupted", [])}
 
 
+@router.post("/research/interrupt")
+async def research_interrupt(request: Request):
+    """The 'Halt Research' YES action: stop ALL runs + queued work NOW, pause
+    the loop, append the operator's feedback to lessons.md, and raise the
+    high-priority d-interrupt-focus directive. The main agent session is
+    preserved (paused). Returns the current purpose + seed ideas so the modal
+    can prefill them for editing. Body: {"feedback": "..."} (optional)."""
+    from . import interrupt
+    body = await _safe_json(request)
+    return interrupt.hard_interrupt(feedback=(body.get("feedback") or ""))
+
+
+@router.post("/research/restart_with_feedback")
+async def research_restart_with_feedback(request: Request):
+    """Re-scope against an updated purpose + seed ideas. Body:
+    {"purpose": "...", "seed_ideas": "...", "feedback": "..."}. Persists the
+    new purpose/seeds, appends feedback to lessons.md, refreshes the focus
+    directive, restarts the agent clean, and re-enters the scoping gate (PI +
+    council must re-approve before research continues)."""
+    from . import interrupt
+    body = await _safe_json(request)
+    return interrupt.restart_with_feedback(
+        purpose=(body.get("purpose") or ""),
+        seed_ideas=(body.get("seed_ideas") or ""),
+        feedback=(body.get("feedback") or ""))
+
+
+@router.post("/research/resume_from_interrupt")
+async def research_resume_from_interrupt():
+    """'Continue and Ignore Feedback' / resume after an interrupt: refuse if
+    halted or an open HALT directive exists, unpause, restart the agent if its
+    tmux session vanished (else send a checkpoint-aware resume message), and
+    publish the resumed state."""
+    from . import interrupt
+    return interrupt.resume_from_interrupt()
+
+
 @router.get("/agent/raw")
 def agent_raw_stream(session: str = "agent", offset: int = 0, seed: int = 0):
     """Byte-offset incremental read of a tmux session's RAW pane bytes.
