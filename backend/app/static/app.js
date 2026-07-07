@@ -2882,7 +2882,11 @@ function renderSessions(c) {
   const host = c.querySelector('#sessterm-host');
   let _sessTerm = null;             // active createRailTerm() wrapper
   let _attachedSession = null;      // name we last POST'd /attach for
-  let known = '';
+  // Must start as null, NOT '' — an empty session list has signature '', which
+  // would equal a '' seed and make the first poll a no-op, leaving the view
+  // stuck on "loading run sessions…" forever. null guarantees the first poll
+  // always renders (empty-state or tabs).
+  let known = null;
 
   const showEmptyState = (msg) => {
     if (_sessTerm) {
