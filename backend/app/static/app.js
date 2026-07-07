@@ -198,8 +198,16 @@ class ProgressChart {
     if (base != null) fin.push(base);
     if (!fin.length) {
       c.fillStyle = '#5C636B'; c.font = '12px sans-serif'; c.textAlign = 'center';
-      c.fillText('No experiments yet — the research agent has not started.',
-                 w / 2, h / 2);
+      // Distinguish "nothing has run" from "only smoke/probe runs so far".
+      // setData() drops probe/smoke runs from the plot, so a fresh smoke test
+      // leaves the frontier empty — but the agent HAS started (header shows the
+      // run count + phase). Saying "has not started" then is just wrong.
+      const anyRun = (typeof expRuns === 'function') && expRuns().length > 0;
+      const msg = anyRun
+        ? 'Warming up — only smoke tests so far. The frontier appears once a '
+          + 'real experiment (baseline or kept run) completes.'
+        : 'No experiments yet — the research agent has not started.';
+      c.fillText(msg, w / 2, h / 2);
       return;
     }
     let lo = Math.min(...fin), hi = Math.max(...fin);
