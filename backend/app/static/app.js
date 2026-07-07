@@ -2008,9 +2008,14 @@ let HERO;
 function paintHero() {
   const runs = frontier(expRuns());
   const kept = runs.filter(r => r._frontier).length;
+  // Count only REAL experiments — exclude smoke/probe runs, the same way the
+  // chart (setData) and the "experiments" stat tile do — so the headline reads
+  // e.g. 22, not 41 (41 counted the 19 preflight smoke tests). Keeps the three
+  // surfaces consistent.
+  const experiments = runs.filter(r => !_isProbeRun(r)).length;
   document.getElementById('herotop').innerHTML =
     `<h1>Autoresearch progress</h1>` +
-    `<span class="sub">${runs.length} experiments · ${kept} kept ` +
+    `<span class="sub">${experiments} experiments · ${kept} kept ` +
     `improvements</span>` +
     `<span class="hero-ctl">` +
     `<button class="tg${S.ylog ? ' on' : ''}" id="ylog">log y</button></span>`;
