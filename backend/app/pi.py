@@ -659,8 +659,12 @@ def cycle_paper(force: bool = False) -> dict | None:
         print(f"[pi/paper] no API key for {model}; skipping", flush=True)
         return None
     ctx = _build_paper_context()
-    user = ("Current state of the paper-writing project. Decide if the "
-            "author agent needs a nudge. JSON only.\n\n"
+    from . import purpose as _purpose
+    _anchor = _purpose.anchor_block()
+    user = ((_anchor + "\n\n" if _anchor else "")
+            + "Current state of the paper-writing project. Decide if the "
+            "author agent needs a nudge. If it has drifted off the purpose / "
+            "claims above, nudge it back. JSON only.\n\n"
             + json.dumps(ctx, indent=2, default=str))
     try:
         text = _call(model, SYSTEM_PAPER, user)
@@ -1174,9 +1178,13 @@ def cycle(force: bool = False) -> dict | None:
         _idle_gpu_escalation(ctx)
     except Exception as e:                                  # noqa: BLE001
         print(f"[pi] idle-gpu escalation failed: {e}", flush=True)
-    user = ("Here is the current state of the research project. Decide if "
-            "the agent needs a nudge and return JSON per the schema.\n\n"
-            + json.dumps(ctx, indent=2, default=str))
+    from . import purpose as _purpose
+    _anchor = _purpose.anchor_block()
+    user = ((_anchor + "\n\n" if _anchor else "")
+            + "Here is the current state of the research project. Decide if "
+            "the agent needs a nudge. If the agent has drifted OFF the purpose "
+            "or seed ideas above, nudge it back on. Return JSON per the "
+            "schema.\n\n" + json.dumps(ctx, indent=2, default=str))
     try:
         text = _call(model, SYSTEM, user)
     except urllib.error.HTTPError as e:

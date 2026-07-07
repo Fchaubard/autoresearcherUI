@@ -50,7 +50,14 @@ def _meta_block(db, proposal: PaperProposal | None) -> str:
                 council_block += f"\n=== {rev} ===\n{json.dumps(body)[:1500]}\n"
         except Exception:
             pass
-    return textwrap.dedent(f"""\
+    try:
+        from . import purpose as _purpose
+        _anchor = _purpose.anchor_block(
+            header="RESEARCH PURPOSE — the paper must serve this")
+    except Exception:                                      # noqa: BLE001
+        _anchor = ""
+    _anchor = (_anchor + "\n\n") if _anchor else ""
+    return _anchor + textwrap.dedent(f"""\
         ## Project
         purpose: {purpose}
         metric:  {metric}  (direction: {direction})

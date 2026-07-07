@@ -56,7 +56,15 @@ def _derive_name_from_purpose(purpose: str) -> str:
 DEFAULT_AGENT_INSTRUCTIONS = """# Your task
 Conduct this research autonomously in this directory. Create program.md,
 train.py, prepare.py and ideas.md. Run the baseline first, then explore one
-idea per experiment. On a GPU node keep every idle GPU busy; on a CPU-only
+idea per experiment.
+
+## STAY ON PURPOSE (re-anchor every cycle)
+Before picking each idea, RE-READ the Purpose + Seed ideas at the top of this
+brief, plus lessons.md and any `d-interrupt-focus` directive. Every experiment
+you run must serve that purpose and those seed ideas and honour the operator's
+rules. If an idea does not serve them, do NOT run it - drop it and pick one that
+does. Do not drift into generic/boring research the operator explicitly ruled
+out. On a GPU node keep every idle GPU busy; on a CPU-only
 node (see COMPUTE CONTEXT) run CPU-sized experiments instead. Do not stop —
 keep researching.
 
