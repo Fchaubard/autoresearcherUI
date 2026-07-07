@@ -2745,8 +2745,11 @@ function renderAgentRail(c, which) {
   // Light status poll for the "● running / ○ not running" indicator (4s).
   const statusTick = async () => {
     try {
-      const d = await api('/agent/raw?session=' + encodeURIComponent(cfg.session)
-        + '&offset=999999999');
+      // Cheap liveness probe (no pane bytes). Do NOT poll /agent/raw with a
+      // huge offset here: that trips the tail's rotation resync and streams
+      // ~1MB every 4s, starving the terminal's own byte stream so the rail
+      // never paints. See GET /api/agent/alive.
+      const d = await api('/agent/alive?session=' + encodeURIComponent(cfg.session));
       const running = !!d.alive;
       if (stat) {
         stat.textContent = running ? '● running' : '○ not running';

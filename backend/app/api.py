@@ -1815,6 +1815,28 @@ async def research_resume_from_interrupt():
     return interrupt.resume_from_interrupt()
 
 
+@router.get("/agent/alive")
+def agent_alive(session: str = "agent"):
+    """Cheap liveness probe for the rail's status dot - returns just
+    ``{"alive", "size"}`` with NO pane bytes.
+
+    The rail used to poll ``/agent/raw?offset=999999999`` every 4s to read the
+    alive flag. A huge offset trips the tail's rotation logic (offset > size ->
+    "caller is ahead" -> resync from 0), so each poll answered with a ~1MB byte
+    resync. On a long-running agent that saturated the browser's per-host
+    connection pool and starved the terminal's own incremental stream, so the
+    rail sat on "checking..." and never painted. This endpoint does no byte
+    work, so the status poll is now free of that side effect."""
+    from . import tmux_safe, pane_stream
+    if not tmux_safe.valid_name(session):
+        return {"alive": False, "size": 0}
+    try:
+        sz = pane_stream.size(session)
+    except Exception:                                      # noqa: BLE001
+        sz = 0
+    return {"alive": tmux_safe.is_alive(session), "size": sz}
+
+
 @router.get("/agent/raw")
 def agent_raw_stream(session: str = "agent", offset: int = 0, seed: int = 0):
     """Byte-offset incremental read of a tmux session's RAW pane bytes.
