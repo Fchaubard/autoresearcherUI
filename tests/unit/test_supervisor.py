@@ -234,3 +234,86 @@ def test_review_completion_async_emits_launch_event(arui_env, monkeypatch):
     finally:
         db.close()
     assert ev is not None and "Council review launched" in ev.message
+
+
+# ── research-agent idle-park watchdog (autonomy: never wait on a human) ──────
+def test_idle_nudge_decision_fires_when_parked():
+    from backend.app import supervisor as sv
+    # alive, running, parked at prompt past grace, no strikes -> nudge
+    assert sv._should_nudge_idle_agent(
+        disable_bg=False, alive=True, halted=False, paused=False,
+        concluding=False, boot_screen=False, busy=False, idle_prompt=True,
+        idle_age=120, nudge_age=1e9, strikes=0) == "nudge"
+
+
+def test_idle_nudge_waits_within_grace():
+    from backend.app import supervisor as sv
+    assert sv._should_nudge_idle_agent(
+        False, True, False, False, False, False, False, True,
+        idle_age=10, nudge_age=1e9, strikes=0) == "wait"
+
+
+def test_idle_nudge_waits_during_cooldown():
+    from backend.app import supervisor as sv
+    assert sv._should_nudge_idle_agent(
+        False, True, False, False, False, False, False, True,
+        idle_age=999, nudge_age=5, strikes=1) == "wait"
+
+
+def test_idle_nudge_hard_stalls_after_max_strikes():
+    from backend.app import supervisor as sv
+    assert sv._should_nudge_idle_agent(
+        False, True, False, False, False, False, False, True,
+        idle_age=999, nudge_age=999, strikes=3) == "hard_stall"
+
+
+def test_idle_nudge_resets_when_busy():
+    from backend.app import supervisor as sv
+    # working -> clear tracking, never nudge
+    assert sv._should_nudge_idle_agent(
+        False, True, False, False, False, False, busy=True, idle_prompt=False,
+        idle_age=999, nudge_age=999, strikes=0) == "reset"
+
+
+def test_idle_nudge_resets_when_not_at_prompt():
+    from backend.app import supervisor as sv
+    assert sv._should_nudge_idle_agent(
+        False, True, False, False, False, False, False, idle_prompt=False,
+        idle_age=999, nudge_age=999, strikes=0) == "reset"
+
+
+@pytest.mark.parametrize("halted,paused,concluding,boot,alive,dbg", [
+    (True, False, False, False, True, False),   # halted -> never nudge
+    (False, True, False, False, True, False),   # paused
+    (False, False, True, False, True, False),   # council concluding -> legit wait
+    (False, False, False, True, True, False),   # boot/consent screen
+    (False, False, False, False, False, False), # dead (handled elsewhere)
+    (False, False, False, False, True, True),   # bg disabled (unit/test env)
+])
+def test_idle_nudge_skips_on_guards(halted, paused, concluding, boot, alive, dbg):
+    from backend.app import supervisor as sv
+    assert sv._should_nudge_idle_agent(
+        disable_bg=dbg, alive=alive, halted=halted, paused=paused,
+        concluding=concluding, boot_screen=boot, busy=False, idle_prompt=True,
+        idle_age=999, nudge_age=999, strikes=0) == "skip"
+
+
+def test_idle_prompt_detection():
+    from backend.app import supervisor as sv
+    parked = ("some output\n"
+              "──────────\n"
+              "❯ \n"
+              "  ⏵⏵ bypass permissions on (shift+tab to cycle")
+    assert sv._agent_idle_prompt(parked.lower()) is True
+    working = "✻ cogitated for 5m 15s\n  esc to interrupt"
+    # no prompt box -> not "idle at prompt"; and busy wins upstream anyway
+    assert sv._agent_idle_prompt(working.lower()) is False
+    assert sv._agent_busy(working.lower()) is True
+    assert sv._agent_idle_prompt("") is False
+
+
+def test_busy_and_boot_markers():
+    from backend.app import supervisor as sv
+    assert sv._agent_busy("✳ improvising… (39s · esc to interrupt)".lower())
+    assert sv._agent_boot_screen("Do you trust the files in this folder?".lower())
+    assert not sv._agent_busy("❯ bypass permissions on")

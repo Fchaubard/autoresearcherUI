@@ -40,6 +40,10 @@ def tick() -> None:
         _supervise_paper_mode()
     except Exception as e:                              # noqa: BLE001
         print(f"[supervisor] paper tick error: {e}", flush=True)
+    try:
+        _supervise_research_agent()
+    except Exception as e:                              # noqa: BLE001
+        print(f"[supervisor] research-agent tick error: {e}", flush=True)
 
 
 # Paper-mode phases where the Author Agent is supposed to be actively working
@@ -190,3 +194,270 @@ def _supervise_completion_review() -> None:
         lifecycle.emit_event("supervisor_error",
                              f"completion-review re-trigger failed: {e}",
                              severity="warning")
+
+
+# ── research-agent idle-park watchdog ─────────────────────────────────────
+# The autonomous research agent is a Claude Code REPL. When it finishes a
+# line of work it can PARK at the prompt asking the operator "want me to try
+# X or Y? — your call" and, with no human watching, sit idle forever. Paper
+# mode already has refeed_if_idle for exactly this; the research loop did NOT,
+# so the only thing that could ever un-park the agent was the PI's HOURLY
+# nudge (and on a CPU node even the PI's idle-GPU signal is absent). This gives
+# the research agent the same fast, deterministic un-parker the author has.
+#
+# It NEVER answers the agent's question for it — it re-anchors the mandate and
+# tells the agent to decide: launch the next on-mandate experiment, or, if the
+# question is truly answered, POST a conclusion. A human is never in the loop.
+
+import os as _os
+import subprocess as _sp
+import datetime as _dt
+
+_AGENT_SESSION = "agent"
+_AGENT_IDLE_GRACE_SEC = 90          # parked-at-prompt this long before nudging
+_AGENT_IDLE_COOLDOWN_SEC = 90       # min gap between nudges
+_AGENT_IDLE_MAX_STRIKES = 3         # after N nudges with no progress -> human
+_AGENT_IDLE_KEY = "research_agent_idle_watch"
+
+# Substrings that mean Claude Code is actively working (do NOT nudge).
+_AGENT_BUSY_MARKERS = (
+    "esc to interrupt", "thinking", "cogitat", "improvis", "cultivat",
+    "waddl", "sauté", "pondering", "compacting", "summarizing", "tokens)",
+    "running…", "running ", "↑",
+)
+# Boot / consent / auth screens — handled by realrun spawn + agent_watcher's
+# auth-zombie recovery, NOT by this watchdog. Don't nudge over them.
+_AGENT_BOOT_MARKERS = (
+    "do you trust", "welcome to claude", "welcome back", "yes, i accept",
+    "/login", "not logged in", "choose the text style", "select login method",
+)
+
+_AGENT_NUDGE = (
+    "[AUTONOMY - no human is watching this session] Do not stop and ask for "
+    "confirmation or say \"your call\". You are the autonomous research agent. "
+    "Re-read your mandate now: the project purpose, directives.jsonl, and "
+    "ideas.md. Then do exactly ONE of these immediately: (a) pick the single "
+    "best remaining on-mandate experiment and launch it, or (b) if you are "
+    "confident the research question is fully answered, POST your conclusion "
+    "to /api/research/conclude with your evidence. Decide and act - never wait "
+    "for a human."
+)
+
+
+def _agent_iso() -> str:
+    return _dt.datetime.now(_dt.timezone.utc).isoformat()
+
+
+def _agent_pane_low(session: str = _AGENT_SESSION, lines: int = 40) -> str:
+    """Lowercased tail of the agent tmux pane. "" on any failure."""
+    try:
+        out = _sp.run(["tmux", "capture-pane", "-t", session, "-p",
+                       "-S", str(-lines)],
+                      capture_output=True, text=True, timeout=4)
+        return (out.stdout or "").lower() if out.returncode == 0 else ""
+    except Exception:                                   # noqa: BLE001
+        return ""
+
+
+def _agent_alive(session: str = _AGENT_SESSION) -> bool:
+    try:
+        return _sp.run(["tmux", "has-session", "-t", session],
+                       capture_output=True, timeout=4).returncode == 0
+    except Exception:                                   # noqa: BLE001
+        return False
+
+
+def _agent_busy(pane_low: str) -> bool:
+    return any(m in pane_low for m in _AGENT_BUSY_MARKERS)
+
+
+def _agent_boot_screen(pane_low: str) -> bool:
+    return any(m in pane_low for m in _AGENT_BOOT_MARKERS)
+
+
+def _agent_idle_prompt(pane_low: str) -> bool:
+    """A live REPL waiting for input shows the prompt box + the "bypass
+    permissions on" footer (or a bare ❯ prompt)."""
+    if not pane_low:
+        return False
+    return ("bypass permissions on" in pane_low
+            or "\n❯ " in pane_low
+            or pane_low.rstrip().endswith("❯"))
+
+
+def _should_nudge_idle_agent(disable_bg: bool, alive: bool, halted: bool,
+                             paused: bool, concluding: bool,
+                             boot_screen: bool, busy: bool, idle_prompt: bool,
+                             idle_age: float, nudge_age: float, strikes: int,
+                             grace: float = _AGENT_IDLE_GRACE_SEC,
+                             cooldown: float = _AGENT_IDLE_COOLDOWN_SEC,
+                             max_strikes: int = _AGENT_IDLE_MAX_STRIKES) -> str:
+    """Pure, testable decision. Returns one of:
+      - "skip"       — a guard says do nothing right now (paused/halted/boot/…)
+      - "reset"      — the agent is working; clear idle tracking + strikes
+      - "wait"       — parked, but not long enough / cooling down
+      - "nudge"      — parked past grace + cooldown, under the strike cap -> nudge
+      - "hard_stall" — nudged max_strikes times with no progress -> get a human
+    """
+    if disable_bg or not alive or halted or paused or concluding or boot_screen:
+        return "skip"
+    if busy or not idle_prompt:
+        return "reset"
+    if idle_age < grace:
+        return "wait"
+    if strikes >= max_strikes:
+        return "hard_stall"
+    if nudge_age < cooldown:
+        return "wait"
+    return "nudge"
+
+
+def _agent_idle_state() -> dict:
+    from .db import SessionLocal
+    from .models import Setting
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(Setting.key == _AGENT_IDLE_KEY).first()
+        if row and isinstance(row.value, dict):
+            return dict(row.value)
+        return {}
+    finally:
+        db.close()
+
+
+def _agent_idle_save(v: dict | None) -> None:
+    from .db import SessionLocal
+    from .models import Setting
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(Setting.key == _AGENT_IDLE_KEY).first()
+        if v is None:
+            if row is not None:
+                db.delete(row)
+                db.commit()
+            return
+        if row is None:
+            db.add(Setting(key=_AGENT_IDLE_KEY, value=v))
+        else:
+            row.value = v
+        db.commit()
+    finally:
+        db.close()
+
+
+def _send_agent_nudge(text: str = _AGENT_NUDGE,
+                      session: str = _AGENT_SESSION) -> bool:
+    """Clear any half-typed draft in the prompt (C-u), then type + submit the
+    nudge. Best-effort — returns False on any tmux failure."""
+    try:
+        _sp.run(["tmux", "send-keys", "-t", session, "C-u"],
+                capture_output=True, timeout=4)
+        _sp.run(["tmux", "send-keys", "-t", session, "-l", text],
+                capture_output=True, timeout=4)
+        _sp.run(["tmux", "send-keys", "-t", session, "Enter"],
+                capture_output=True, timeout=4)
+        return True
+    except Exception:                                   # noqa: BLE001
+        return False
+
+
+def _supervise_research_agent() -> None:
+    """Un-park a research agent that is ALIVE but idling at its prompt while
+    research is supposed to be running. Deterministic, LOCAL + FAST (tmux +
+    SQLite only). Mirrors paper-mode's refeed_if_idle with a 3-strike breaker."""
+    from . import lifecycle, notify
+
+    disable_bg = bool(_os.environ.get("ARUI_DISABLE_BG"))
+    alive = _agent_alive()
+    try:
+        halted, _r = notify.research_halted()
+    except Exception:                                   # noqa: BLE001
+        halted = False
+    try:
+        paused = notify.research_paused()
+    except Exception:                                   # noqa: BLE001
+        paused = False
+    # Legit "the agent is waiting on the council, not on a human" states.
+    concluding = False
+    try:
+        from . import council
+        cs = (council.conclusion_state() or {}).get("status", "none")
+        concluding = cs in ("pending", "approved")
+    except Exception:                                   # noqa: BLE001
+        concluding = False
+
+    pane_low = _agent_pane_low() if alive else ""
+    busy = _agent_busy(pane_low)
+    boot_screen = _agent_boot_screen(pane_low)
+    idle_prompt = _agent_idle_prompt(pane_low)
+
+    state = _agent_idle_state()
+    now = _dt.datetime.now(_dt.timezone.utc).timestamp()
+
+    def _age(key: str) -> float:
+        iso = state.get(key)
+        if not iso:
+            return 1e9
+        try:
+            return max(0.0, now - _dt.datetime.fromisoformat(iso).timestamp())
+        except Exception:                               # noqa: BLE001
+            return 1e9
+
+    idle_age = _age("idle_since")
+    nudge_age = _age("last_nudge")
+    strikes = int(state.get("strikes", 0))
+
+    decision = _should_nudge_idle_agent(
+        disable_bg, alive, halted, paused, concluding, boot_screen, busy,
+        idle_prompt, idle_age, nudge_age, strikes)
+
+    if decision in ("skip", "reset"):
+        # Agent is working (reset) or a guard is active (skip) -> forget any
+        # idle tracking so the next genuine park starts fresh.
+        if state:
+            _agent_idle_save(None)
+        return
+
+    if decision == "wait":
+        if not state.get("idle_since"):
+            _agent_idle_save({"idle_since": _agent_iso(),
+                              "last_nudge": state.get("last_nudge"),
+                              "strikes": strikes})
+        return
+
+    if decision == "nudge":
+        ok = _send_agent_nudge()
+        new_strikes = strikes + 1
+        _agent_idle_save({"idle_since": state.get("idle_since") or _agent_iso(),
+                          "last_nudge": _agent_iso(),
+                          "strikes": new_strikes})
+        lifecycle.emit_event(
+            "agent_auto_continue",
+            (f"Research agent was idle at its prompt for {int(idle_age)}s "
+             f"(waiting for a human that isn't there) — auto-continued it "
+             f"(nudge {new_strikes}/{_AGENT_IDLE_MAX_STRIKES}): told it to "
+             f"launch the next on-mandate experiment or POST a conclusion."),
+            severity="info", actor="supervisor")
+        if not ok:
+            lifecycle.emit_event("supervisor_error",
+                                 "research-agent auto-continue send failed",
+                                 severity="warning")
+        return
+
+    if decision == "hard_stall":
+        if not state.get("escalated"):
+            lifecycle.set_health(
+                lifecycle.HARD_STALLED,
+                (f"research agent parked at its prompt through "
+                 f"{_AGENT_IDLE_MAX_STRIKES} auto-continues without making "
+                 f"progress — it needs a human directive or a decision to "
+                 f"conclude"))
+            lifecycle.emit_event(
+                "agent_hard_stall",
+                (f"Research agent ignored {_AGENT_IDLE_MAX_STRIKES} "
+                 f"auto-continue nudges — escalating to you."),
+                severity="critical", actor="supervisor")
+            st = dict(state)
+            st["escalated"] = True
+            _agent_idle_save(st)
+        return
