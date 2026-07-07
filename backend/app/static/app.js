@@ -127,6 +127,24 @@ const isKept    = s => KEPT_STATUSES.includes(s);
 const isDone    = s => isKept(s) || s === 'discarded';
 const isCrashed = s => s === 'crashed' || s === 'failed' || s === 'error';
 
+// Research-mode top-bar run counts. Extracted + id'd so paintStatusCounts()
+// can refresh them on EVERY data poll — they used to be built once inside
+// statusBar() and freeze at "running 0 / done 0" while runs piled up (the
+// stat tiles refreshed, the top-bar counts did not).
+function runCountsHTML() {
+  const running = S.runs.filter(r => r.status === 'running').length;
+  const q = S.ideas.filter(i => i.status === 'not_implemented').length;
+  const done = S.runs.filter(r => isDone(r.status)).length;
+  const fail = S.runs.filter(r => isCrashed(r.status)).length;
+  return `<span class="c-run">running <b>${running}</b></span>` +
+    `<span>queued <b>${q}</b></span><span>done <b>${done}</b></span>` +
+    `<span class="c-fail">failed <b>${fail}</b></span>`;
+}
+function paintStatusCounts() {
+  const c = document.getElementById('run-counts');
+  if (c) c.innerHTML = runCountsHTML();
+}
+
 function frontier(runs) {                  // mark running-best improvements
   // RESEARCH_IMPROVEMENT_PLAN #4: the frontier only counts kept_novel
   // runs. Success_smoke (probe / smoke tests) and kept_replicate
@@ -619,7 +637,7 @@ function render() {
   applyRailW();
   document.querySelector('.fab').onclick = () =>
     document.querySelector('.rail').classList.toggle('show');
-  if (!isPaperView) { paintHero(); paintStats(); paintTable(); }
+  if (!isPaperView) { paintHero(); paintStats(); paintTable(); paintStatusCounts(); }
   paintRail();
   pollGpus();
   pollBlessStatus();
@@ -1264,17 +1282,10 @@ function statusBar() {
   const alert = el('div', 'sb-alert'); alert.id = 'bless-inline';
   sb.append(alert);
   sb.append(el('div', 'sb-spacer'));
-  // run counts
-  const runs = S.runs.filter(r => r.status === 'running').length;
-  const q = S.ideas.filter(i => i.status === 'not_implemented').length;
-  // Use the SHARED taxonomy helpers so the research bar agrees with the paper
-  // bar (the old inline filter missed 'success' done + 'failed' crashes).
-  const done = S.runs.filter(r => isDone(r.status)).length;
-  const fail = S.runs.filter(r => isCrashed(r.status)).length;
-  sb.append(el('div', 'counts',
-    `<span class="c-run">running <b>${runs}</b></span>` +
-    `<span>queued <b>${q}</b></span><span>done <b>${done}</b></span>` +
-    `<span class="c-fail">failed <b>${fail}</b></span>`));
+  // run counts — id'd so paintStatusCounts() refreshes them on every poll.
+  const _cdiv = el('div', 'counts', runCountsHTML());
+  _cdiv.id = 'run-counts';
+  sb.append(_cdiv);
   // GPU strip (filled by pollGpus)
   const strip = el('div', 'gpu-strip'); strip.id = 'gpus';
   sb.append(strip);
@@ -3769,7 +3780,7 @@ async function refreshDashboardLive(reason) {
   // happens to be on Analysis or Lessons we still keep the data fresh so
   // when they navigate back to Dashboard the row is already there.
   if (S.view === 'dashboard') {
-    try { paintHero(); paintStats(); paintTable(); paintRail();
+    try { paintHero(); paintStats(); paintTable(); paintStatusCounts(); paintRail();
       document.querySelector('.hdr')?.replaceWith(header()); paintGpus();
     } catch (e) { /* ignore paint errors so the next tick can recover */ }
   } else if (S.view === 'analysis') {
