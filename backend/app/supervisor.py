@@ -210,11 +210,12 @@ def _supervise_completion_review() -> None:
 # question is truly answered, POST a conclusion. A human is never in the loop.
 
 import os as _os
+import re as _re
 import subprocess as _sp
 import datetime as _dt
 
 _AGENT_SESSION = "agent"
-_AGENT_IDLE_GRACE_SEC = 90          # parked-at-prompt this long before nudging
+_AGENT_IDLE_GRACE_SEC = 45          # parked-at-prompt this long before nudging
 _AGENT_IDLE_COOLDOWN_SEC = 90       # min gap between nudges
 _AGENT_IDLE_MAX_STRIKES = 3         # after N nudges with no progress -> human
 _AGENT_IDLE_KEY = "research_agent_idle_watch"
@@ -237,7 +238,16 @@ _AGENT_IDLE_KEY = "research_agent_idle_watch"
 _AGENT_BUSY_MARKERS = (
     "esc to interrupt",
     "compacting conversation",
+    "press up to edit queued",   # messages queued while the agent is working
 )
+
+# The live spinner ALWAYS carries an elapsed-time counter in parens —
+# "(35s · thinking some more)", "(2m 3s · ↓ 1.3k tokens)", "(37s · esc to
+# interrupt)". A finished/parked pane instead shows a PAST-TENSE line with NO
+# paren ("Cogitated for 5m 15s"). So "(<n>s" / "(<n>m" is the single most
+# reliable "actively generating" signal, catching active states that don't
+# happen to render "esc to interrupt" in the captured tail.
+_AGENT_SPINNER_RE = _re.compile(r"\(\d+\s*[ms]\b")
 # Boot / consent / auth screens — handled by realrun spawn + agent_watcher's
 # auth-zombie recovery, NOT by this watchdog. Don't nudge over them.
 # ONLY strings that appear during real boot / consent / auth — NOT the
@@ -284,7 +294,9 @@ def _agent_alive(session: str = _AGENT_SESSION) -> bool:
 
 
 def _agent_busy(pane_low: str) -> bool:
-    return any(m in pane_low for m in _AGENT_BUSY_MARKERS)
+    if any(m in pane_low for m in _AGENT_BUSY_MARKERS):
+        return True
+    return bool(_AGENT_SPINNER_RE.search(pane_low))
 
 
 def _agent_boot_screen(pane_low: str) -> bool:
@@ -433,7 +445,11 @@ def _supervise_research_agent() -> None:
         except Exception:                               # noqa: BLE001
             return 1e9
 
-    idle_age = _age("idle_since")
+    # First time we see the agent parked, idle_since is unset -> treat idle_age
+    # as 0 (clock just started) so we set idle_since and WAIT one grace window
+    # before the first nudge, instead of firing immediately. last_nudge keeps
+    # the 1e9 "never nudged" default so the first nudge isn't cooldown-blocked.
+    idle_age = _age("idle_since") if state.get("idle_since") else 0.0
     nudge_age = _age("last_nudge")
     strikes = int(state.get("strikes", 0))
 

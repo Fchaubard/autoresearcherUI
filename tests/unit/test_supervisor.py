@@ -364,3 +364,25 @@ def test_real_boot_consent_still_detected():
     from backend.app import supervisor as sv
     assert sv._agent_boot_screen("do you trust the files in this folder?".lower())
     assert sv._agent_boot_screen("not logged in · please run /login".lower())
+
+
+def test_live_spinner_reads_busy_completion_does_not():
+    """The live elapsed-time spinner '(35s · …)' means actively generating even
+    when 'esc to interrupt' isn't in the captured tail (e.g. 'Elucidating…').
+    The past-tense 'for 5m 15s' completion line must NOT read busy."""
+    from backend.app import supervisor as sv
+    assert sv._agent_busy("· elucidating… (35s · thinking some more)".lower())
+    assert sv._agent_busy("(2m 3s · ↓ 1.3k tokens)".lower())
+    assert sv._agent_busy("press up to edit queued messages".lower())
+    assert sv._agent_busy("✻ cogitated for 5m 15s".lower()) is False
+
+
+def test_first_park_tick_waits_then_nudges():
+    """Grace must actually apply: idle_age 0 (just parked) -> wait; only after
+    the grace window -> nudge."""
+    from backend.app import supervisor as sv
+    common = dict(disable_bg=False, alive=True, halted=False, paused=False,
+                  concluding=False, boot_screen=False, busy=False,
+                  idle_prompt=True, nudge_age=1e9, strikes=0)
+    assert sv._should_nudge_idle_agent(idle_age=0, **common) == "wait"
+    assert sv._should_nudge_idle_agent(idle_age=46, **common) == "nudge"
