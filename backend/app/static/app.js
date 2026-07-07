@@ -2022,7 +2022,15 @@ function tableRows() {
   let rows = runs.map(r => ({
     exp: '#' + r.exp, _exp_num: r.exp, id: r.id, kind: 'run',
     name: r.run_name, desc: ideaDesc(r.idea_id), status: r.status,
-    metric: r.headline_metric, delta: r.baseline_delta,
+    metric: r.headline_metric,
+    // Per-run vs-baseline delta. baseline_delta is often null in the DB, which
+    // rendered as "-0.0000"; compute it live from the project baseline (+
+    // metric direction) so the column matches the headline IMPROVEMENT card.
+    delta: (r.baseline_delta != null) ? r.baseline_delta
+      : ((r.headline_metric != null && S.project && S.project.baseline_metric != null)
+          ? (minimize() ? S.project.baseline_metric - r.headline_metric
+                        : r.headline_metric - S.project.baseline_metric)
+          : null),
     gpu: r.gpu_index, started: r.started_at, ended: r.ended_at,
   }));
   S.ideas.filter(i => i.status === 'not_implemented').forEach(i => {
