@@ -333,3 +333,34 @@ def test_past_tense_completion_line_is_not_busy():
     assert sv._agent_idle_prompt(low) is True
     # and the active form still reads busy:
     assert sv._agent_busy("improvising… (39s · esc to interrupt)".lower()) is True
+
+
+def test_selection_menu_is_idle_not_busy():
+    """The agent's INTERACTIVE SELECTION MENU ('enter to select · ↑/↓ to
+    navigate · esc to cancel') is a park state waiting on a human. Its "↑/↓ to
+    navigate" hint must NOT read as busy, and a stray "Welcome back!" in the
+    Claude Code chrome must NOT read as a boot screen — either bug made the
+    watchdog skip a genuinely-parked agent (observed live 2026-07-07)."""
+    from backend.app import supervisor as sv
+    menu = ("  ✻ Welcome back!\n"
+            "  1. run the sweep\n"
+            "  3. skip it, write up the final conclusion instead\n"
+            "  4. type something.\n"
+            "──────────\n"
+            "  enter to select · ↑/↓ to navigate · esc to cancel\n")
+    low = menu.lower()
+    assert sv._agent_busy(low) is False          # "↑/↓ to navigate" != busy
+    assert sv._agent_boot_screen(low) is False   # "Welcome back!" != boot
+    assert sv._agent_idle_prompt(low) is True     # menu == parked/awaiting human
+    # end-to-end decision: alive+running+parked past grace -> nudge
+    assert sv._should_nudge_idle_agent(
+        disable_bg=False, alive=True, halted=False, paused=False,
+        concluding=False, boot_screen=sv._agent_boot_screen(low),
+        busy=sv._agent_busy(low), idle_prompt=sv._agent_idle_prompt(low),
+        idle_age=120, nudge_age=1e9, strikes=0) == "nudge"
+
+
+def test_real_boot_consent_still_detected():
+    from backend.app import supervisor as sv
+    assert sv._agent_boot_screen("do you trust the files in this folder?".lower())
+    assert sv._agent_boot_screen("not logged in · please run /login".lower())

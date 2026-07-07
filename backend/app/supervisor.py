@@ -228,19 +228,24 @@ _AGENT_IDLE_KEY = "research_agent_idle_watch"
 # (cogitat/improvis/sauté/…): those appear in the finished-and-parked pane too
 # and would make the watchdog think a parked agent is still working (it never
 # nudges). Only the active-generation markers below are reliable.
+# "esc to interrupt" is shown ONLY while Claude Code is actively generating —
+# even the live token stream renders it as "(Ns · ↓ N tokens · esc to
+# interrupt)", so this one substring covers all active states. We deliberately
+# do NOT match the ↑/↓ arrows: those also appear in the interactive selection
+# menu's "↑/↓ to navigate" hint and in plain scrollback, which would make a
+# parked agent look busy and never get un-parked.
 _AGENT_BUSY_MARKERS = (
     "esc to interrupt",
-    "tokens · esc",
-    "↑ ",            # live "↑ N tokens" stream
-    "↓ ",            # live "↓ N tokens" stream
     "compacting conversation",
-    "esc to interrupt to",
 )
 # Boot / consent / auth screens — handled by realrun spawn + agent_watcher's
 # auth-zombie recovery, NOT by this watchdog. Don't nudge over them.
+# ONLY strings that appear during real boot / consent / auth — NOT the
+# "Welcome back!" chrome, which Claude Code keeps in scrollback for the whole
+# session and would permanently suppress the watchdog.
 _AGENT_BOOT_MARKERS = (
-    "do you trust", "welcome to claude", "welcome back", "yes, i accept",
-    "/login", "not logged in", "choose the text style", "select login method",
+    "do you trust", "yes, i accept", "not logged in", "please run /login",
+    "run /login",
 )
 
 _AGENT_NUDGE = (
@@ -291,7 +296,12 @@ def _agent_idle_prompt(pane_low: str) -> bool:
     permissions on" footer (or a bare ❯ prompt)."""
     if not pane_low:
         return False
+    # A parked REPL shows EITHER the plain prompt (bypass-permissions footer /
+    # bare ❯) OR an interactive selection menu ("enter to select · ↑/↓ to
+    # navigate · esc to cancel") where the agent is waiting for a human to pick
+    # an option. Both mean "idle, waiting on a human that isn't there".
     return ("bypass permissions on" in pane_low
+            or "enter to select" in pane_low
             or "\n❯ " in pane_low
             or pane_low.rstrip().endswith("❯"))
 
@@ -361,10 +371,19 @@ def _send_agent_nudge(text: str = _AGENT_NUDGE,
     """Clear any half-typed draft in the prompt (C-u), then type + submit the
     nudge. Best-effort — returns False on any tmux failure."""
     try:
+        import time as _t
+        # Escape cancels any open interactive selection menu (the agent's
+        # "enter to select · esc to cancel" prompt) so we land back on the text
+        # prompt; harmless at a plain prompt. Then C-u clears any half-typed
+        # draft, and we type + submit the nudge.
+        _sp.run(["tmux", "send-keys", "-t", session, "Escape"],
+                capture_output=True, timeout=4)
+        _t.sleep(0.3)
         _sp.run(["tmux", "send-keys", "-t", session, "C-u"],
                 capture_output=True, timeout=4)
         _sp.run(["tmux", "send-keys", "-t", session, "-l", text],
                 capture_output=True, timeout=4)
+        _t.sleep(0.2)
         _sp.run(["tmux", "send-keys", "-t", session, "Enter"],
                 capture_output=True, timeout=4)
         return True
