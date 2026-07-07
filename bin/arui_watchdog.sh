@@ -26,6 +26,10 @@
 #   It NEVER touches the agent / author sessions, and never kills a healthy
 #   backend (single transient healthz blip is tolerated via the 2-strike
 #   marker so we don't fight PR 10's normal 2s respawn window).
+#
+#   Deployment env (ARUI_CLAUDE_BIN, ARUI_TELEMETRY_DISABLED, ARUI_DATA_DIR
+#   override, …) is read from an OPTIONAL, gitignored `data/arui.env` if it
+#   exists, so a respawned backend matches how it was first launched.
 set -u
 
 ROOT="${ARUI_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -41,7 +45,7 @@ backend_up()   { curl -fsS -m 3 "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1
 launch_backend() {
   tmux kill-session -t arui 2>/dev/null || true
   tmux new-session -d -s arui \
-    "cd $ROOT && while true; do \
+    "cd $ROOT && { [ -f data/arui.env ] && set -a && . ./data/arui.env && set +a; } ; while true; do \
        ARUI_PORT=$PORT .venv/bin/python -m backend.main 2>&1 | tee -a $LOG; \
        echo \"[arui] backend exited at \$(date -u +%FT%TZ); respawning in 2s\" >>$LOG; \
        sleep 2; \
