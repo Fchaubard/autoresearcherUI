@@ -2013,24 +2013,21 @@ textarea.onb-in{resize:vertical;line-height:1.5}
 
 /* ── Halt Research: big red scary interrupt button ─────────────────────── */
 .halt-btn {
-  background: #b91c1c;
-  color: #fff;
-  border: 1px solid #ef4444;
-  font-weight: 700;
-  letter-spacing: .02em;
-  padding: 8px 14px;
-  border-radius: 8px;
+  background: transparent;
+  color: var(--bad);
+  border: 1px solid var(--bad);
+  font-weight: 600;
+  letter-spacing: .01em;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
   cursor: pointer;
-  box-shadow: 0 0 0 0 rgba(239,68,68,.5);
-  animation: haltPulse 2.4s infinite;
+  opacity: .85;
+  transition: background .15s ease, border-color .15s ease, opacity .15s ease;
 }
-.halt-btn:hover { background: #dc2626; }
-.halt-btn:disabled { opacity: .5; animation: none; cursor: default; }
-@keyframes haltPulse {
-  0%   { box-shadow: 0 0 0 0 rgba(239,68,68,.45); }
-  70%  { box-shadow: 0 0 0 8px rgba(239,68,68,0); }
-  100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); }
-}
+.halt-btn:hover { background: rgba(248,113,113,.10); border-color: var(--crash);
+  color: var(--crash); opacity: 1; }
+.halt-btn:disabled { opacity: .4; cursor: default; }
 .halt-lbl { display:block; margin:10px 0 4px; font-size:12px;
   color: var(--muted); font-weight:600; }
 .halt-ta { width:100%; box-sizing:border-box; background:var(--panel,#12151c);
