@@ -50,6 +50,7 @@ _RELOAD_MODULES = [
     "backend.app.lifecycle",
     "backend.app.supervisor",
     "backend.app.interrupt",
+    "backend.app.experiment_isolation",
     "backend.app.api",
     "backend.app",
     "backend",

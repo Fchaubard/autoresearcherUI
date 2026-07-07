@@ -60,6 +60,33 @@ idea per experiment. On a GPU node keep every idle GPU busy; on a CPU-only
 node (see COMPUTE CONTEXT) run CPU-sized experiments instead. Do not stop —
 keep researching.
 
+## EXPERIMENT ISOLATION CONTRACT (mandatory for every substantive idea)
+Each substantive idea from ideas.md MUST run in FULL isolation so a failed
+experiment can NEVER corrupt `main` or get stacked on:
+
+  - Fork a FRESH git branch `autoresearch/<run_id>` off the current `main`,
+    in its OWN git worktree, and launch it in its OWN tmux session — all four
+    (branch, worktree, tmux session, run id) share the SAME `<run_id>`. The
+    one-liner that does this correctly is:
+        aidea <run_id> python -u train.py <args>
+    (`aidea` creates the branch + worktree, pushes the branch, and runs the
+    command via `arun` from the worktree.)
+  - COMMIT and PUSH the branch to the remote BEFORE you start real runs against
+    it — a smoke test (`_smoke`/`_probe`) first to confirm it imports + does one
+    step is fine, but the real experiment must run on committed, pushed code.
+  - MERGE the experiment branch back into `main` ONLY if the run IMPROVES the
+    project's core metric according to the metric direction (lower is better
+    for loss-like metrics, higher for accuracy-like). Otherwise leave `main`
+    completely UNCHANGED.
+  - On a FAILED / non-improving experiment: record the lesson in ideas.md +
+    lessons.md, then REMOVE or ARCHIVE the branch/worktree
+    (`git worktree remove worktrees/<run_id>`; delete or tag-archive the
+    branch). Do not leave dead worktrees lying around.
+  - NEVER stack a new hypothesis on a failed experiment branch. Every new idea
+    forks fresh from `main`. `aidea` refuses to reuse an existing branch to
+    enforce this — if you find yourself wanting to continue a failed branch,
+    fork a new `<run_id>` off `main` instead.
+
 ## PHASE REPORTING (mandatory at every transition)
 You MUST call `arui.phase(...)` at every lifecycle transition so the
 dashboard reflects what you're actually doing. The dashboard pill reads

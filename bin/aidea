@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# aidea — run ONE research idea in FULL isolation, per the experiment isolation
+# contract. Each idea gets its own git branch + worktree + tmux session, all
+# sharing the same <run_id>, so a failed experiment can never corrupt main or
+# be stacked on.
+#
+#   aidea <run_id> <command...>
+#   e.g.  aidea diff-t-schedule python -u train.py --solver spsa --t-schedule
+#
+# What it does:
+#   1. refuse if branch autoresearch/<run_id> already exists (fresh fork only —
+#      NEVER stack a new hypothesis on an existing/failed branch);
+#   2. create branch autoresearch/<run_id> + worktree worktrees/<run_id> off
+#      the current HEAD of main;
+#   3. push the branch to origin (best-effort) BEFORE the run;
+#   4. launch <command> in a tmux session named <run_id> FROM the worktree
+#      (via arun, so it streams to the Sessions tab + logs).
+#
+# Merge back into main ONLY if the run improves the core metric. On failure,
+# leave main untouched, record the lesson in ideas.md/lessons.md, and remove or
+# archive the branch/worktree. Do NOT reuse a failed branch.
+set -u
+if [ "$#" -lt 2 ]; then
+  echo "usage: aidea <run_id> <command...>" >&2
+  exit 2
+fi
+RID="$1"; shift
+[ "${1:-}" = "--" ] && shift
+case "$RID" in
+  ""|-*|*[!A-Za-z0-9_.=-]*) echo "aidea: invalid run id '$RID'" >&2; exit 2;;
+esac
+BRANCH="autoresearch/$RID"
+WT="worktrees/$RID"
+HERE="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$HERE" || exit 2
+
+if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+  echo "aidea: branch '$BRANCH' already exists — start a FRESH idea instead of" >&2
+  echo "       stacking on an existing (possibly failed) branch." >&2
+  exit 3
+fi
+
+echo "aidea: creating branch '$BRANCH' + worktree '$WT'…"
+mkdir -p worktrees
+git worktree add -b "$BRANCH" "$WT" HEAD >/dev/null 2>&1 || {
+  echo "aidea: git worktree add failed" >&2; exit 4; }
+
+# Push the fresh branch before running (best-effort; needs a configured remote).
+if git remote get-url origin >/dev/null 2>&1; then
+  git -C "$WT" push -u origin "$BRANCH" >/dev/null 2>&1 \
+    && echo "aidea: pushed '$BRANCH' to origin" \
+    || echo "aidea: WARN could not push '$BRANCH' (check remote/auth)"
+fi
+
+# Launch the command inside the worktree via arun (Sessions tab + log).
+cd "$WT" || exit 5
+ARUN="$(command -v arun || echo "$HERE/bin/arun")"
+exec "$ARUN" "$RID" "$@"
