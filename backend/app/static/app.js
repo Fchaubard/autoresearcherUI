@@ -39,7 +39,22 @@ const el = (t, c, h) => { const n = document.createElement(t);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
   m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;',
           '"': '&quot;', "'": '&#39;' }[m]));
-const fmt = (v, d = 4) => (v == null || isNaN(v)) ? '—' : (+v).toFixed(d);
+const fmt = (v, d = 4) => {
+  if (v == null || isNaN(v)) return '—';
+  v = +v;
+  const a = Math.abs(v);
+  // Fixed decimals hide small-but-real values: MSE of weekly S&P returns is
+  // ~5e-4, so toFixed(3) shows "0.000"/"0.001" and every run looks identical /
+  // like a meaningless perfect 0. For magnitudes below the fixed-decimal grid
+  // (and nonzero) show 3 significant figures instead.
+  if (a !== 0 && a < 1e-2) {
+    const p = v.toPrecision(3);
+    // trim scientific only when it's not actually needed (keep e-notation for
+    // very small so it stays short)
+    return p;
+  }
+  return v.toFixed(d);
+};
 // _fmtCfgVal — render a config value for the drawer's "Config — what changed"
 // section. Long strings (>80 chars) or many-item comma lists (>3) get
 // truncated to a short preview with a [show all] expander so the value never
@@ -205,7 +220,10 @@ class ProgressChart {
       const val = log ? 10 ** (yhi - i / 4 * (yhi - ylo)) : yhi - i / 4 * (yhi - ylo);
       c.strokeStyle = '#1b1f25'; c.lineWidth = 1;
       c.beginPath(); c.moveTo(pad.l, yy); c.lineTo(w - pad.r, yy); c.stroke();
-      c.fillStyle = '#5C636B'; c.fillText(val < 100 ? val.toFixed(2) : val.toExponential(0), pad.l - 8, yy);
+      c.fillStyle = '#5C636B';
+      const _axl = (Math.abs(val) > 0 && Math.abs(val) < 0.01) ? val.toExponential(1)
+                 : (val < 100 ? val.toFixed(2) : val.toExponential(0));
+      c.fillText(_axl, pad.l - 8, yy);
     }
     // x labels
     c.textAlign = 'center'; c.textBaseline = 'top';
