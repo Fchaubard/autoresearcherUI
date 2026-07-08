@@ -557,7 +557,12 @@ def _compute_context_note() -> str:
         "baselines/probes whenever feasible (small models, small batches, "
         "short runs). Only if the research GENUINELY cannot proceed without a "
         "GPU, state that clearly as a hardware blocker and stop spending "
-        "compute - but keep making CPU-sized progress until then.")
+        "compute - but keep making CPU-sized progress until then.\n"
+        "PARALLELISM: because each CPU run here is cheap (often seconds), do "
+        "NOT run experiments strictly one-at-a-time. Launch a BATCH of up to 8 "
+        "runs in parallel - each via `arun <run_id> ...` in its own background "
+        "tmux session - then wait for the batch to finish before analyzing and "
+        "queuing the next batch. This keeps throughput high without a GPU.")
 
 
 def _setup_prompt(cfg: dict) -> str:

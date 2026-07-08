@@ -430,3 +430,55 @@ def test_model_context_label_is_not_a_spinner():
               "  ⏵⏵ bypass permissions on (shift+tab to cycle")
     assert sv._agent_busy(parked.lower()) is False
     assert sv._agent_idle_prompt(parked.lower()) is True
+
+
+# ── hung-run reaper ─────────────────────────────────────────────────────────
+def test_run_cap_honours_estimate_and_default():
+    from backend.app import supervisor as sv
+    # no estimate -> the global default
+    assert sv._run_cap_sec(0, default=1800, factor=3) == 1800
+    # long estimate -> 3x headroom wins
+    assert sv._run_cap_sec(1000, default=1800, factor=3) == 3000
+
+
+def test_should_reap_only_running_overrun():
+    from backend.app import supervisor as sv
+    D, F = 1800, 3
+    # running, well past the default cap -> reap
+    assert sv._should_reap_run("running", 2000, 0, D, F) is True
+    # running but within cap -> keep
+    assert sv._should_reap_run("running", 100, 0, D, F) is False
+    # running, within its estimate's headroom -> keep
+    assert sv._should_reap_run("running", 2500, 1000, D, F) is False  # cap=3000
+    # finished / queued runs are never reaped
+    assert sv._should_reap_run("kept_novel", 999999, 0, D, F) is False
+    assert sv._should_reap_run("queued", 999999, 0, D, F) is False
+    # missing started_at (elapsed None) -> can't judge -> keep
+    assert sv._should_reap_run("running", None, 0, D, F) is False
+
+
+def test_reaper_kills_and_marks_crashed(arui_env, make_project, make_run, monkeypatch):
+    """Integration: a RUNNING run past its cap is killed + marked crashed."""
+    import datetime as dt
+    import backend.app.supervisor as sv
+    from backend.app import tmux_safe
+    from backend.app.db import SessionLocal
+    from backend.app.models import Run
+    make_project()
+    old = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=2)).isoformat()
+    make_run(id="hung1", run_name="hung1", status="running",
+             started_at=old, est_time_sec=10)
+    killed = []
+    monkeypatch.setattr(tmux_safe, "kill_session",
+                        lambda name, **k: killed.append(name) or (True, ""))
+    monkeypatch.setattr(tmux_safe, "valid_name", lambda n: True)
+    sv._supervise_stuck_runs()
+    db = SessionLocal()
+    try:
+        r = db.query(Run).filter(Run.id == "hung1").first()
+        assert r.status == "crashed"
+        assert r.ended_at
+        assert r.config.get("killed_by") == "supervisor:timeout"
+    finally:
+        db.close()
+    assert "hung1" in killed   # its tmux session was killed

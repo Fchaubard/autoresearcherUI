@@ -44,6 +44,10 @@ def tick() -> None:
         _supervise_research_agent()
     except Exception as e:                              # noqa: BLE001
         print(f"[supervisor] research-agent tick error: {e}", flush=True)
+    try:
+        _supervise_stuck_runs()
+    except Exception as e:                              # noqa: BLE001
+        print(f"[supervisor] stuck-run tick error: {e}", flush=True)
 
 
 # Paper-mode phases where the Author Agent is supposed to be actively working
@@ -533,3 +537,90 @@ def _supervise_research_agent() -> None:
             st["escalated"] = True
             _agent_idle_save(st)
         return
+
+
+# ── hung-run reaper ───────────────────────────────────────────────────────
+# A run launched via `arun` gets its own tmux session and streams to the
+# dashboard, but nothing capped its wall-clock: we saw a dummy-mean SMOKE test
+# run 158 minutes when the median run is ~2s. A hung run burns hours, keeps a
+# "running" row forever, and makes the loop look stalled. This caps each
+# RUNNING run: past the cap, kill its tmux session (best-effort — the arun
+# session is named after the run id/name) and mark it crashed so the loop moves
+# on. The cap honours the agent's own est_time_sec (3x headroom) so a
+# legitimately long run is not killed early. Tune via ARUI_RUN_TIMEOUT_SEC.
+
+_RUN_TIMEOUT_SEC = int(_os.environ.get("ARUI_RUN_TIMEOUT_SEC", "1800"))  # 30 min
+_RUN_OVERRUN_FACTOR = 3
+
+
+def _run_cap_sec(est_time_sec, default: int = _RUN_TIMEOUT_SEC,
+                 factor: int = _RUN_OVERRUN_FACTOR) -> int:
+    """Wall-clock a RUNNING run is allowed before we reap it: the larger of the
+    global default and (the agent's estimate x a headroom factor)."""
+    return max(int(default), int(est_time_sec or 0) * int(factor))
+
+
+def _should_reap_run(status: str, elapsed_sec, est_time_sec,
+                     default: int = _RUN_TIMEOUT_SEC,
+                     factor: int = _RUN_OVERRUN_FACTOR) -> bool:
+    """Pure, testable: should this run be reaped for overrunning its cap?"""
+    if status != "running":
+        return False
+    if elapsed_sec is None:
+        return False
+    return float(elapsed_sec) > _run_cap_sec(est_time_sec, default, factor)
+
+
+def _run_elapsed_sec(started_at, now) -> float | None:
+    if not started_at:
+        return None
+    try:
+        st = _dt.datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+        if st.tzinfo is None:
+            st = st.replace(tzinfo=_dt.timezone.utc)
+        return max(0.0, (now - st).total_seconds())
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+def _supervise_stuck_runs() -> None:
+    """Kill + mark-crashed any RUNNING run that has overrun its wall-clock cap.
+    Deterministic, LOCAL + FAST (SQLite + tmux only)."""
+    from .db import SessionLocal
+    from .models import Run
+    from . import tmux_safe, lifecycle
+    from sqlalchemy.orm.attributes import flag_modified
+
+    now = _dt.datetime.now(_dt.timezone.utc)
+    db = SessionLocal()
+    try:
+        running = db.query(Run).filter(Run.status == "running").all()
+        for r in running:
+            elapsed = _run_elapsed_sec(r.started_at, now)
+            if not _should_reap_run(r.status, elapsed, r.est_time_sec):
+                continue
+            cap = _run_cap_sec(r.est_time_sec)
+            # Best-effort kill: arun names the session after the run id/name.
+            for cand in (r.tmux_session, r.run_name, r.id):
+                if cand and tmux_safe.valid_name(cand):
+                    try:
+                        tmux_safe.kill_session(cand)
+                    except Exception:                   # noqa: BLE001
+                        pass
+            r.status = "crashed"
+            r.ended_at = now.isoformat()
+            cfg = dict(r.config) if isinstance(r.config, dict) else {}
+            cfg["killed_by"] = "supervisor:timeout"
+            cfg["killed_reason"] = (
+                f"exceeded {cap}s wall-clock cap ({int(elapsed)}s elapsed)")
+            r.config = cfg
+            flag_modified(r, "config")
+            db.commit()
+            lifecycle.emit_event(
+                "run_reaped",
+                (f"Killed hung run '{r.run_name}' — ran {int(elapsed // 60)}m, "
+                 f"over the {cap // 60}m cap. Marked crashed so the loop moves "
+                 f"on."),
+                severity="warning", actor="supervisor")
+    finally:
+        db.close()
