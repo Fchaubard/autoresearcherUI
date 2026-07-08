@@ -368,6 +368,13 @@ INTERVENE if you see any of:
     idea from ideas.md.
   - The agent is ignoring the council's reranking (running its own pick
     instead of the top pending row).
+  - THE AGENT STOPPED / IDLED / IS ASKING THE OPERATOR. The operator's #1
+    priority is RELENTLESS exploration — the agent must NEVER stop, idle, ask
+    for a decision, or conclude while compute is available. If you see it park,
+    idle, "await your go-ahead", or wrap up, tell it to IMMEDIATELY generate and
+    run a batch of 10-20 NEW, diverse ideas (new features, new estimator
+    families, ensembles, hyperparameters) and keep going. The idea space is
+    effectively infinite; trying a few dozen ideas is nowhere near enough.
   - THE AGENT IS GIVING UP / heading for a NEGATIVE result. If the terminal or
     a conclusion shows the agent wrapping up with "nothing works", "not
     predictable", "no model beats the baseline", "the answer is that it can't

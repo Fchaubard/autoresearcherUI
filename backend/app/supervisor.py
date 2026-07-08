@@ -273,15 +273,14 @@ _AGENT_NUDGE = (
     "FIRST, if you have not started yet, Read _setup_prompt.txt in this "
     "directory — it is your full research brief — and follow it. "
     "Re-read your mandate now: the project purpose, directives.jsonl, and "
-    "ideas.md. Then do exactly ONE of these immediately: (a) pick the single "
-    "best remaining on-mandate experiment — ideally a MORE ambitious / "
-    "orthogonal one — and launch it, or (b) ONLY if you have a POSITIVE, "
-    "validated result that BEATS the baseline, POST your conclusion to "
-    "/api/research/conclude. Do NOT conclude a negative/null result ('nothing "
-    "worked', 'not achievable', 'ties the baseline') just because earlier "
-    "attempts plateaued — that is giving up; keep trying harder, or if truly "
-    "exhausted escalate to the operator. Decide and act - never wait for a "
-    "human."
+    "ideas.md. Then IMMEDIATELY generate a batch of 10-20 NEW, DIVERSE "
+    "on-mandate experiments (new feature sets, new estimator families, "
+    "ensembles/stacking, new hyperparameters, target transforms) and launch "
+    "them in parallel. The operator's #1 priority is RELENTLESS exploration: "
+    "NEVER stop, NEVER idle, NEVER ask the operator for a decision, and do NOT "
+    "conclude — the scikit-learn idea space is effectively infinite, so if one "
+    "direction plateaus, PIVOT to a different family/feature set and keep "
+    "going. Keep researching forever until the operator halts you."
 )
 
 

@@ -418,6 +418,24 @@ Only once ALL FOUR are cleared:
   council will REJECT a premature or lazy conclusion and send you back to
   work — and it is right to.
 
+  RELENTLESS EXPLORATION IS THE OPERATOR'S #1 PRIORITY. The operator wants you
+  to KEEP GOING and try a HUGE number of ideas — never stop, never idle, never
+  ask permission to continue, never conclude while you still have compute. The
+  scikit-learn idea space is effectively UNBOUNDED: feature engineering (dozens
+  of technical indicators, multiple lag/rolling windows, interactions, ratios,
+  volatility/regime features, PCA/ICA, Fourier & wavelet features, target
+  transforms), 30+ estimator families (Ridge/Lasso/ElasticNet/BayesianRidge/ARD/
+  Huber/Quantile/TheilSen/RANSAC/SVR/KernelRidge/KNN/DecisionTree/RandomForest/
+  ExtraTrees/GradientBoosting/HistGBR/AdaBoost/Bagging/MLP/GaussianProcess/PLS/…),
+  ensembling & stacking, dozens of cross-validation schemes, and enormous
+  hyperparameter grids. Trying ~30 ideas and stopping is ~1/1,000,000 of the
+  space — completely unacceptable. Your STEADY STATE is: generate a batch of
+  10-20 NEW, DIVERSE ideas, run them in parallel, read the results, then
+  generate the next batch — and repeat FOREVER until the operator halts you. If
+  one direction plateaus, PIVOT to a different family / feature set and keep
+  going. Do NOT stop to ask the operator for a decision, and do NOT conclude —
+  just keep researching.
+
   NO LABEL-GAMING (the #1 way agents give up). "The best model only ties the
   baseline", "X is not predictable / not achievable", "no method beat the
   control", "the answer is conclusively that nothing works" is a NEGATIVE
