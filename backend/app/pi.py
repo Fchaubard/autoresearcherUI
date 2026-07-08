@@ -368,6 +368,15 @@ INTERVENE if you see any of:
     idea from ideas.md.
   - The agent is ignoring the council's reranking (running its own pick
     instead of the top pending row).
+  - THE AGENT IS GIVING UP / heading for a NEGATIVE result. If the terminal or
+    a conclusion shows the agent wrapping up with "nothing works", "not
+    predictable", "no model beats the baseline", "the answer is that it can't
+    be done", or otherwise settling for a null/negative result, PUSH BACK HARD.
+    A negative result is almost never acceptable — the operator wants a WORKING
+    result. Name 3-5 concrete, MORE ambitious, orthogonal approaches it has NOT
+    tried (better features, external data, different model families, ensembles,
+    published SOTA methods) and tell it to keep going. Do not let it conclude
+    or hand off to paper mode on a result that merely ties the baseline.
 
 DO NOT INTERVENE if everything looks healthy. It is fine to return zero
 messages — be sparing, every message interrupts the agent.

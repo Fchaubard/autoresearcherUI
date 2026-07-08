@@ -272,10 +272,14 @@ _AGENT_NUDGE = (
     "confirmation or say \"your call\". You are the autonomous research agent. "
     "Re-read your mandate now: the project purpose, directives.jsonl, and "
     "ideas.md. Then do exactly ONE of these immediately: (a) pick the single "
-    "best remaining on-mandate experiment and launch it, or (b) if you are "
-    "confident the research question is fully answered, POST your conclusion "
-    "to /api/research/conclude with your evidence. Decide and act - never wait "
-    "for a human."
+    "best remaining on-mandate experiment — ideally a MORE ambitious / "
+    "orthogonal one — and launch it, or (b) ONLY if you have a POSITIVE, "
+    "validated result that BEATS the baseline, POST your conclusion to "
+    "/api/research/conclude. Do NOT conclude a negative/null result ('nothing "
+    "worked', 'not achievable', 'ties the baseline') just because earlier "
+    "attempts plateaued — that is giving up; keep trying harder, or if truly "
+    "exhausted escalate to the operator. Decide and act - never wait for a "
+    "human."
 )
 
 

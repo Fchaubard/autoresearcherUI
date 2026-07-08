@@ -490,7 +490,14 @@ _AUTHOR_BRIEF = (
     "paper_figures.md, lessons.md. Report each phase via POST "
     "/api/paper/phase. You are on AUTOPILOT: there are no human approval "
     "gates, so do not stop and wait for anyone. Keep going until the PI and "
-    "council stop finding issues."
+    "council stop finding issues. "
+    "BUT: if the research you were handed is a NEGATIVE / NULL result — its "
+    "central finding is that nothing worked, the baseline was not beaten, or "
+    "the problem is 'unsolvable' — do NOT write it up as a finished paper. A "
+    "paper needs a genuine POSITIVE contribution. Instead POST /api/paper/phase "
+    "with a blocker note that the research produced no positive result to "
+    "publish and must return to Research mode for a real result; do not polish "
+    "a negative result into a submission."
 )
 
 # Substrings that mean Claude Code is actively working (brief was accepted).
