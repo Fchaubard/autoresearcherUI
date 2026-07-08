@@ -540,16 +540,17 @@ def _supervise_research_agent() -> None:
 
 
 # ── hung-run reaper ───────────────────────────────────────────────────────
-# A run launched via `arun` gets its own tmux session and streams to the
-# dashboard, but nothing capped its wall-clock: we saw a dummy-mean SMOKE test
-# run 158 minutes when the median run is ~2s. A hung run burns hours, keeps a
-# "running" row forever, and makes the loop look stalled. This caps each
-# RUNNING run: past the cap, kill its tmux session (best-effort — the arun
-# session is named after the run id/name) and mark it crashed so the loop moves
-# on. The cap honours the agent's own est_time_sec (3x headroom) so a
-# legitimately long run is not killed early. Tune via ARUI_RUN_TIMEOUT_SEC.
+# BACKSTOP for the primary wall-clock kill. monitor.py already applies
+# kill_criteria (default "1 hour") to every run — BUT only to runs it can match
+# to a LIVE tmux session (`if not alive: continue`). Agent runs record an empty
+# `tmux_session`, so a run whose arun session name != its run id is invisible to
+# that killer and can hang forever (we saw a dummy-mean SMOKE test run 158 min).
+# This backstop acts on DB state ALONE — no session match required — so such a
+# run still gets reaped. Cap sits ABOVE the 1h primary (2h default) so it never
+# preempts a legitimately-configured long run; it only catches what the primary
+# missed. Honours est_time_sec (3x). Tune via ARUI_RUN_TIMEOUT_SEC.
 
-_RUN_TIMEOUT_SEC = int(_os.environ.get("ARUI_RUN_TIMEOUT_SEC", "1800"))  # 30 min
+_RUN_TIMEOUT_SEC = int(_os.environ.get("ARUI_RUN_TIMEOUT_SEC", "7200"))  # 2h backstop
 _RUN_OVERRUN_FACTOR = 3
 
 

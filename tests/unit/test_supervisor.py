@@ -465,7 +465,7 @@ def test_reaper_kills_and_marks_crashed(arui_env, make_project, make_run, monkey
     from backend.app.db import SessionLocal
     from backend.app.models import Run
     make_project()
-    old = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=2)).isoformat()
+    old = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=3)).isoformat()
     make_run(id="hung1", run_name="hung1", status="running",
              started_at=old, est_time_sec=10)
     killed = []
