@@ -2782,7 +2782,10 @@ function renderAgentRail(c, which) {
         'what is this agent?</button>' +
       '<div class="rail-agent-desc-body">' + cfg.desc + '</div>' +
     '</div>' +
-    pausedBanner;
+    pausedBanner +
+    '<div class="rail-paused-banner rail-ended-banner" id="' + cfg.statusId +
+      '-ended" style="display:none;border-color:var(--bad);' +
+      'background:rgba(244,63,94,.10)"></div>';
   const termHost = createRailTerm(cfg.session);
   termHost.container.id = cfg.hostId;
   c.appendChild(termHost.container);
@@ -2817,33 +2820,24 @@ function renderAgentRail(c, which) {
         stat.textContent = running ? '● running' : '○ ended';
         stat.style.color = running ? 'var(--ok)' : 'var(--muted)';
       }
-      // When the session is DEAD, the terminal below is just a frozen last
-      // frame — typing into it goes nowhere (this confused the operator: "I
-      // can't type / shift+tab is ignored"). Overlay a clear banner + point at
-      // the restart button, instead of presenting a dead pane as if it's live.
-      const host = document.getElementById(cfg.hostId);
-      if (host) {
-        let ov = host.querySelector('.agent-dead-overlay');
-        // If the rail already shows the paper-mode 'research is paused' banner,
-        // that explains the frozen pane — don't stack a second banner.
-        const hasPaperPause = !!document.querySelector('.rail-paused-banner');
-        if (!running && !hasPaperPause) {
-          if (!ov) {
-            host.style.position = host.style.position || 'relative';
-            ov = el('div', 'agent-dead-overlay',
-              'This agent’s session has ended — research concluded or the agent '
-              + 'exited. The terminal below is a frozen last frame, so typing '
-              + 'here (and shortcuts like shift+tab) does nothing. Click '
-              + '<b>↻ restart</b> above to start a fresh session.');
-            ov.style.cssText = 'position:absolute;top:0;left:0;right:0;z-index:5;'
-              + 'padding:10px 12px;background:var(--panel);'
-              + 'border:1px solid var(--bad);border-radius:6px;margin:6px;'
-              + 'color:var(--text);font-size:12px;line-height:1.45;'
-              + 'pointer-events:none;box-shadow:0 4px 16px rgba(0,0,0,.4);';
-            host.appendChild(ov);
+      // Dead session -> the terminal below is a frozen last frame; typing
+      // there goes nowhere (operator hit this: "can't type / shift+tab
+      // ignored"). Show a clean IN-FLOW banner above the frozen pane (no
+      // absolute overlay -> no visual overlap). In paper mode the pausedBanner
+      // already explains it, so we suppress this one there.
+      const endedBanner = document.getElementById(cfg.statusId + '-ended');
+      if (endedBanner) {
+        if (!running && !isPaperMode) {
+          if (!endedBanner.innerHTML) {
+            endedBanner.innerHTML =
+              '⏹ <b>This session has ended</b> — research concluded or the '
+              + 'agent exited. The terminal below is a frozen last frame, so '
+              + 'typing here (and shortcuts like shift+tab) does nothing. Click '
+              + '<b>↻ restart</b> above to start a fresh session.';
           }
-        } else if (ov) {
-          ov.remove();
+          endedBanner.style.display = '';
+        } else {
+          endedBanner.style.display = 'none';
         }
       }
     } catch (e) { /* keep last */ }
