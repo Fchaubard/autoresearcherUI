@@ -482,3 +482,17 @@ def test_reaper_kills_and_marks_crashed(arui_env, make_project, make_run, monkey
     finally:
         db.close()
     assert "hung1" in killed   # its tmux session was killed
+
+
+def test_auto_mode_footer_reads_as_idle_prompt():
+    """New Claude Code defaults to 'auto mode on' (not 'bypass permissions on').
+    The mode-independent '(shift+tab to cycle)' footer must be detected as an
+    idle prompt, or a boot-parked agent is invisible to the watchdog."""
+    from backend.app import supervisor as sv
+    welcome = ('  Opus 4.8 (1M context) · API Usage Billing\n'
+               '❯ Try "how does <filepath> work?"\n'
+               '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents')
+    low = welcome.lower()
+    assert sv._agent_idle_prompt(low) is True
+    assert sv._agent_busy(low) is False
+    assert sv._agent_boot_screen(low) is False

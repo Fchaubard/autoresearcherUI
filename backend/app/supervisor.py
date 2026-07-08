@@ -270,6 +270,8 @@ _AGENT_BOOT_MARKERS = (
 _AGENT_NUDGE = (
     "[AUTONOMY - no human is watching this session] Do not stop and ask for "
     "confirmation or say \"your call\". You are the autonomous research agent. "
+    "FIRST, if you have not started yet, Read _setup_prompt.txt in this "
+    "directory — it is your full research brief — and follow it. "
     "Re-read your mandate now: the project purpose, directives.jsonl, and "
     "ideas.md. Then do exactly ONE of these immediately: (a) pick the single "
     "best remaining on-mandate experiment — ideally a MORE ambitious / "
@@ -325,7 +327,9 @@ def _agent_idle_prompt(pane_low: str) -> bool:
     # bare ❯) OR an interactive selection menu ("enter to select · ↑/↓ to
     # navigate · esc to cancel") where the agent is waiting for a human to pick
     # an option. Both mean "idle, waiting on a human that isn't there".
-    return ("bypass permissions on" in pane_low
+    return ("shift+tab to cycle" in pane_low       # idle footer, any mode
+            or "bypass permissions on" in pane_low
+            or "auto mode on" in pane_low
             or "enter to select" in pane_low
             or "\n❯ " in pane_low
             or pane_low.rstrip().endswith("❯"))
