@@ -2824,7 +2824,10 @@ function renderAgentRail(c, which) {
       const host = document.getElementById(cfg.hostId);
       if (host) {
         let ov = host.querySelector('.agent-dead-overlay');
-        if (!running) {
+        // If the rail already shows the paper-mode 'research is paused' banner,
+        // that explains the frozen pane — don't stack a second banner.
+        const hasPaperPause = !!document.querySelector('.rail-paused-banner');
+        if (!running && !hasPaperPause) {
           if (!ov) {
             host.style.position = host.style.position || 'relative';
             ov = el('div', 'agent-dead-overlay',
@@ -2833,9 +2836,10 @@ function renderAgentRail(c, which) {
               + 'here (and shortcuts like shift+tab) does nothing. Click '
               + '<b>↻ restart</b> above to start a fresh session.');
             ov.style.cssText = 'position:absolute;top:0;left:0;right:0;z-index:5;'
-              + 'padding:8px 12px;background:rgba(244,63,94,.14);'
-              + 'border-bottom:1px solid var(--bad);color:var(--text);'
-              + 'font-size:12px;line-height:1.4;pointer-events:none;';
+              + 'padding:10px 12px;background:var(--panel);'
+              + 'border:1px solid var(--bad);border-radius:6px;margin:6px;'
+              + 'color:var(--text);font-size:12px;line-height:1.45;'
+              + 'pointer-events:none;box-shadow:0 4px 16px rgba(0,0,0,.4);';
             host.appendChild(ov);
           }
         } else if (ov) {
