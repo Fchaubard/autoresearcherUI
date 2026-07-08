@@ -211,7 +211,8 @@ def init(project: str | None = None, name: str | None = None,
     run_id = name
     try:
         resp = _post("/api/track/run",
-                     {"project": project, "name": name, "config": config})
+                     {"project": project, "name": name, "config": config,
+                      "tmux_session": os.environ.get("ARUI_RUN_SESSION", "")})
         run_id = resp.get("run_id", name)
     except Exception:
         pass

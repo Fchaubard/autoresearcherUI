@@ -960,6 +960,11 @@ async def track_run(request: Request):
     body = await request.json()
     name = body.get("name", f"run-{_rng.randrange(16**6):06x}")
     config = body.get("config", {}) or {}
+    # The tmux session the run lives in (arun names it after the run id). Record
+    # it so the kill-criteria watchdog can always match the run to a live
+    # session and enforce its wall-clock / metric kill rules — without this the
+    # field was empty and a session-name mismatch let runs hang uncapped.
+    _tmux_session = (body.get("tmux_session") or "").strip() or name
     # HARD-HALT GATE (RESEARCH_IMPROVEMENT_PLAN #6): when the strategic
     # council escalates or the PI agent calls /api/halt, ALL runs are
     # blocked — including _probe / _smoke. Only a human PI resume lifts
@@ -1067,7 +1072,7 @@ async def track_run(request: Request):
         db.add(Run(id=name, project_id=pid, idea_id=idea.id, run_name=name,
                    status="running",
                    is_baseline=(explicit_bl or _looks_baseline(name)),
-                   config=config,
+                   config=config, tmux_session=_tmux_session,
                    started_at=_iso(), created_at=_iso()))
         db.commit()
         bus.publish("events", "runs_changed", {})

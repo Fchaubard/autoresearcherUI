@@ -2814,8 +2814,33 @@ function renderAgentRail(c, which) {
       const d = await api('/agent/alive?session=' + encodeURIComponent(cfg.session));
       const running = !!d.alive;
       if (stat) {
-        stat.textContent = running ? '● running' : '○ not running';
+        stat.textContent = running ? '● running' : '○ ended';
         stat.style.color = running ? 'var(--ok)' : 'var(--muted)';
+      }
+      // When the session is DEAD, the terminal below is just a frozen last
+      // frame — typing into it goes nowhere (this confused the operator: "I
+      // can't type / shift+tab is ignored"). Overlay a clear banner + point at
+      // the restart button, instead of presenting a dead pane as if it's live.
+      const host = document.getElementById(cfg.hostId);
+      if (host) {
+        let ov = host.querySelector('.agent-dead-overlay');
+        if (!running) {
+          if (!ov) {
+            host.style.position = host.style.position || 'relative';
+            ov = el('div', 'agent-dead-overlay',
+              'This agent’s session has ended — research concluded or the agent '
+              + 'exited. The terminal below is a frozen last frame, so typing '
+              + 'here (and shortcuts like shift+tab) does nothing. Click '
+              + '<b>↻ restart</b> above to start a fresh session.');
+            ov.style.cssText = 'position:absolute;top:0;left:0;right:0;z-index:5;'
+              + 'padding:8px 12px;background:rgba(244,63,94,.14);'
+              + 'border-bottom:1px solid var(--bad);color:var(--text);'
+              + 'font-size:12px;line-height:1.4;pointer-events:none;';
+            host.appendChild(ov);
+          }
+        } else if (ov) {
+          ov.remove();
+        }
       }
     } catch (e) { /* keep last */ }
   };

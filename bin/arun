@@ -40,6 +40,7 @@ tmux kill-session -t "$SESS" 2>/dev/null || true
 ENVARGS=()
 PP="${ARUI_REPO:-}${PYTHONPATH:+:$PYTHONPATH}"
 [ -n "$PP" ] && ENVARGS+=(-e "PYTHONPATH=$PP")
+ENVARGS+=(-e "ARUI_RUN_SESSION=$SESS")
 for v in ARUI_REPO ARUI_INGEST_URL ARUI_INGEST_TOKEN ARUI_PROJECT ARUI_KILL_CRITERIA; do
   eval "val=\${$v:-}"
   [ -n "$val" ] && ENVARGS+=(-e "$v=$val")
