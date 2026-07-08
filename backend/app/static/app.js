@@ -3799,9 +3799,13 @@ let _lastRunsRefreshAt = 0;
 // Called from both the SSE runs_changed handler and the polling fallback.
 async function refreshDashboardLive(reason) {
   try {
-    const [proj, runs, ideas, gpus] = await Promise.all([
-      api('/project'), api('/runs'), api('/ideas'), api('/gpus')]);
+    const [proj, runs, ideas, gpus, mode] = await Promise.all([
+      api('/project'), api('/runs'), api('/ideas'), api('/gpus'),
+      api('/mode').catch(() => S.mode)]);
     S.project = proj; S.runs = runs; S.ideas = ideas; S.gpus = gpus;
+    if (mode) S.mode = mode;   // keep mode fresh so the paper-mode paused banner
+                               // clears the moment research resumes (was stale
+                               // after a restart -> 'paused in paper mode' stuck)
   } catch (e) { return false; }
   _lastRunsRefreshAt = Date.now();
   // Always repaint the parts that exist on the current view. If the user
