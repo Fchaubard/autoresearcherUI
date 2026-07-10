@@ -243,7 +243,7 @@ def test_idle_nudge_decision_fires_when_parked():
     assert sv._should_nudge_idle_agent(
         disable_bg=False, alive=True, halted=False, paused=False,
         concluding=False, boot_screen=False, busy=False, idle_prompt=True,
-        idle_age=120, nudge_age=1e9, strikes=0) == "nudge"
+        idle_age=500, nudge_age=1e9, strikes=0) == "nudge"
 
 
 def test_idle_nudge_waits_within_grace():
@@ -357,7 +357,7 @@ def test_selection_menu_is_idle_not_busy():
         disable_bg=False, alive=True, halted=False, paused=False,
         concluding=False, boot_screen=sv._agent_boot_screen(low),
         busy=sv._agent_busy(low), idle_prompt=sv._agent_idle_prompt(low),
-        idle_age=120, nudge_age=1e9, strikes=0) == "nudge"
+        idle_age=500, nudge_age=1e9, strikes=0) == "nudge"
 
 
 def test_real_boot_consent_still_detected():
@@ -385,7 +385,7 @@ def test_first_park_tick_waits_then_nudges():
                   concluding=False, boot_screen=False, busy=False,
                   idle_prompt=True, nudge_age=1e9, strikes=0)
     assert sv._should_nudge_idle_agent(idle_age=0, **common) == "wait"
-    assert sv._should_nudge_idle_agent(idle_age=46, **common) == "nudge"
+    assert sv._should_nudge_idle_agent(idle_age=500, **common) == "nudge"
 
 
 def test_hard_stall_health_self_heals_when_agent_resumes(arui_env, monkeypatch):

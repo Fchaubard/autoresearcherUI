@@ -219,8 +219,8 @@ import subprocess as _sp
 import datetime as _dt
 
 _AGENT_SESSION = "agent"
-_AGENT_IDLE_GRACE_SEC = 45          # parked-at-prompt this long before nudging
-_AGENT_IDLE_COOLDOWN_SEC = 90       # min gap between nudges
+_AGENT_IDLE_GRACE_SEC = 420         # 7 min: don't thrash long thinking turns
+_AGENT_IDLE_COOLDOWN_SEC = 420      # min gap between nudges (7 min)
 _AGENT_IDLE_MAX_STRIKES = 3         # after N nudges with no progress -> human
 _AGENT_IDLE_KEY = "research_agent_idle_watch"
 
@@ -317,6 +317,18 @@ def _agent_boot_screen(pane_low: str) -> bool:
     return any(m in pane_low for m in _AGENT_BOOT_MARKERS)
 
 
+def _agent_has_draft(pane_low: str) -> bool:
+    """True if the agent has typed a non-trivial next-step into the prompt (a
+    line beginning with the ❯ marker with real content). We must NOT nudge then
+    — clearing its own plan with C-u is exactly the counterproductive thrash we
+    saw (148 nudges wiping 'build richer momentum/volatility features...')."""
+    for ln in pane_low.splitlines():
+        t = ln.strip()
+        if t.startswith("❯ ") and len(t) > 8 and 'try "' not in t:
+            return True
+    return False
+
+
 def _agent_idle_prompt(pane_low: str) -> bool:
     """A live REPL waiting for input shows the prompt box + the "bypass
     permissions on" footer (or a bare ❯ prompt)."""
@@ -338,6 +350,7 @@ def _should_nudge_idle_agent(disable_bg: bool, alive: bool, halted: bool,
                              paused: bool, concluding: bool,
                              boot_screen: bool, busy: bool, idle_prompt: bool,
                              idle_age: float, nudge_age: float, strikes: int,
+                             has_draft: bool = False,
                              grace: float = _AGENT_IDLE_GRACE_SEC,
                              cooldown: float = _AGENT_IDLE_COOLDOWN_SEC,
                              max_strikes: int = _AGENT_IDLE_MAX_STRIKES) -> str:
@@ -350,7 +363,7 @@ def _should_nudge_idle_agent(disable_bg: bool, alive: bool, halted: bool,
     """
     if disable_bg or not alive or halted or paused or concluding or boot_screen:
         return "skip"
-    if busy or not idle_prompt:
+    if busy or not idle_prompt or has_draft:
         return "reset"
     if idle_age < grace:
         return "wait"
@@ -448,6 +461,7 @@ def _supervise_research_agent() -> None:
     busy = _agent_busy(pane_low)
     boot_screen = _agent_boot_screen(pane_low)
     idle_prompt = _agent_idle_prompt(pane_low)
+    has_draft = _agent_has_draft(pane_low)
 
     state = _agent_idle_state()
     now = _dt.datetime.now(_dt.timezone.utc).timestamp()
@@ -471,7 +485,7 @@ def _supervise_research_agent() -> None:
 
     decision = _should_nudge_idle_agent(
         disable_bg, alive, halted, paused, concluding, boot_screen, busy,
-        idle_prompt, idle_age, nudge_age, strikes)
+        idle_prompt, idle_age, nudge_age, strikes, has_draft=has_draft)
 
     if decision in ("skip", "reset"):
         # Agent is working (reset) or a guard is active (skip) -> forget any
