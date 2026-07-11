@@ -73,6 +73,26 @@ async def lifespan(app: FastAPI):
         telemetry.capture("app_started")
     except Exception:                                   # noqa: BLE001
         pass
+    # Build status lives only in memory, so every restart otherwise resets it to
+    # the default ok=False even when a valid PDF is already on disk. Rebuild the
+    # paper once on startup (best-effort, in a thread so it never blocks boot or
+    # crashes the server) so /api/paper/build_log reflects reality after a
+    # respawn. force=True because a non-forced build early-returns the default
+    # status when sources are not stale (it never actually compiles).
+    try:
+        import threading
+
+        def _startup_paper_build():
+            try:
+                from .app import paper as _paper, paper_compile as _pc
+                if _paper.paper_folder() and (_paper.paper_folder() / "main.tex").exists():
+                    _pc.build(force=True)
+            except Exception as e:                      # noqa: BLE001
+                print(f"[main] startup paper build failed: {e}", flush=True)
+
+        threading.Thread(target=_startup_paper_build, daemon=True).start()
+    except Exception as e:                              # noqa: BLE001
+        print(f"[main] startup paper build thread failed: {e}", flush=True)
     if AUTORUN:
         db = SessionLocal()
         has_project = db.query(Project).first() is not None

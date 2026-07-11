@@ -790,7 +790,7 @@ def render_runs_md(db) -> str:
         cfg = r.config if isinstance(r.config, dict) else {}
         ds = cfg.get("dataset", "") or ""
         mdl = cfg.get("model", "") or ""
-        et = (f"{r.est_time_sec//60}m" if r.est_time_sec else "—")
+        et = (f"{r.est_time_sec//60}m" if r.est_time_sec else "-")
         lines.append(
             f"| {r.status} | {r.id} | {r.paper_claim_id or '-'} "
             f"| {r.paper_figure_id or '-'} | {r.paper_role or '-'}"

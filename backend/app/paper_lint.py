@@ -40,11 +40,26 @@ _SLOP = [
 ]
 
 
+# A markdown table delimiter row (e.g. "|--------|----|") is table syntax, not
+# prose, and its runs of hyphens are NOT em-dashes. Skip em-dash checks on such
+# lines, the same spirit as the numeric-range carve-out ("3--5" is fine). A
+# delimiter row contains only pipes, hyphens, colons and whitespace, with at
+# least one pipe and one hyphen; real prose always has other characters.
+_TABLE_DELIM = re.compile(r"^[-|:\s]*$")
+
+
+def _is_table_delimiter(line: str) -> bool:
+    return bool(_TABLE_DELIM.match(line)) and "|" in line and "-" in line
+
+
 def lint_prose(text: str, *, source: str = "") -> list[dict]:
     """Return a list of {source,line,kind,rule,snippet} violations; [] if clean."""
     out: list[dict] = []
     for i, line in enumerate((text or "").splitlines(), 1):
+        table_delim = _is_table_delimiter(line)
         for rx, label in _EMDASH:
+            if table_delim:
+                continue
             if rx.search(line):
                 out.append({"source": source, "line": i, "kind": "emdash",
                             "rule": label, "snippet": line.strip()[:140]})
