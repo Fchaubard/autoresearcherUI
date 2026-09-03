@@ -305,10 +305,8 @@ def _agent_pane_low(session: str = _AGENT_SESSION, lines: int = 40) -> str:
 def _agent_alive(session: str = _AGENT_SESSION) -> bool:
     """True only when tmux exists *and* its foreground pane is not dead."""
     try:
-        out = _sp.run(
-            ["tmux", "display-message", "-p", "-t", session,
-             "#{pane_dead}"], capture_output=True, text=True, timeout=4)
-        return out.returncode == 0 and (out.stdout or "").strip() == "0"
+        from . import tmux_safe
+        return tmux_safe.pane_alive(session)
     except Exception:                                   # noqa: BLE001
         return False
 

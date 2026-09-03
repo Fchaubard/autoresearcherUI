@@ -1863,7 +1863,7 @@ def agent_alive(session: str = "agent"):
         sz = pane_stream.size(session)
     except Exception:                                      # noqa: BLE001
         sz = 0
-    return {"alive": tmux_safe.is_alive(session), "size": sz}
+    return {"alive": tmux_safe.pane_alive(session), "size": sz}
 
 
 @router.get("/agent/raw")

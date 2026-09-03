@@ -756,6 +756,10 @@ def claude_binary_present() -> bool:
 def start_real(cfg: dict, resume: bool = False) -> RealAgent:
     """Create (or, on resume, reuse) the project and launch the agent."""
     global _agent
+    # Once this function is invoked, onboarding/scoping has committed to an
+    # autonomous run. Persist the contract *before* any binary/auth/tmux work
+    # so even an initial launch exception is recoverable by the supervisor.
+    set_expected(True, reason="research agent launch requested")
     name = (cfg.get("repo_name") or "research").strip() or "research"
     metric = (cfg.get("metric") or "val_loss").strip()
     from .model_registry import provider_for as _provider_for
@@ -900,9 +904,6 @@ def start_real(cfg: dict, resume: bool = False) -> RealAgent:
         openai_key=cfg.get("openai_token", ""),
         gemini_key=cfg.get("gemini_token", ""))
     _agent.start()
-    # Set this only after tmux launch succeeds. The deterministic supervisor
-    # uses it to distinguish an unexpected CLI exit from pre-onboarding,
-    # scoping, reset, and deliberate shutdown states.
     set_expected(True, reason="research agent launched")
     # Kick off the council-led watchdog review in the background. The
     # review is idempotent (skips if already done), so calling it on
@@ -939,7 +940,13 @@ def stop() -> None:
     """Kill the agent's tmux session (used by /api/reset)."""
     global _agent
     set_expected(False, reason="research agent deliberately stopped")
+    # The in-memory handle is lost on every backend restart, while tmux lives
+    # on. Always target the canonical session as well, otherwise Reset can
+    # leave an orphan agent consuming tokens after `_agent` became None.
+    sessions = {"agent"}
     if _agent is not None:
-        subprocess.run(["tmux", "kill-session", "-t", _agent.session],
+        sessions.add(_agent.session)
+    for session in sessions:
+        subprocess.run(["tmux", "kill-session", "-t", session],
                        capture_output=True)
     _agent = None

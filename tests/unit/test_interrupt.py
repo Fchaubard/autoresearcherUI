@@ -93,7 +93,7 @@ def test_resume_unpauses_and_restarts_missing_agent(arui_env, monkeypatch):
     unpaused = {}
     monkeypatch.setattr(notify, "set_research_paused",
                         lambda p: unpaused.update(v=p) or {})
-    monkeypatch.setattr(tmux_safe, "is_alive", lambda n: False)  # agent gone
+    monkeypatch.setattr(tmux_safe, "pane_alive", lambda n: False)  # agent gone
     started = {}
     monkeypatch.setattr(realrun, "start_real",
                         lambda cfg, **k: started.update(v=True))

@@ -293,13 +293,13 @@ def test_dead_agent_recovery_disabled_for_intentional_states(arui_env):
 
 
 def test_agent_alive_rejects_dead_remain_on_exit_pane(monkeypatch):
-    from backend.app import supervisor as sv
+    from backend.app import supervisor as sv, tmux_safe
 
     class Result:
         returncode = 0
         stdout = "1\n"
 
-    monkeypatch.setattr(sv._sp, "run", lambda *a, **k: Result())
+    monkeypatch.setattr(tmux_safe.subprocess, "run", lambda *a, **k: Result())
     assert sv._agent_alive() is False
 
 

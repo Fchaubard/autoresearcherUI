@@ -15,7 +15,7 @@ def client(arui_env, fake_subprocess):
 
 def test_agent_alive_shape(client, monkeypatch):
     from backend.app import tmux_safe, pane_stream
-    monkeypatch.setattr(tmux_safe, "is_alive", lambda n: True)
+    monkeypatch.setattr(tmux_safe, "pane_alive", lambda n: True)
     monkeypatch.setattr(pane_stream, "size", lambda n: 12345)
     r = client.get("/api/agent/alive?session=agent")
     assert r.status_code == 200
@@ -31,6 +31,6 @@ def test_agent_alive_rejects_bad_name(client):
 
 def test_agent_alive_dead_session(client, monkeypatch):
     from backend.app import tmux_safe, pane_stream
-    monkeypatch.setattr(tmux_safe, "is_alive", lambda n: False)
+    monkeypatch.setattr(tmux_safe, "pane_alive", lambda n: False)
     monkeypatch.setattr(pane_stream, "size", lambda n: 0)
     assert client.get("/api/agent/alive?session=agent").json()["alive"] is False

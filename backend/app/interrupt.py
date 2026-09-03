@@ -243,7 +243,7 @@ def resume_from_interrupt() -> dict:
 
     notify.set_research_paused(False)
     restarted = False
-    if not tmux_safe.is_alive("agent"):
+    if not tmux_safe.pane_alive("agent"):
         # The agent session vanished (crash / server move) - relaunch it.
         try:
             from . import realrun

@@ -65,3 +65,27 @@ def test_real_agent_never_types_credentials_into_pane(tmp_path, monkeypatch):
     assert any(cmd[:4] == ["tmux", "set-window-option", "-t", "agent"]
                and cmd[-2:] == ["remain-on-exit", "on"]
                for cmd in calls if isinstance(cmd, list))
+
+
+def test_initial_launch_failure_remains_recoverable(arui_env, monkeypatch):
+    from backend.app import realrun
+    monkeypatch.setattr(realrun, "claude_binary_present", lambda: True)
+    monkeypatch.setattr(realrun.RealAgent, "start",
+                        lambda self: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError, match="boom"):
+        realrun.start_real({"repo_name": "launch-failure",
+                            "research_agent_model": "claude-opus-5"})
+    assert realrun.expected() is True
+
+
+def test_stop_kills_canonical_agent_after_backend_lost_handle(
+        arui_env, monkeypatch):
+    from backend.app import realrun
+    calls = []
+    monkeypatch.setattr(realrun.subprocess, "run",
+                        lambda argv, **kwargs: calls.append(argv))
+    realrun._agent = None
+    realrun.set_expected(True, reason="running before backend restart")
+    realrun.stop()
+    assert ["tmux", "kill-session", "-t", "agent"] in calls
+    assert realrun.expected() is False
