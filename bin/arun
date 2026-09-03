@@ -25,13 +25,6 @@ WS="$(pwd)"
 LOGDIR="$WS/data/logs"
 mkdir -p "$LOGDIR"
 LOG="$LOGDIR/$SESS.log"
-# Refuse a command that itself redirects stdout to a file — that would defeat
-# the whole point (Sessions tab stays blank).
-for arg in "$@"; do
-  case "$arg" in
-    *">"*|*"&>"*) echo "arun: do NOT put a '>' file redirect in the command — arun already logs to $LOG and streams to the pane." >&2; exit 2;;
-  esac
-done
 tmux kill-session -t "$SESS" 2>/dev/null || true
 # Forward the autoresearcherUI env INTO the detached session. A new tmux
 # session inherits the tmux SERVER's env, NOT this caller's — so without this

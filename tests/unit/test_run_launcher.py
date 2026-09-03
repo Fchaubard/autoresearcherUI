@@ -70,3 +70,7 @@ def test_arun_delegates_to_supervised_launcher():
     source = (ROOT / "bin" / "arun").read_text()
     assert "-m arui.launcher" in source
     assert ' -- "$@"' in source
+    # Arguments are passed as an argv array, not evaluated as shell syntax.
+    # Valid program arguments such as Python's ``x > 0`` must not be rejected
+    # by the obsolete pre-launch redirection substring scanner.
+    assert 'do NOT put a' not in source
