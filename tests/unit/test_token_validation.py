@@ -91,6 +91,32 @@ def test_check_all_crash_is_structured(monkeypatch):
     assert "crash" in out["claude"]["detail"]
 
 
+def test_cross_provider_role_slots_validate_matching_models(monkeypatch):
+    """Logical reviewer field names must not leak models across providers."""
+    seen = {}
+
+    def checker(provider):
+        def _check(key, model):
+            seen[provider] = model
+            return {"ok": True, "model_ok": True, "detail": "ok"}
+        return _check
+
+    monkeypatch.setattr(tc, "check_claude", checker("claude"))
+    monkeypatch.setattr(tc, "check_openai", checker("openai"))
+    monkeypatch.setattr(tc, "check_gemini", checker("gemini"))
+    tc.check_all({
+        "claude_token": "c", "openai_token": "o", "gemini_token": "g",
+        "research_agent_model": "gpt-5.6-sol",
+        "author_agent_model": "claude-fable-5-1",
+        # Reviewer A is deliberately Claude despite its legacy field name.
+        "council_gemini_model": "claude-fable-5-1",
+        "pi_agent_model": "gemini-3.8-flash",
+    })
+    assert seen == {"openai": "gpt-5.6-sol",
+                    "claude": "claude-fable-5-1",
+                    "gemini": "gemini-3.8-flash"}
+
+
 def test_blocking_failures_ignores_skipped_and_advisor():
     results = {
         "claude": {"ok": True, "skipped": True},

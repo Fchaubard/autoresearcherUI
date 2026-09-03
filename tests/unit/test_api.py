@@ -224,11 +224,64 @@ def test_unknown_run_ingest_is_rejected(client):
         "run_id": "missing", "summary": {}}).status_code == 404
 
 
+def test_agent_restart_never_serializes_agent_secrets(
+        client, setting_setter, monkeypatch):
+    from backend.app import api
+    secret = "provider-secret-must-not-leak"
+    setting_setter("onboarding", {
+        "research_agent_model": "gpt-5.6-sol",
+        "openai_token": secret,
+    })
+
+    class AgentWithSecrets:
+        openai_key = secret
+        setup_prompt = "private research prompt"
+
+    monkeypatch.setattr(api.realrun, "start_real",
+                        lambda cfg: AgentWithSecrets())
+    monkeypatch.setattr(api.subprocess, "run", lambda *args, **kwargs: None)
+    response = client.post("/api/agent/restart", json={"name": "research"})
+    assert response.status_code == 200
+    assert response.json()["results"]["research"] == {
+        "ok": True, "status": "started"}
+    assert secret not in response.text
+    assert "private research prompt" not in response.text
+
+
 def test_model_catalog_has_current_families(client):
     body = client.get("/api/models").json()
     ids = {m["id"] for m in body["models"]}
-    assert {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
-            "gemini-3.8-flash", "claude-opus-5", "claude-fable-5"} <= ids
+    assert {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+            "gemini-3.8-flash", "claude-opus-5", "claude-fable-5-1"} <= ids
+
+
+def test_reset_removes_managed_workspace_and_runtime_captures(client):
+    from backend.app.config import DATA_DIR, workspace_dir
+    r = client.post("/api/onboarding", json={"repo_name": "reset-me"})
+    assert r.status_code == 200
+    workspace = workspace_dir("reset-me")
+    (workspace / "private-result.txt").write_text("research bytes")
+    for directory in (DATA_DIR / ".term", DATA_DIR / "run_logs",
+                      DATA_DIR / "artifacts"):
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "private.log").write_text("research bytes")
+    assert client.post("/api/reset").status_code == 200
+    assert not workspace.exists()
+    for directory in (DATA_DIR / ".term", DATA_DIR / "run_logs",
+                      DATA_DIR / "artifacts"):
+        assert list(directory.iterdir()) == []
+
+
+def test_reset_removes_only_onboarding_injected_credentials(
+        client, setting_setter, monkeypatch):
+    from backend.app import api
+    monkeypatch.setenv("EXTERNAL_SENTINEL_KEY", "keep")
+    setting_setter("onboarding", {"openai_token": "test-runtime-token"})
+    api._apply_tokens_to_env()
+    assert api.os.environ["OPENAI_API_KEY"] == "test-runtime-token"
+    assert client.post("/api/reset").status_code == 200
+    assert "OPENAI_API_KEY" not in api.os.environ
+    assert api.os.environ["EXTERNAL_SENTINEL_KEY"] == "keep"
 
 
 def test_passcode_check_off(client):

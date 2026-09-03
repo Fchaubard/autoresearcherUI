@@ -108,6 +108,22 @@ def test_available_reviewers_with_keys(arui_env, monkeypatch):
     assert "openai" in s
 
 
+def test_reviewer_slot_can_route_to_any_provider(arui_env, monkeypatch):
+    from backend.app import council
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    cfg = dict(council.DEFAULTS,
+               council_gemini_model="gpt-5.6-sol",
+               council_enable_openai=False)
+    assert council._available_reviewers(cfg) == ["gemini"]
+    seen = []
+    monkeypatch.setattr(
+        council, "_call_openai_api",
+        lambda model, effort, system, user:
+            seen.append((model, effort, system, user)) or '{"ok":true}')
+    assert council._call_gemini("system", "user", cfg) == '{"ok":true}'
+    assert seen == [("gpt-5.6-sol", "medium", "system", "user")]
+
+
 def test_is_enabled_false_without_keys(arui_env, monkeypatch):
     from backend.app.council import is_enabled
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)

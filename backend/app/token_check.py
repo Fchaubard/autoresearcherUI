@@ -39,6 +39,23 @@ DEFAULT_MODELS = {
     "gemini": "gemini-3.8-flash",
 }
 
+
+def _model_for_provider(cfg: dict, provider: str) -> str:
+    """Pick a selected model that actually belongs to ``provider``.
+
+    Every role may now use every provider, so field names such as
+    ``council_gemini_model`` describe a logical slot, not the model provider.
+    Never pass a slot's Claude model to the Gemini credential validator.
+    """
+    for field in ("research_agent_model", "author_agent_model",
+                  "scoping_model", "council_gemini_model",
+                  "council_openai_model", "council_claude_model",
+                  "pi_agent_model"):
+        model = str(cfg.get(field) or "").strip()
+        if provider_for(model) == provider:
+            return model
+    return DEFAULT_MODELS[provider]
+
 # Anthropic short aliases / Cowork model names that are not always in
 # GET /v1/models. Treat as always-visible so selecting them never false-fails.
 _CLAUDE_ALIAS_OK = {"opus", "sonnet", "haiku", "fable"}
@@ -254,13 +271,13 @@ def resolve_advisor(cfg: dict) -> dict:
     keyed = {"claude": has("claude_token"),
              "gemini": has("gemini_token"),
              "openai": has("openai_token")}
-    configured = (cfg.get("scoping_model") or "gemini").strip().lower()
+    configured_model = (cfg.get("scoping_model") or "gemini-3.8-flash").strip().lower()
+    configured = provider_for(configured_model) or configured_model
     if configured not in keyed:
         configured = "gemini"
     present = [p for p, y in keyed.items() if y]
-    models = {"claude": cfg.get("research_agent_model") or DEFAULT_MODELS["claude"],
-              "gemini": cfg.get("council_gemini_model") or DEFAULT_MODELS["gemini"],
-              "openai": cfg.get("council_openai_model") or DEFAULT_MODELS["openai"]}
+    models = {p: _model_for_provider(cfg, p)
+              for p in ("claude", "gemini", "openai")}
 
     if keyed.get(configured):
         return {"provider": configured, "model": models[configured],
@@ -289,9 +306,9 @@ def check_all(cfg: dict) -> dict:
     or raises. Also returns an ``advisor`` entry with the effective scoping
     provider chosen from the keys present."""
     cfg = cfg or {}
-    claude_model = cfg.get("research_agent_model") or DEFAULT_MODELS["claude"]
-    openai_model = cfg.get("council_openai_model") or DEFAULT_MODELS["openai"]
-    gemini_model = cfg.get("council_gemini_model") or DEFAULT_MODELS["gemini"]
+    claude_model = _model_for_provider(cfg, "claude")
+    openai_model = _model_for_provider(cfg, "openai")
+    gemini_model = _model_for_provider(cfg, "gemini")
     jobs = {
         "claude": (check_claude, (cfg.get("claude_token") or "", claude_model)),
         "openai": (check_openai, (cfg.get("openai_token") or "", openai_model)),

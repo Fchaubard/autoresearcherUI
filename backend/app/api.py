@@ -11,6 +11,7 @@ import hmac
 import random
 import re
 import shlex
+import shutil
 import subprocess
 import threading
 
@@ -32,6 +33,7 @@ from .models import (ChatMessage, Event, Gpu, Idea, JournalEntry,
 
 router = APIRouter(prefix="/api")
 _rng = random.Random()
+_RUNTIME_TOKEN_ENV: set[str] = set()
 
 
 def _poke_author_to_integrate(run_id: str, metric: float | None,
@@ -108,6 +110,7 @@ def _apply_tokens_to_env() -> None:
         if os.environ.get(env_name):
             continue
         os.environ[env_name] = val
+        _RUNTIME_TOKEN_ENV.add(env_name)
         set_names.append(env_name)
     if set_names:
         print(f"[api] applied tokens from onboarding to env: "
@@ -2191,17 +2194,23 @@ async def agent_restart(request: Request):
     finally:
         db.close()
     if "research" in targets:
-        if not (cfg.get("claude_token")
+        from .model_registry import provider_for
+        provider = provider_for(cfg.get("research_agent_model", ""))
+        token_key = {"claude": "claude_token", "openai": "openai_token",
+                     "gemini": "gemini_token"}.get(provider, "")
+        if not (token_key and cfg.get(token_key)
                 or os.environ.get("ARUI_CLAUDE_BIN")):
             results["research"] = {"ok": False,
-                                    "error": "no Claude token configured — "
+                                    "error": "no selected-provider token configured — "
                                              "onboarding not complete"}
         else:
             subprocess.run(["tmux", "kill-session", "-t", "agent"],
                            capture_output=True, timeout=5)
             try:
-                results["research"] = {"ok": True,
-                                        "info": realrun.start_real(cfg)}
+                realrun.start_real(cfg)
+                # Never serialize RealAgent: its attributes include provider
+                # credentials and the complete private research brief.
+                results["research"] = {"ok": True, "status": "started"}
             except Exception as e:                              # noqa: BLE001
                 results["research"] = {"ok": False, "error": str(e)}
     if "author" in targets:
@@ -2227,11 +2236,46 @@ async def agent_restart(request: Request):
 @router.post("/reset")
 async def reset_all():
     """Wipe everything and return the instance to the onboarding state."""
+    # Resolve the exact managed workspaces before dropping their Project rows.
+    # Never follow repo_path from user input and never delete WORKSPACE_DIR
+    # itself: only direct children created by config.workspace_dir().
+    db = SessionLocal()
+    try:
+        project_names = [p.name for p in db.query(Project).all() if p.name]
+    finally:
+        db.close()
     orchestrator.stop()
     realrun.stop()
+    try:
+        from . import author_agent
+        author_agent.stop()
+    except Exception:                                   # noqa: BLE001
+        pass
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     metrics.reset()
+    # Remove only credentials that this process injected from onboarding.
+    # Environment variables supplied by the service/operator are never tracked
+    # here and therefore survive a dashboard reset.
+    for env_name in list(_RUNTIME_TOKEN_ENV):
+        os.environ.pop(env_name, None)
+    _RUNTIME_TOKEN_ENV.clear()
+    workspace_root = WORKSPACE_DIR.resolve()
+    for name in project_names:
+        candidate = (WORKSPACE_DIR / name).resolve()
+        if candidate.parent == workspace_root and candidate.exists():
+            shutil.rmtree(candidate)
+    # Terminal mirrors, run logs, and artifacts can contain prompts, source,
+    # metrics, and model output. A factory reset must remove those bytes too.
+    for runtime_dir in (DATA_DIR / ".term", DATA_DIR / "run_logs",
+                        DATA_DIR / "artifacts"):
+        if not runtime_dir.exists():
+            continue
+        for child in runtime_dir.iterdir():
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink(missing_ok=True)
     return {"status": "reset"}
 
 
@@ -2521,13 +2565,23 @@ async def post_onboarding(request: Request):
             cfg["passcode"] = _existing_pc
     # Validate before any persistence/environment/startup side effect. A 4xx
     # onboarding response must leave the installation exactly as it was.
-    token = (cfg.get("claude_token") or "").strip()
+    from .model_registry import provider_for
+    research_model = (cfg.get("research_agent_model") or
+                      "claude-opus-5").strip()
+    research_provider = provider_for(research_model)
+    if not research_provider:
+        return JSONResponse({"detail": "unknown research-agent model"},
+                            status_code=400)
+    token_fields = {"claude": "claude_token", "openai": "openai_token",
+                    "gemini": "gemini_token"}
+    required_field = token_fields[research_provider]
+    token = (cfg.get(required_field) or "").strip()
     if token and not os.environ.get("ARUI_CLAUDE_BIN"):
         from . import token_check
         results = token_check.check_all(cfg)
-        if (results.get("claude") or {}).get("ok") is False:
+        if (results.get(research_provider) or {}).get("ok") is False:
             return JSONResponse(
-                {"status": "invalid_tokens", "failed": ["claude"],
+                {"status": "invalid_tokens", "failed": [research_provider],
                  "tokens": results}, status_code=400)
         optional_bad = [name for name in ("openai", "gemini", "github", "gmail")
                         if (results.get(name) or {}).get("ok") is False]
@@ -2539,6 +2593,12 @@ async def post_onboarding(request: Request):
         advisor = results.get("advisor") or {}
         if advisor.get("provider"):
             cfg["scoping_model"] = advisor["provider"]
+        try:
+            from .agent_cli import command
+            command(research_model, cfg.get("research_agent_effort", ""),
+                    "Read _setup_prompt.txt and carry out the research.")
+        except Exception as e:
+            return JSONResponse({"detail": str(e)}, status_code=400)
     db = SessionLocal()
     row = db.query(Setting).filter(Setting.key == "onboarding").first()
     if row:
@@ -2571,8 +2631,9 @@ async def post_onboarding(request: Request):
                 samesite="lax", path="/")
         return resp
 
-    # a Claude token (or the test hook) -> launch the real autonomous agent
-    token = (cfg.get("claude_token") or "").strip()
+    # A credential for the selected coding-agent provider (or test hook)
+    # launches the autonomous harness.
+    token = (cfg.get(required_field) or "").strip()
     if token or os.environ.get("ARUI_CLAUDE_BIN"):
         # Scoping gate (Phase 0): instead of spawning the research agent
         # immediately, run a literature review + direction-confirmation pass

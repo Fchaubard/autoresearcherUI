@@ -109,7 +109,8 @@ class RealAgent:
                  repo_root: str, agent_cmd: list[str] | None = None,
                  anthropic_key: str = "", setup_prompt: str = "",
                  session: str = "agent", kill_criteria: str = "",
-                 model: str = "", effort: str = ""):
+                 model: str = "", effort: str = "", openai_key: str = "",
+                 gemini_key: str = ""):
         self.workspace = os.path.abspath(workspace)
         self.project_name = project_name
         self.ingest_url = ingest_url
@@ -124,6 +125,8 @@ class RealAgent:
         self.kill_criteria = kill_criteria or ""
         self.model = (model or "").strip()
         self.effort = (effort or "").strip()
+        self.openai_key = (openai_key or "").strip()
+        self.gemini_key = (gemini_key or "").strip()
 
     @staticmethod
     def _api_key_truncation(key: str) -> str:
@@ -312,9 +315,13 @@ class RealAgent:
             # "Auth conflict" warning that fires when BOTH apiKeyHelper
             # and ANTHROPIC_API_KEY are set.
             self._ensure_claude_settings(self.anthropic_key)
-        exports = " ".join(f"{k}={shlex.quote(v)}" for k, v in env.items())
+        if self.openai_key:
+            env["OPENAI_API_KEY"] = self.openai_key
+        if self.gemini_key:
+            env["GEMINI_API_KEY"] = self.gemini_key
         log = os.path.join(self.workspace, "agent.log")
 
+        provider = "custom"
         if self.agent_cmd:                       # mock / custom agent
             inner = " ".join(shlex.quote(c) for c in self.agent_cmd)
         else:                                    # real Claude Code — interactive
@@ -325,12 +332,12 @@ class RealAgent:
             # turning OFF tmux's alternate-screen (below) so the full-screen TUI
             # paints into the scrollback-bearing normal buffer. See
             # author_agent.start for the full rationale.
-            model_args = f" --model {shlex.quote(self.model)}" if self.model else ""
-            effort_args = f" --effort {shlex.quote(self.effort)}" if self.effort else ""
-            inner = ("claude --dangerously-skip-permissions" + model_args
-                     + effort_args)
+            msg = ("Read the file _setup_prompt.txt in this directory and "
+                   "carry out the research it describes. Do not stop.")
+            from .agent_cli import command
+            provider, inner = command(self.model or "claude-opus-5",
+                                      self.effort, msg)
 
-        full = f"cd {shlex.quote(self.workspace)} && {exports} {inner}"
         subprocess.run(["tmux", "kill-session", "-t", self.session],
                        capture_output=True)
         # Create a bare shell, disable tmux's alternate-screen for this window
@@ -340,8 +347,15 @@ class RealAgent:
                         "-x", "120", "-y", "40"], check=True)
         subprocess.run(["tmux", "set-window-option", "-t", self.session,
                         "alternate-screen", "off"], capture_output=True)
-        subprocess.run(["tmux", "send-keys", "-t", self.session, full, "Enter"],
-                       capture_output=True)
+        # Start the CLI via respawn-pane with tmux's -e environment option.
+        # Unlike typing `KEY=value command` into the shell, credentials never
+        # appear in pane scrollback when a CLI exits during startup.
+        respawn = ["tmux", "respawn-pane", "-k", "-t", self.session,
+                   "-c", self.workspace]
+        for key, value in env.items():
+            respawn.extend(["-e", f"{key}={value}"])
+        respawn.append(inner)
+        subprocess.run(respawn, check=True, capture_output=True)
         # Mirror the live pane into BOTH a per-session raw-byte file
         # (`pane_stream.term_file(session)`) — what the rail xterm.js
         # streams from for true ANSI rendering — AND `agent.log` for a
@@ -377,9 +391,7 @@ class RealAgent:
         # never appears, and the stray "2" is typed at the REPL — Claude
         # Code's REPL eats single digits without side effects.
         # See https://code.claude.com/docs/en/security
-        if not self.agent_cmd:
-            msg = ("Read the file _setup_prompt.txt in this directory and "
-                   "carry out the research it describes. Do not stop.")
+        if not self.agent_cmd and provider == "claude":
             sess = shlex.quote(self.session)
             # POLL-based auto-accept. Old code used a fixed `sleep 6`
             # before sending "2"+Enter — but on a slow fresh node Claude

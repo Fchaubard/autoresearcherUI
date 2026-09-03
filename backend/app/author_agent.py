@@ -702,12 +702,12 @@ def start(proposal_id: str = "") -> dict:
     # arui SDK + curl calls auto-authenticate against the local
     # backend — same reasoning as agent.py (avoid the "agent
     # forensically discovers the passcode" detour).
-    _token_export = ""
+    _token_value = ""
     try:
         from . import auth as _auth
         _pc = _auth._saved_passcode()
         if _pc:
-            _token_export = f"ARUI_INGEST_TOKEN={shlex.quote(_pc)} "
+            _token_value = _pc
     except Exception:                                       # noqa: BLE001
         pass
     # AUTH (2026-06-05 Francois bug report): Claude Code launched with
@@ -717,6 +717,8 @@ def start(proposal_id: str = "") -> dict:
     # Setting row, and pass it as an explicit env-var prefix into the
     # tmux command line so Claude Code 2.1.x can't miss it.
     _claude_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    _openai_key = os.environ.get("OPENAI_API_KEY", "")
+    _gemini_key = os.environ.get("GEMINI_API_KEY", "")
     _author_model = ""
     _author_effort = ""
     if not _claude_key or not _author_model:
@@ -735,6 +737,10 @@ def start(proposal_id: str = "") -> dict:
                     _author_effort = (row.value.get("author_agent_effort")
                                       or row.value.get("research_agent_effort")
                                       or "high").strip()
+                    _openai_key = (row.value.get("openai_token")
+                                   or _openai_key).strip()
+                    _gemini_key = (row.value.get("gemini_token")
+                                   or _gemini_key).strip()
             finally:
                 db.close()
         except Exception as e:                              # noqa: BLE001
@@ -743,9 +749,16 @@ def start(proposal_id: str = "") -> dict:
     # Sync back into process env so subprocess inherits it.
     if _claude_key:
         os.environ["ANTHROPIC_API_KEY"] = _claude_key
-    _key_export = (f"ANTHROPIC_API_KEY={shlex.quote(_claude_key)} "
-                    if _claude_key else "")
-    env_prefix = f"{_token_export}{_key_export}IS_SANDBOX=1 "
+    launch_env = {"IS_SANDBOX": "1"}
+    if _token_value:
+        launch_env["ARUI_INGEST_TOKEN"] = _token_value
+    if _claude_key:
+        launch_env["ANTHROPIC_API_KEY"] = _claude_key
+    if _openai_key:
+        launch_env["OPENAI_API_KEY"] = _openai_key
+    if _gemini_key:
+        launch_env["GEMINI_API_KEY"] = _gemini_key
+    provider = "custom"
     if cmd_override:
         inner = cmd_override
     else:
@@ -755,21 +768,18 @@ def start(proposal_id: str = "") -> dict:
         # `alternate-screen off` below): the full-screen TUI then paints into the
         # NORMAL buffer, so the pane keeps real scrollback (scroll to the first
         # message + select + copy) while looking exactly like Claude Code should.
-        inner = "claude --dangerously-skip-permissions"
-        if _author_model:
-            inner += f" --model {shlex.quote(_author_model)}"
-        if _author_effort:
-            inner += f" --effort {shlex.quote(_author_effort)}"
+        from .agent_cli import command
+        provider, inner = command(_author_model or "claude-opus-5",
+                                  _author_effort, _AUTHOR_BRIEF)
         # Make sure Claude uses the API key (set in env) instead of
         # falling into its OAuth flow. See agent.RealAgent._ensure_claude_settings
         # for the full explanation.
-        try:
-            from .agent import RealAgent
-            RealAgent._ensure_claude_settings(_claude_key)
-        except Exception as e:                              # noqa: BLE001
-            print(f"[author] apiKeyHelper setup failed: {e}", flush=True)
-    full = (f"cd {shlex.quote(str(folder))} && "
-            f"{env_prefix}{inner}")
+        if provider == "claude":
+            try:
+                from .agent import RealAgent
+                RealAgent._ensure_claude_settings(_claude_key)
+            except Exception as e:                          # noqa: BLE001
+                print(f"[author] apiKeyHelper setup failed: {e}", flush=True)
     try:
         # Kill any stale session first (cleanup).
         subprocess.run(["tmux", "kill-session", "-t", SESSION],
@@ -784,8 +794,12 @@ def start(proposal_id: str = "") -> dict:
         subprocess.run(["tmux", "set-window-option", "-t", SESSION,
                         "alternate-screen", "off"],
                        capture_output=True, timeout=5)
-        subprocess.run(["tmux", "send-keys", "-t", SESSION, full, "Enter"],
-                       capture_output=True, timeout=5)
+        respawn = ["tmux", "respawn-pane", "-k", "-t", SESSION,
+                   "-c", str(folder)]
+        for key, value in launch_env.items():
+            respawn.extend(["-e", f"{key}={value}"])
+        respawn.append(inner)
+        subprocess.run(respawn, check=True, capture_output=True, timeout=5)
         # Mirror the pane to BOTH the per-session raw-byte file (rail
         # xterm.js streaming source) AND author.log (per-workspace
         # persistent log). See backend/app/pane_stream.py.
@@ -801,7 +815,8 @@ def start(proposal_id: str = "") -> dict:
         # polling feeder (waits for readiness, dismisses consent only if it
         # shows, verifies the brief was accepted, retries if it sits queued).
         # Run in a background thread so start() returns immediately.
-        if not cmd_override and not os.environ.get("ARUI_DISABLE_BG"):
+        if (not cmd_override and provider == "claude"
+                and not os.environ.get("ARUI_DISABLE_BG")):
             threading.Thread(target=feed_brief, daemon=True,
                              name="author-feed").start()
     except Exception as e:

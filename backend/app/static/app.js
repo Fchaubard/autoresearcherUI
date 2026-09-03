@@ -1368,7 +1368,7 @@ async function openHaltModal() {
   const sure = await aruiConfirm(
     'This STOPS all research and every running experiment immediately. ' +
     'You can then update the purpose + seed ideas and relaunch.',
-    { title: '⛔ Halt Research?', danger: true, okText: 'Yes, halt everything' });
+    { title: 'Halt Research?', danger: true, okText: 'Yes, halt everything' });
   if (!sure) return;
   let d;
   try { d = await post('/research/interrupt', { feedback: '' }); }
@@ -1377,7 +1377,7 @@ async function openHaltModal() {
   const sc = el('div', 'mscrim');            // NOTE: no scrim-click / Esc close
   const m  = el('div', 'modal arui-dlg danger');
   m.innerHTML =
-    `<div class="arui-dlg-hd">⛔ Research halted — ${(d.killed||[]).length} run(s) ` +
+    `<div class="arui-dlg-hd">Research halted — ${(d.killed||[]).length} run(s) ` +
       `stopped, ${d.discarded||0} queued discarded</div>` +
     `<div class="arui-dlg-bd">Everything is stopped. Tighten the purpose and ` +
       `seed ideas below if you want to steer the research, then choose how to ` +
@@ -1872,7 +1872,7 @@ function left() {
       seg.append(b);
     });
   bar.append(seg);
-  const halt = el('button', 'halt-btn', '⛔ Halt Research');
+  const halt = el('button', 'halt-btn', 'Halt Research');
   halt.title = 'Stop all research + runs and update the purpose / seed ideas';
   halt.onclick = openHaltModal;
   bar.append(halt);
@@ -3937,7 +3937,8 @@ const OB_FIELDS = [
   // fast, which matters because the plan re-synthesizes after every message.
   ['scoping_model',
     'Scoping agent — model for the pre-research lit review + plan critique',
-    'select', 'Gemini|Claude|OpenAI'],
+    'select', 'gemini-3.8-flash|gemini-3.1-pro-preview|gpt-5.6-sol|'
+    + 'claude-opus-5|claude-fable-5-1'],
   ['skip_perms', 'Run the agent with --dangerously-skip-permissions',
     'check', ''],
   ['sec', 'Research'],
@@ -3975,37 +3976,40 @@ const OB_FIELDS = [
   ['agent_instructions',
     'How the agent should work (logging rules, GPU saturation, ideas.md '
     + 'format, …). Edit to customise; blank uses the default.', 'area', ''],
-  ['research_agent_model', 'Research agent model (Claude variant)', 'select',
-    'claude-opus-5|claude-sonnet-5|claude-fable-5|claude-opus-4-8|'
-    + 'claude-opus-4-7|claude-opus-4-6|claude-sonnet-4-6|'
-    + 'claude-haiku-4-5-20251001'],
+  ['research_agent_model', 'Research agent model', 'select',
+    'claude-fable-5-1|claude-opus-5|claude-sonnet-5|claude-fable-5|'
+    + 'gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna|gemini-3.8-flash|'
+    + 'gemini-3.1-pro-preview'],
   ['research_agent_effort', 'Research agent effort', 'select',
-    'high|medium|low|max'],
-  ['author_agent_model', 'Paper author model (Claude variant)', 'select',
-    'claude-opus-5|claude-sonnet-5|claude-fable-5|claude-opus-4-8|'
-    + 'claude-opus-4-7|claude-opus-4-6|claude-sonnet-4-6'],
+    'high|medium|low|none|xhigh|max'],
+  ['author_agent_model', 'Paper author model', 'select',
+    'claude-fable-5-1|claude-opus-5|claude-sonnet-5|claude-fable-5|'
+    + 'gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna|gemini-3.8-flash|'
+    + 'gemini-3.1-pro-preview'],
   ['author_agent_effort', 'Paper author effort', 'select',
-    'high|medium|low|max'],
+    'high|medium|low|none|xhigh|max'],
   ['sec', 'Review council — runs after every experiment'],
-  ['council_enable_gemini', 'Enable Gemini in council', 'check', ''],
-  ['council_gemini_model', 'Council — Gemini model', 'select',
+  ['council_enable_gemini', 'Enable reviewer A', 'check', ''],
+  ['council_gemini_model', 'Council — reviewer A model', 'select',
     'gemini-3.8-flash|gemini-3.7-flash|gemini-3.6-flash|gemini-3.5-flash|'
     + 'gemini-3.5-flash-lite|gemini-3.1-pro-preview|gemini-2.5-pro|gemini-2.5-flash'],
-  ['council_gemini_effort', 'Council — Gemini thinking level', 'select',
-    'medium|low|high'],
-  ['council_enable_openai', 'Enable OpenAI in council', 'check', ''],
-  ['council_openai_model', 'Council — OpenAI model', 'select',
+  ['council_gemini_effort', 'Council — reviewer A reasoning effort', 'select',
+    'medium|low|high|none|xhigh|max'],
+  ['council_enable_openai', 'Enable reviewer B', 'check', ''],
+  ['council_openai_model', 'Council — reviewer B model', 'select',
     'gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna|gpt-5.2|gpt-5.1|'
     + 'gpt-5|gpt-5-mini|gpt-5-nano|o3|o3-pro'],
   ['council_openai_effort', 'Council — OpenAI reasoning effort', 'select',
     'high|medium|low|none|xhigh|max|minimal'],
   ['council_enable_claude_tiebreaker',
-    'Enable Claude tiebreaker (only used when reviewers disagree)',
+    'Enable tiebreaker (only used when reviewers disagree)',
     'check', ''],
-  ['council_claude_model', 'Council — Claude tiebreaker model', 'select',
+  ['council_claude_model', 'Council — tiebreaker model', 'select',
     'claude-opus-5|claude-sonnet-5|claude-fable-5|claude-opus-4-8|'
     + 'claude-opus-4-7|claude-opus-4-6|claude-sonnet-4-6|'
     + 'claude-haiku-4-5-20251001'],
+  ['council_claude_effort', 'Council — tiebreaker reasoning effort', 'select',
+    'high|medium|low|none|xhigh|max'],
   ['run_debate', 'Run debate between reviewers (per-run reviews only)',
     'check', ''],
   ['debate_max_rounds', 'Debate max rounds (before tiebreaker)', 'select',
@@ -4144,10 +4148,11 @@ function buildSettingsForm({ initial = {}, hideFields = [] } = {}) {
   // the selected value (including custom/legacy IDs) when rebuilding.
   api('/models').then(cat => {
     const models = (cat && cat.models) || [];
-    const fill = (key, providers) => {
+    const fill = (key, providers, agentOnly = false) => {
       const x = inp[key]; if (!x) return;
       const selected = x.value;
-      const choices = models.filter(m => providers.includes(m.provider));
+      const choices = models.filter(m => providers.includes(m.provider)
+        && (!agentOnly || m.agent_cli));
       x.innerHTML = '';
       choices.forEach(m => {
         const op = document.createElement('option');
@@ -4160,11 +4165,12 @@ function buildSettingsForm({ initial = {}, hideFields = [] } = {}) {
       }
       if (selected) x.value = selected;
     };
-    fill('research_agent_model', ['claude']);
-    fill('author_agent_model', ['claude']);
-    fill('council_gemini_model', ['gemini']);
-    fill('council_openai_model', ['openai']);
-    fill('council_claude_model', ['claude']);
+    fill('research_agent_model', ['gemini', 'openai', 'claude'], true);
+    fill('author_agent_model', ['gemini', 'openai', 'claude'], true);
+    fill('scoping_model', ['gemini', 'openai', 'claude']);
+    fill('council_gemini_model', ['gemini', 'openai', 'claude']);
+    fill('council_openai_model', ['gemini', 'openai', 'claude']);
+    fill('council_claude_model', ['gemini', 'openai', 'claude']);
     fill('pi_agent_model', ['gemini', 'openai', 'claude']);
   }).catch(() => {});
   return { form, inp };
@@ -4396,15 +4402,20 @@ PASSCODE=`;
     // Cheap client-side sanity check — catches obvious mistakes (empty,
     // wrong-format, placeholder) before we waste 30 s of boot time only to
     // discover the token can't authenticate.
-    const tok = (cfg.claude_token || '').trim();
-    if (!tok || /^sk-ant-replace_?me$/i.test(tok) || tok.length < 25
-        || !/^sk-ant-/i.test(tok)) {
+    const selectedModel = (cfg.research_agent_model || '').trim();
+    const requiredProvider = selectedModel.startsWith('claude-') ? 'claude'
+      : selectedModel.startsWith('gemini-') ? 'gemini' : 'openai';
+    const tokenField = { claude: 'claude_token', openai: 'openai_token',
+                         gemini: 'gemini_token' }[requiredProvider];
+    const tok = (cfg[tokenField] || '').trim();
+    const malformedClaude = requiredProvider === 'claude'
+      && (!/^sk-ant-/i.test(tok) || tok.length < 25);
+    if (!tok || /replace_?me/i.test(tok) || malformedClaude) {
       aruiAlert(
-        "The Claude API token doesn't look right. It must start with " +
-        "'sk-ant-' and be the full key from https://console.anthropic.com/" +
-        " (paste the entire string, not a placeholder).",
-        { title: 'Claude token looks invalid' });
-      inp.claude_token?.focus();
+        `The selected ${requiredProvider} research model needs its full ` +
+        'provider API token (not a placeholder).',
+        { title: `${requiredProvider} token looks invalid` });
+      inp[tokenField]?.focus();
       return;
     }
     // PRE-FLIGHT TOKEN VALIDATION. Probe every configured provider in
@@ -4420,7 +4431,7 @@ PASSCODE=`;
       results = null;       // network blip → skip and proceed
     }
     if (results) {
-      const proceed = await showTokenCheckResults(results);
+      const proceed = await showTokenCheckResults(results, requiredProvider);
       if (!proceed) {
         start.disabled = false; start.textContent = 'Start research →';
         return;
@@ -4454,24 +4465,27 @@ PASSCODE=`;
 
 /* Show the token-validation results in a modal. Returns a Promise that
  * resolves to true (user clicked Continue) or false (user clicked Fix). */
-function showTokenCheckResults(results) {
+function showTokenCheckResults(results, requiredProvider = 'claude') {
   return new Promise(resolve => {
     // If everything passed (or was empty/skipped), no need to bother the user.
-    const failed = Object.entries(results)
+    const providerResults = Object.entries(results)
+      .filter(([name]) => name !== 'advisor');
+    const failed = providerResults
       .filter(([_, r]) => r && r.ok === false);
     if (failed.length === 0) { resolve(true); return; }
-    // Claude is the only token that's actually required to launch the
-    // research agent. If Claude failed, "continue" doesn't make sense.
-    const claudeBad = (results.claude && results.claude.ok === false);
+    // The provider selected for the autonomous coding agent is required;
+    // failures from providers used only by optional roles may be bypassed.
+    const requiredBad = (results[requiredProvider]
+      && results[requiredProvider].ok === false);
     const sc = el('div', 'mscrim');
     const m  = el('div', 'modal');
-    const rowsHtml = Object.entries(results).map(([name, r]) => {
+    const rowsHtml = providerResults.map(([name, r]) => {
       const labelMap = { claude: 'Claude API token',
                          openai: 'OpenAI API token',
                          gemini: 'Gemini API token',
                          github: 'GitHub token',
                          gmail:  'Gmail app password' };
-      const optional = name !== 'claude';
+      const optional = name !== requiredProvider;
       let stChip, stColor;
       if (!r) { stChip = 'unknown'; stColor = '#5C636B'; }
       else if (r.skipped) { stChip = 'not configured'; stColor = '#5C636B'; }
@@ -4489,22 +4503,22 @@ function showTokenCheckResults(results) {
     }).join('');
     m.innerHTML =
       '<div class="modal-hd"><h2>' +
-      (claudeBad ? 'Claude token failed — fix it before continuing'
+      (requiredBad ? `${requiredProvider} token failed — fix it before continuing`
                  : 'Some optional tokens failed') +
       '</h2><button class="iconbtn" id="tc-x">✕</button></div>' +
       '<p class="modal-sub">' +
-      (claudeBad
-        ? 'The Research Agent needs a working Claude API token to start. ' +
+      (requiredBad
+        ? `The Research Agent needs a working ${requiredProvider} API token to start. ` +
           'Fix the token and try again.'
-        : 'The required Claude token is good — but some optional providers ' +
+        : `The required ${requiredProvider} token is good — but some optional providers ` +
           'failed. You can continue and those features (council reviews / ' +
           'emails / lit search) will be silently disabled, or fix them now.') +
       '</p>' +
       '<div class="tc-list">' + rowsHtml + '</div>' +
       '<div class="modal-actions">' +
-      (claudeBad
+      (requiredBad
         ? '<button class="btn pri" id="tc-fix" type="button">' +
-          '← Back to fix Claude token</button>'
+          `← Back to fix ${requiredProvider} token</button>`
         : '<button class="btn pri" id="tc-cont" type="button">' +
           'Continue with failed features disabled</button>' +
           '<button class="btn" id="tc-fix" type="button">' +
@@ -5266,7 +5280,7 @@ async function openSettings() {
      In-flight runs keep going; use /api/reset for a hard stop. */
   const resBar = el('div', 'set-email-bar');
   const resLbl = el('div', 'set-email-lbl', 'Autonomous research loop');
-  const resBtn = el('button', 'btn xs halt-btn', '⛔ Halt Research');
+  const resBtn = el('button', 'btn xs halt-btn', 'Halt Research');
   const resHint = el('div', 'set-email-hint', '');
   resBar.append(resLbl, resBtn, resHint);
   const refreshResBtn = async () => {

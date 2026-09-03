@@ -233,7 +233,11 @@ def _restart_session(session: str) -> bool:
                 cfg = dict(row.value) if row and isinstance(row.value, dict) else {}
             finally:
                 db.close()
-            if not cfg.get("claude_token") and not _stat_env_var():
+            from .model_registry import provider_for
+            provider = provider_for(cfg.get("research_agent_model", ""))
+            token_key = {"claude": "claude_token", "openai": "openai_token",
+                         "gemini": "gemini_token"}.get(provider, "")
+            if (not token_key or not cfg.get(token_key)) and not _stat_env_var():
                 return False
             _sp.run(["tmux", "kill-session", "-t", "agent"],
                     capture_output=True, timeout=5)

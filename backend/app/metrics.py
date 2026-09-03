@@ -404,6 +404,10 @@ def last_activity(run_id: str) -> float | None:
 def reset() -> None:
     with _lock:
         _con.execute("DELETE FROM metrics")
+        _con.execute("DELETE FROM metric_keys")
+    with _batch_lock:
+        _batch_cache.clear()
+        _batch_cache_last_recompute.clear()
 
 
 def snapshot(dest: str) -> None:

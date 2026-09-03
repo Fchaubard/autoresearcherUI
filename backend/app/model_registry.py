@@ -4,11 +4,24 @@ from __future__ import annotations
 OPENAI_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
 GEMINI_EFFORTS = ("low", "medium", "high")
 
+# Models exposed to autonomous coding-agent roles. API-only compatibility
+# models remain available to council/scoping/PI roles. Updating future CLI
+# availability is intentionally a single-set edit here.
+AGENT_CLI_MODELS = {
+    "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.2",
+    "claude-fable-5-1", "claude-opus-5", "claude-fable-5",
+    "claude-sonnet-5", "claude-haiku-4-5-20251001", "claude-opus-4-8",
+    "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+    "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
+    "gemini-2.5-pro", "gemini-2.5-flash",
+}
+
 MODELS = (
     # OpenAI API models (current family first, compatibility models retained).
     {"id": "gpt-5.6-sol", "label": "GPT-5.6 Sol", "provider": "openai", "efforts": OPENAI_EFFORTS},
     {"id": "gpt-5.6-terra", "label": "GPT-5.6 Terra", "provider": "openai", "efforts": OPENAI_EFFORTS},
     {"id": "gpt-5.6-luna", "label": "GPT-5.6 Luna", "provider": "openai", "efforts": OPENAI_EFFORTS},
+    {"id": "gpt-5.5", "label": "GPT-5.5", "provider": "openai", "efforts": ("low", "medium", "high", "xhigh")},
     {"id": "gpt-5.2", "label": "GPT-5.2", "provider": "openai", "efforts": ("low", "medium", "high", "xhigh")},
     {"id": "gpt-5.1", "label": "GPT-5.1", "provider": "openai", "efforts": ("low", "medium", "high")},
     {"id": "gpt-5", "label": "GPT-5", "provider": "openai", "efforts": ("minimal", "low", "medium", "high")},
@@ -26,6 +39,7 @@ MODELS = (
     {"id": "gemini-2.5-pro", "label": "Gemini 2.5 Pro", "provider": "gemini", "efforts": ()},
     {"id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash", "provider": "gemini", "efforts": ()},
     # Current Claude API names plus still-supported compatibility choices.
+    {"id": "claude-fable-5-1", "label": "Claude Fable 5.1", "provider": "claude", "efforts": ()},
     {"id": "claude-opus-5", "label": "Claude Opus 5", "provider": "claude", "efforts": ()},
     {"id": "claude-sonnet-5", "label": "Claude Sonnet 5", "provider": "claude", "efforts": ()},
     {"id": "claude-fable-5", "label": "Claude Fable 5", "provider": "claude", "efforts": ()},
@@ -57,6 +71,8 @@ def efforts_for(model: str) -> tuple[str, ...]:
 
 
 def public_registry() -> dict:
-    return {"models": [dict(m, efforts=list(m.get("efforts") or ())) for m in MODELS],
+    return {"models": [dict(m, efforts=list(m.get("efforts") or ()),
+                            agent_cli=m["id"] in AGENT_CLI_MODELS)
+                       for m in MODELS],
             "defaults": {"claude": "claude-opus-5", "openai": "gpt-5.6-sol",
                          "gemini": "gemini-3.8-flash"}}

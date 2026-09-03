@@ -34,7 +34,7 @@ from pathlib import Path
 from .config import DATA_DIR, ROOT, WORKSPACE_DIR
 from .db import SessionLocal
 from .models import ChatMessage, Event, Gpu, Idea, Project, Run, Setting
-from .model_registry import efforts_for
+from .model_registry import efforts_for, provider_for
 
 # ── env / keys ────────────────────────────────────────────────────────────
 _KEYS_PATH = ROOT / ".deploy" / "keys.env"
@@ -69,6 +69,7 @@ DEFAULTS = {
     "council_openai_model": "gpt-5.6-sol",
     "council_openai_effort": "high",
     "council_claude_model": "claude-opus-5",
+    "council_claude_effort": "high",
     "run_debate": True,
     "debate_max_rounds": 3,
     # which providers are enabled at all in the council
@@ -88,7 +89,7 @@ DEFAULTS = {
     # Which model drives the SCOPING phase (lit review + plan critique + chat).
     # Gemini by default — it's fast, which matters because the plan
     # re-synthesizes after every chat message.
-    "scoping_model": "gemini",
+    "scoping_model": "gemini-3.8-flash",
 }
 
 
@@ -110,16 +111,28 @@ def _settings() -> dict:
 # ── reviewer availability ────────────────────────────────────────────────
 def _available_reviewers(cfg: dict) -> list[str]:
     rs = []
-    if cfg.get("council_enable_gemini", True) and os.environ.get("GEMINI_API_KEY"):
+    env_for = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY",
+               "claude": "ANTHROPIC_API_KEY"}
+    first_provider = provider_for(cfg.get("council_gemini_model") or
+                                  DEFAULTS["council_gemini_model"])
+    second_provider = provider_for(cfg.get("council_openai_model") or
+                                   DEFAULTS["council_openai_model"])
+    if (cfg.get("council_enable_gemini", True) and first_provider
+            and os.environ.get(env_for[first_provider])):
         rs.append("gemini")
-    if cfg.get("council_enable_openai", True) and os.environ.get("OPENAI_API_KEY"):
+    if (cfg.get("council_enable_openai", True) and second_provider
+            and os.environ.get(env_for[second_provider])):
         rs.append("openai")
     return rs
 
 
 def _claude_available(cfg: dict) -> bool:
+    provider = provider_for(cfg.get("council_claude_model") or
+                            DEFAULTS["council_claude_model"])
+    env_for = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY",
+               "claude": "ANTHROPIC_API_KEY"}
     return bool(cfg.get("council_enable_claude_tiebreaker", True)
-                and os.environ.get("ANTHROPIC_API_KEY"))
+                and provider and os.environ.get(env_for[provider]))
 
 
 def is_enabled() -> bool:
@@ -871,9 +884,22 @@ def _post_json_retry(url: str, body: dict, headers: dict) -> dict:
     raise RuntimeError("unreachable")
 
 
-def _call_gemini(system: str, user: str, cfg: dict) -> str:
+def _call_model(model: str, effort: str, system: str, user: str) -> str:
+    provider = provider_for(model)
+    allowed = efforts_for(model)
+    if allowed and effort not in allowed:
+        effort = "medium" if "medium" in allowed else allowed[0]
+    if provider == "gemini":
+        return _call_gemini_api(model, effort, system, user)
+    if provider == "openai":
+        return _call_openai_api(model, effort, system, user)
+    if provider == "claude":
+        return _call_claude_api(model, system, user)
+    raise RuntimeError(f"unknown model provider for {model!r}")
+
+
+def _call_gemini_api(model: str, effort: str, system: str, user: str) -> str:
     key = os.environ["GEMINI_API_KEY"]
-    model = cfg.get("council_gemini_model") or DEFAULTS["council_gemini_model"]
     url = ("https://generativelanguage.googleapis.com/v1beta/"
            f"models/{model}:generateContent?key={key}")
     body = {
@@ -882,23 +908,20 @@ def _call_gemini(system: str, user: str, cfg: dict) -> str:
         "generationConfig": {"responseMimeType": "application/json",
                              "temperature": 0.7},
     }
-    effort = cfg.get("council_gemini_effort")
     if effort and efforts_for(model):
         body["generationConfig"]["thinkingConfig"] = {"thinkingLevel": effort}
     data = _post_json_retry(url, body, {})
     return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
-def _call_openai(system: str, user: str, cfg: dict) -> str:
+def _call_openai_api(model: str, effort: str, system: str, user: str) -> str:
     key = os.environ["OPENAI_API_KEY"]
-    model = cfg.get("council_openai_model") or DEFAULTS["council_openai_model"]
     body = {
         "model": model,
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": user}],
         "response_format": {"type": "json_object"},
     }
-    effort = cfg.get("council_openai_effort") or DEFAULTS["council_openai_effort"]
     # gpt-5 family and o-series accept reasoning_effort
     if efforts_for(model):
         body["reasoning_effort"] = effort
@@ -907,9 +930,8 @@ def _call_openai(system: str, user: str, cfg: dict) -> str:
     return data["choices"][0]["message"]["content"]
 
 
-def _call_claude(system: str, user: str, cfg: dict) -> str:
+def _call_claude_api(model: str, system: str, user: str) -> str:
     key = os.environ["ANTHROPIC_API_KEY"]
-    model = cfg.get("council_claude_model") or DEFAULTS["council_claude_model"]
     body = {
         "model": model,
         "max_tokens": 2000,
@@ -920,6 +942,24 @@ def _call_claude(system: str, user: str, cfg: dict) -> str:
                             {"x-api-key": key,
                              "anthropic-version": "2023-06-01"})
     return data["content"][0]["text"]
+
+
+def _call_gemini(system: str, user: str, cfg: dict) -> str:
+    model = cfg.get("council_gemini_model") or DEFAULTS["council_gemini_model"]
+    return _call_model(model, cfg.get("council_gemini_effort") or "medium",
+                       system, user)
+
+
+def _call_openai(system: str, user: str, cfg: dict) -> str:
+    model = cfg.get("council_openai_model") or DEFAULTS["council_openai_model"]
+    return _call_model(model, cfg.get("council_openai_effort") or "high",
+                       system, user)
+
+
+def _call_claude(system: str, user: str, cfg: dict) -> str:
+    model = cfg.get("council_claude_model") or DEFAULTS["council_claude_model"]
+    return _call_model(model, cfg.get("council_claude_effort") or "high",
+                       system, user)
 
 
 _CALLERS = {"gemini": _call_gemini, "openai": _call_openai,
@@ -3491,13 +3531,27 @@ def _scoping_order(cfg: dict) -> list[str]:
     """Reviewer order for the scoping phase: the user's chosen `scoping_model`
     first (onboarding dropdown; default 'gemini'), then the others as fallback.
     Only includes providers whose keys are present."""
-    pref = (cfg.get("scoping_model") or "gemini").strip().lower()
+    selected = (cfg.get("scoping_model") or "gemini-3.8-flash").strip().lower()
+    pref = provider_for(selected) or selected
     if pref not in ("gemini", "openai", "claude"):
         pref = "gemini"
     avail = list(_available_reviewers(cfg))        # gemini / openai (with keys)
     if _claude_available(cfg):
         avail.append("claude")
     return [r for r in avail if r == pref] + [r for r in avail if r != pref]
+
+
+def _with_scoping_model(cfg: dict) -> dict:
+    """Apply the exact scoping model to its provider's logical council slot."""
+    out = dict(cfg)
+    model = (out.get("scoping_model") or "").strip()
+    provider = provider_for(model)
+    field = {"gemini": "council_gemini_model",
+             "openai": "council_openai_model",
+             "claude": "council_claude_model"}.get(provider)
+    if field:
+        out[field] = model
+    return out
 
 
 def _validate_scope_keys(synth: dict, valid_keys: set[str]) -> dict:
@@ -3521,7 +3575,7 @@ def scope_review(purpose: str, metric: str, seed_ideas: str,
     """Synthesize SOTA + adversarially assess the direction. Prefers the
     flagship Claude reviewer for quality; falls back to gemini/openai.
     Returns the parsed+citation-validated synthesis dict, or None on failure."""
-    cfg = _settings()
+    cfg = _with_scoping_model(_settings())
     user = (f"# Purpose\n{purpose}\n\n# Validation metric\n{metric}\n\n"
             f"# User's seed ideas\n{seed_ideas or '(none provided)'}\n\n"
             f"# Retrieved papers (cite these keys ONLY)\n"
@@ -3544,7 +3598,7 @@ def scope_finalize(purpose: str, metric: str, seed_ideas: str,
     the conversation (the chat changes the advisor's mind, so the idea cards
     and the plan must move with it). Same STRICT JSON schema as scope_review,
     citation-validated. Returns the updated synthesis or None."""
-    cfg = _settings()
+    cfg = _with_scoping_model(_settings())
     convo = "\n\n".join(f"{m.get('role','user').upper()}: {m.get('text','')}"
                         for m in (history or []))
     user = (f"# Purpose\n{purpose}\n\n# Validation metric\n{metric}\n\n"
@@ -3577,7 +3631,7 @@ def scope_chat(history: list[dict], synthesis: dict, papers: list[dict],
     Stateless reducer: caller passes the full history; we ground the model in
     the synthesis + retrieved papers and return the assistant's next reply.
     Prefers Claude (text-mode); falls back to a text Gemini/OpenAI call."""
-    cfg = _settings()
+    cfg = _with_scoping_model(_settings())
     sys = (
         "You are the same skeptical ML research advisor, now in a live "
         "back-and-forth with the researcher about the scoping of their project "

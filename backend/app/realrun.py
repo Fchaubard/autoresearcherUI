@@ -3,7 +3,8 @@
 This is the real-mode path (doc 05): an autonomous agent runs its own research
 loop in a tmux session; its experiments log through the arui SDK, which
 populates the dashboard. Used when the user provides a Claude token at
-onboarding (or, for the e2e test, when ARUI_CLAUDE_BIN points at the mock).
+onboarding (or selects another supported coding-agent provider; tests may
+point ARUI_CLAUDE_BIN at a mock).
 """
 from __future__ import annotations
 
@@ -858,7 +859,9 @@ def start_real(cfg: dict, resume: bool = False) -> RealAgent:
         kill_criteria=(cfg.get("kill_criteria") or "1 hour").strip()
                        or "1 hour",
         model=cfg.get("research_agent_model", "claude-opus-5"),
-        effort=cfg.get("research_agent_effort", "high"))
+        effort=cfg.get("research_agent_effort", "high"),
+        openai_key=cfg.get("openai_token", ""),
+        gemini_key=cfg.get("gemini_token", ""))
     _agent.start()
     # Kick off the council-led watchdog review in the background. The
     # review is idempotent (skips if already done), so calling it on
