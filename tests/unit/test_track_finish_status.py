@@ -142,6 +142,65 @@ def test_divergent_loss_becomes_crashed(client, db_session):
     assert _status(db_session, "diverge") == "crashed"
 
 
+def test_nonzero_process_exit_marks_running_run_with_reason(
+        client, db_session, monkeypatch):
+    from backend.app import council
+    monkeypatch.setattr(council, "review_async", lambda *_: None)
+    _make_proj(db_session)
+    _start_run(client, "process-boom", {"kind": "failure-injection"})
+    response = client.post("/api/track/process-exit",
+                           json={"run_id": "process-boom", "exit_code": 137})
+    assert response.status_code == 200
+    db_session.expire_all()
+    from backend.app.models import Run
+    run = db_session.query(Run).filter(Run.id == "process-boom").one()
+    assert run.status == "crashed"
+    assert run.config["process_exit_code"] == 137
+    assert run.config["failure_kind"] == "nonzero_process_exit"
+
+
+def test_zero_exit_without_finish_is_not_silent(client, db_session, monkeypatch):
+    from backend.app import council
+    monkeypatch.setattr(council, "review_async", lambda *_: None)
+    _make_proj(db_session)
+    _start_run(client, "forgot-finish", {"kind": "failure-injection"})
+    response = client.post("/api/track/process-exit",
+                           json={"run_id": "forgot-finish", "exit_code": 0})
+    assert response.status_code == 200
+    db_session.expire_all()
+    from backend.app.models import Run
+    run = db_session.query(Run).filter(Run.id == "forgot-finish").one()
+    assert run.status == "crashed"
+    assert run.config["failure_kind"] == "completed_without_finish"
+
+
+def test_process_exit_never_downgrades_finalized_success(
+        client, db_session):
+    _make_proj(db_session)
+    _start_run(client, "already-finished", {"kind": "success"})
+    _finish_run(client, "already-finished", {"val_acc": 0.8})
+    response = client.post("/api/track/process-exit",
+                           json={"run_id": "already-finished", "exit_code": 0})
+    assert response.status_code == 200
+    assert response.json()["changed"] is False
+    assert _status(db_session, "already-finished") == "kept_novel"
+
+
+def test_nonzero_exit_overrides_atexit_finalized_success(
+        client, db_session, monkeypatch):
+    from backend.app import council
+    monkeypatch.setattr(council, "review_async", lambda *_: None)
+    _make_proj(db_session)
+    _start_run(client, "atexit-race", {"kind": "failure-injection"})
+    _finish_run(client, "atexit-race", {"val_acc": 0.8})
+    assert _status(db_session, "atexit-race") == "kept_novel"
+    response = client.post("/api/track/process-exit",
+                           json={"run_id": "atexit-race", "exit_code": 9})
+    assert response.status_code == 200
+    assert response.json()["changed"] is True
+    assert _status(db_session, "atexit-race") == "crashed"
+
+
 # ─────────────────────────── frontier (UI) gate ───────────────────────
 
 

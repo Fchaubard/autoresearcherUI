@@ -1270,6 +1270,72 @@ async def track_finish(request: Request):
     return {"ok": True}
 
 
+@router.post("/track/process-exit")
+async def track_process_exit(request: Request):
+    """Record the OS-level outcome reported by the objective-neutral launcher.
+
+    This is independent of user code and therefore still fires for exceptions,
+    signals and missing ``arui.finish()``. It is idempotent and never downgrades
+    a run that the SDK already finalized successfully.
+    """
+    from fastapi.responses import JSONResponse
+    body = await request.json()
+    run_id = str(body.get("run_id") or "").strip()
+    try:
+        exit_code = int(body.get("exit_code"))
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "invalid_exit_code"},
+                            status_code=400)
+    db = SessionLocal()
+    changed = False
+    try:
+        run = db.query(Run).filter(Run.id == run_id).first()
+        if run is None:
+            return JSONResponse({"ok": False, "error": "unknown_run"},
+                                status_code=404)
+        cfg = dict(run.config) if isinstance(run.config, dict) else {}
+        cfg["process_exit_code"] = exit_code
+        cfg["process_exit_at"] = _iso()
+        if exit_code != 0:
+            # OS process status is authoritative. Python's atexit hook can
+            # call arui.finish() while unwinding sys.exit(nonzero), briefly
+            # making a failed process look successful if it logged a metric.
+            cfg["failure_kind"] = "nonzero_process_exit"
+            cfg["status_before_process_exit"] = run.status
+        run.config = cfg
+        if run.status == "running" or exit_code != 0:
+            changed = True
+            run.status = "crashed"
+            run.ended_at = _iso()
+            kind = ("nonzero_process_exit" if exit_code != 0
+                    else "completed_without_finish")
+            cfg["failure_kind"] = kind
+            run.config = cfg
+            idea = db.query(Idea).filter(Idea.id == run.idea_id).first()
+            if idea is not None:
+                idea.status = "failed"
+                idea.ended_at = _iso()
+            message = (f"{run_id} process exited with code {exit_code}"
+                       if exit_code != 0 else
+                       f"{run_id} exited successfully but never called "
+                       "arui.finish()")
+            db.add(Event(id="ev-" + os.urandom(4).hex(),
+                         type="run_process_exit", severity="warning",
+                         actor="system", message=message, run_id=run_id,
+                         created_at=_iso()))
+        db.commit()
+    finally:
+        db.close()
+    if changed:
+        bus.publish("events", "runs_changed", {})
+        try:
+            from . import council
+            council.review_async(run_id)
+        except Exception as e:                          # noqa: BLE001
+            print(f"[api] process-exit council review failed: {e}", flush=True)
+    return {"ok": True, "changed": changed, "exit_code": exit_code}
+
+
 # ─────────────────────────── SSE streams (doc 11 D1) ───────────────────────
 
 def _sse(topic: str) -> StreamingResponse:

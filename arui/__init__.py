@@ -105,8 +105,21 @@ def _post(path: str, payload: dict) -> dict:
         headers={"Content-Type": "application/json",
                  **({"Authorization": f"Bearer {_TOKEN}"} if _TOKEN else {})},
     )
-    with urllib.request.urlopen(req, timeout=10) as r:
-        return json.loads(r.read() or b"{}")
+    last_error = None
+    # Ingest calls are idempotent by run_id/step. Retry short backend reloads
+    # instead of silently dropping metrics or the terminal finish record.
+    for delay in (0, 0.1, 0.25, 0.5, 1.0):
+        if delay:
+            time.sleep(delay)
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return json.loads(r.read() or b"{}")
+        except urllib.error.HTTPError:
+            raise                         # gates/duplicates are not transient
+        except (OSError, urllib.error.URLError) as exc:
+            last_error = exc
+    assert last_error is not None
+    raise last_error
 
 
 class Run:
@@ -154,7 +167,12 @@ class Run:
         try:
             _post("/api/track/logs", {"run_id": self.id, "text": text})
         except Exception:
-            pass
+            # Put unacknowledged bytes back at the front. A short backend
+            # outage must delay logs, never silently erase them.
+            with self._loglock:
+                self._logbuf.insert(0, text)
+                if len(self._logbuf) > 6000:
+                    self._logbuf = self._logbuf[-6000:]
 
     def _worker(self) -> None:
         buf: list = []
@@ -167,17 +185,22 @@ class Run:
                 pass
             if buf and (len(buf) >= _BATCH_MAX
                         or time.time() - last >= _FLUSH_EVERY):
-                self._send(buf)
-                buf, last = [], time.time()
+                if self._send(buf):
+                    buf, last = [], time.time()
+                else:
+                    # Retain the exact batch and retry. Sleeping avoids a hot
+                    # loop during a longer outage.
+                    time.sleep(_FLUSH_EVERY)
             if time.time() - last_log >= 1.5:
                 self._flush_logs()
                 last_log = time.time()
 
-    def _send(self, points: list) -> None:
+    def _send(self, points: list) -> bool:
         try:
             _post("/api/track/log", {"run_id": self.id, "points": points})
+            return True
         except Exception:
-            pass  # production: buffer to a write-ahead file and replay
+            return False
 
     def log_artifact(self, name: str, path: str) -> None:
         try:
