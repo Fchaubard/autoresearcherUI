@@ -192,6 +192,45 @@ def test_onboarding_post_registers_project(client):
         s.close()
 
 
+def test_onboarding_invalid_claude_is_atomic(client, setting_setter, monkeypatch):
+    """A failed authoritative token check must not persist partial config."""
+    setting_setter("onboarding", {"email": "before@example.com"})
+    from backend.app import token_check
+    monkeypatch.setattr(token_check, "check_all", lambda cfg: {
+        "claude": {"ok": False, "detail": "bad key"},
+        "advisor": {"provider": "claude"},
+    })
+    r = client.post("/api/onboarding", json={
+        "claude_token": "invalid-token-value-long-enough",
+        "email": "after@example.com",
+    })
+    assert r.status_code == 400
+    from backend.app.db import SessionLocal
+    from backend.app.models import Setting
+    s = SessionLocal()
+    try:
+        row = s.query(Setting).filter(Setting.key == "onboarding").first()
+        assert row.value == {"email": "before@example.com"}
+    finally:
+        s.close()
+
+
+def test_unknown_run_ingest_is_rejected(client):
+    assert client.post("/api/track/log", json={
+        "run_id": "missing", "points": []}).status_code == 404
+    assert client.post("/api/track/logs", json={
+        "run_id": "missing", "text": "waste"}).status_code == 404
+    assert client.post("/api/track/finish", json={
+        "run_id": "missing", "summary": {}}).status_code == 404
+
+
+def test_model_catalog_has_current_families(client):
+    body = client.get("/api/models").json()
+    ids = {m["id"] for m in body["models"]}
+    assert {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+            "gemini-3.8-flash", "claude-opus-5", "claude-fable-5"} <= ids
+
+
 def test_passcode_check_off(client):
     r = client.get("/api/passcode/check")
     assert r.status_code == 200

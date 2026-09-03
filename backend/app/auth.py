@@ -56,6 +56,7 @@ _PUBLIC_PREFIXES: tuple[str, ...] = (
     "/api/passcode/",          # login / check
     "/api/clientlog",          # error reports
     "/api/onboarding",         # GET defaults + POST onboarding form
+    "/api/models",             # model catalog for onboarding
     "/api/diag",               # deployment self-check (no secrets exposed)
     "/p/",                     # paper share viewer (token-gated separately)
     "/api/paper/share/",       # paper share JSON + pdf

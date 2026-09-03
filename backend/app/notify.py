@@ -18,6 +18,7 @@ import base64
 import datetime as dt
 import html as _html
 import json
+import os
 import smtplib
 import ssl
 import threading
@@ -89,6 +90,10 @@ def _live_tunnel_url() -> str:
     except Exception:                                       # noqa: BLE001
         pass
     # 3. fall back to scraping the live cloudflared tmux pane
+    # Test/maintenance processes with background services disabled must not
+    # discover another production process's tmux tunnel.
+    if os.environ.get("ARUI_DISABLE_BG") == "1":
+        return ""
     try:
         import subprocess as _sp
         out = _sp.run(

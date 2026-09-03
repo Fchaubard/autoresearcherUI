@@ -30,6 +30,7 @@ import sys
 import threading
 import time
 import urllib.request
+import urllib.error
 
 __all__ = ["init", "log", "log_defaults", "finish", "log_artifact",
            "summary", "Run", "REQUIRED_DEFAULT_KEYS"]
@@ -54,6 +55,18 @@ summary: dict = {}          # wandb-compatible summary dict
 _active: "Run | None" = None
 _orig_stdout = None         # set while a run is capturing console output
 _orig_stderr = None
+
+
+class RunRegistrationError(RuntimeError):
+    """The server refused a run before compute began (duplicate/gate/etc.)."""
+
+    def __init__(self, status: int | None, detail: dict | str):
+        self.status = status
+        self.detail = detail
+        reason = detail.get("reason") or detail.get("error") or detail.get("hint") \
+            if isinstance(detail, dict) else str(detail)
+        super().__init__(f"run registration failed"
+                         f"{f' (HTTP {status})' if status else ''}: {reason}")
 
 
 class _Tee:
@@ -112,6 +125,7 @@ class Run:
         self._loglock = threading.Lock()
         self._t = threading.Thread(target=self._worker, daemon=True)
         self._t.start()
+        self._finished = False
 
     def log(self, metrics: dict, step: int | None = None) -> None:
         ts = time.time()
@@ -174,6 +188,9 @@ class Run:
 
     def finish(self) -> None:
         global _orig_stdout, _orig_stderr
+        if self._finished:
+            return
+        self._finished = True
         if _orig_stdout is not None:                # stop capturing console
             sys.stdout = _orig_stdout
         if _orig_stderr is not None:
@@ -213,9 +230,19 @@ def init(project: str | None = None, name: str | None = None,
         resp = _post("/api/track/run",
                      {"project": project, "name": name, "config": config,
                       "tmux_session": os.environ.get("ARUI_RUN_SESSION", "")})
-        run_id = resp.get("run_id", name)
-    except Exception:
-        pass
+        if not resp.get("run_id"):
+            raise RunRegistrationError(None, resp)
+        run_id = resp["run_id"]
+    except urllib.error.HTTPError as e:
+        try:
+            detail = json.loads(e.read() or b"{}")
+        except Exception:
+            detail = str(e)
+        raise RunRegistrationError(e.code, detail) from e
+    except RunRegistrationError:
+        raise
+    except Exception as e:
+        raise RunRegistrationError(None, str(e)) from e
     _active = Run(project, name, config, run_id)
     # capture the training script's console output for the dashboard's logs
     global _orig_stdout, _orig_stderr
@@ -223,7 +250,7 @@ def init(project: str | None = None, name: str | None = None,
         _orig_stdout, _orig_stderr = sys.stdout, sys.stderr
         sys.stdout = _Tee(_orig_stdout, _active.add_log)
         sys.stderr = _Tee(_orig_stderr, _active.add_log)
-    atexit.register(lambda: _active and _active.finish())
+    atexit.register(lambda run=_active: run.finish())
     return _active
 
 
@@ -403,5 +430,7 @@ def log_artifact(name: str, path: str) -> None:
 
 
 def finish() -> None:
+    global _active
     if _active is not None:
-        _active.finish()
+        run, _active = _active, None
+        run.finish()

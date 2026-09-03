@@ -108,7 +108,8 @@ class RealAgent:
     def __init__(self, workspace: str, project_name: str, ingest_url: str,
                  repo_root: str, agent_cmd: list[str] | None = None,
                  anthropic_key: str = "", setup_prompt: str = "",
-                 session: str = "agent", kill_criteria: str = ""):
+                 session: str = "agent", kill_criteria: str = "",
+                 model: str = "", effort: str = ""):
         self.workspace = os.path.abspath(workspace)
         self.project_name = project_name
         self.ingest_url = ingest_url
@@ -121,6 +122,8 @@ class RealAgent:
         # steps"). Exposed to the agent as $ARUI_KILL_CRITERIA so the agent
         # knows what the dashboard monitor will enforce.
         self.kill_criteria = kill_criteria or ""
+        self.model = (model or "").strip()
+        self.effort = (effort or "").strip()
 
     @staticmethod
     def _api_key_truncation(key: str) -> str:
@@ -322,7 +325,10 @@ class RealAgent:
             # turning OFF tmux's alternate-screen (below) so the full-screen TUI
             # paints into the scrollback-bearing normal buffer. See
             # author_agent.start for the full rationale.
-            inner = "claude --dangerously-skip-permissions"
+            model_args = f" --model {shlex.quote(self.model)}" if self.model else ""
+            effort_args = f" --effort {shlex.quote(self.effort)}" if self.effort else ""
+            inner = ("claude --dangerously-skip-permissions" + model_args
+                     + effort_args)
 
         full = f"cd {shlex.quote(self.workspace)} && {exports} {inner}"
         subprocess.run(["tmux", "kill-session", "-t", self.session],

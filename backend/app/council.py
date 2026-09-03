@@ -34,6 +34,7 @@ from pathlib import Path
 from .config import DATA_DIR, ROOT, WORKSPACE_DIR
 from .db import SessionLocal
 from .models import ChatMessage, Event, Gpu, Idea, Project, Run, Setting
+from .model_registry import efforts_for
 
 # ── env / keys ────────────────────────────────────────────────────────────
 _KEYS_PATH = ROOT / ".deploy" / "keys.env"
@@ -63,10 +64,11 @@ _load_keys_env()
 
 # ── settings (live-read from the onboarding Setting row each invocation) ─
 DEFAULTS = {
-    "council_gemini_model": "gemini-2.5-pro",
-    "council_openai_model": "gpt-5",
+    "council_gemini_model": "gemini-3.8-flash",
+    "council_gemini_effort": "medium",
+    "council_openai_model": "gpt-5.6-sol",
     "council_openai_effort": "high",
-    "council_claude_model": "claude-opus-4-6",
+    "council_claude_model": "claude-opus-5",
     "run_debate": True,
     "debate_max_rounds": 3,
     # which providers are enabled at all in the council
@@ -880,6 +882,9 @@ def _call_gemini(system: str, user: str, cfg: dict) -> str:
         "generationConfig": {"responseMimeType": "application/json",
                              "temperature": 0.7},
     }
+    effort = cfg.get("council_gemini_effort")
+    if effort and efforts_for(model):
+        body["generationConfig"]["thinkingConfig"] = {"thinkingLevel": effort}
     data = _post_json_retry(url, body, {})
     return data["candidates"][0]["content"]["parts"][0]["text"]
 
@@ -895,7 +900,7 @@ def _call_openai(system: str, user: str, cfg: dict) -> str:
     }
     effort = cfg.get("council_openai_effort") or DEFAULTS["council_openai_effort"]
     # gpt-5 family and o-series accept reasoning_effort
-    if "gpt-5" in model or model.startswith("o"):
+    if efforts_for(model):
         body["reasoning_effort"] = effort
     data = _post_json_retry("https://api.openai.com/v1/chat/completions", body,
                             {"Authorization": f"Bearer {key}"})

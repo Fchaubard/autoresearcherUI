@@ -3976,22 +3976,36 @@ const OB_FIELDS = [
     'How the agent should work (logging rules, GPU saturation, ideas.md '
     + 'format, …). Edit to customise; blank uses the default.', 'area', ''],
   ['research_agent_model', 'Research agent model (Claude variant)', 'select',
-    'claude-opus-4-6|claude-sonnet-4-6|claude-haiku-4-5|claude-opus-4-1|'
-    + 'claude-sonnet-4-5|fable'],
+    'claude-opus-5|claude-sonnet-5|claude-fable-5|claude-opus-4-8|'
+    + 'claude-opus-4-7|claude-opus-4-6|claude-sonnet-4-6|'
+    + 'claude-haiku-4-5-20251001'],
+  ['research_agent_effort', 'Research agent effort', 'select',
+    'high|medium|low|max'],
+  ['author_agent_model', 'Paper author model (Claude variant)', 'select',
+    'claude-opus-5|claude-sonnet-5|claude-fable-5|claude-opus-4-8|'
+    + 'claude-opus-4-7|claude-opus-4-6|claude-sonnet-4-6'],
+  ['author_agent_effort', 'Paper author effort', 'select',
+    'high|medium|low|max'],
   ['sec', 'Review council — runs after every experiment'],
   ['council_enable_gemini', 'Enable Gemini in council', 'check', ''],
   ['council_gemini_model', 'Council — Gemini model', 'select',
-    'gemini-2.5-pro|gemini-2.5-flash|gemini-2.0-flash'],
+    'gemini-3.8-flash|gemini-3.7-flash|gemini-3.6-flash|gemini-3.5-flash|'
+    + 'gemini-3.5-flash-lite|gemini-3.1-pro-preview|gemini-2.5-pro|gemini-2.5-flash'],
+  ['council_gemini_effort', 'Council — Gemini thinking level', 'select',
+    'medium|low|high'],
   ['council_enable_openai', 'Enable OpenAI in council', 'check', ''],
   ['council_openai_model', 'Council — OpenAI model', 'select',
-    'gpt-5|gpt-5-mini|gpt-5-nano|o3|o3-mini|o4-mini|o3-pro'],
+    'gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna|gpt-5.2|gpt-5.1|'
+    + 'gpt-5|gpt-5-mini|gpt-5-nano|o3|o3-pro'],
   ['council_openai_effort', 'Council — OpenAI reasoning effort', 'select',
-    'high|medium|low|minimal'],
+    'high|medium|low|none|xhigh|max|minimal'],
   ['council_enable_claude_tiebreaker',
     'Enable Claude tiebreaker (only used when reviewers disagree)',
     'check', ''],
   ['council_claude_model', 'Council — Claude tiebreaker model', 'select',
-    'claude-opus-4-6|claude-sonnet-4-6|claude-haiku-4-5|fable'],
+    'claude-opus-5|claude-sonnet-5|claude-fable-5|claude-opus-4-8|'
+    + 'claude-opus-4-7|claude-opus-4-6|claude-sonnet-4-6|'
+    + 'claude-haiku-4-5-20251001'],
   ['run_debate', 'Run debate between reviewers (per-run reviews only)',
     'check', ''],
   ['debate_max_rounds', 'Debate max rounds (before tiebreaker)', 'select',
@@ -4030,8 +4044,12 @@ const OB_FIELDS = [
     'cadence — each nudge interrupts the agent.'],
   ['pi_agent_enabled', 'Run the PI agent on a schedule', 'check', ''],
   ['pi_agent_model', 'PI agent model', 'select',
-    'gemini-2.5-pro|gemini-2.5-flash|gpt-5|gpt-5-mini|claude-opus-4-6|'
-    + 'claude-sonnet-4-6|fable'],
+    'gemini-3.8-flash|gemini-3.7-flash|gemini-3.6-flash|gemini-3.5-flash|'
+    + 'gemini-3.1-pro-preview|gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna|'
+    + 'gpt-5.2|gpt-5.1|gpt-5|claude-opus-5|claude-sonnet-5|'
+    + 'claude-fable-5|claude-opus-4-8|claude-opus-4-6'],
+  ['pi_agent_effort', 'PI agent reasoning / thinking effort', 'select',
+    'medium|low|high|none|xhigh|max'],
   ['pi_cadence_minutes', 'PI cadence (minutes between checks)', 'select',
     '60|15|30|120|240'],
   ['sec', 'Email alerts — optional (leave the app password blank for none)'],
@@ -4122,6 +4140,33 @@ function buildSettingsForm({ initial = {}, hideFields = [] } = {}) {
       inp[k].value = v;
     }
   });
+  // Replace fallback lists with the server's canonical model registry. Keep
+  // the selected value (including custom/legacy IDs) when rebuilding.
+  api('/models').then(cat => {
+    const models = (cat && cat.models) || [];
+    const fill = (key, providers) => {
+      const x = inp[key]; if (!x) return;
+      const selected = x.value;
+      const choices = models.filter(m => providers.includes(m.provider));
+      x.innerHTML = '';
+      choices.forEach(m => {
+        const op = document.createElement('option');
+        op.value = m.id; op.textContent = m.label || m.id; x.append(op);
+      });
+      if (selected && !choices.some(m => m.id === selected)) {
+        const op = document.createElement('option');
+        op.value = selected; op.textContent = selected + ' (custom/legacy)';
+        x.append(op);
+      }
+      if (selected) x.value = selected;
+    };
+    fill('research_agent_model', ['claude']);
+    fill('author_agent_model', ['claude']);
+    fill('council_gemini_model', ['gemini']);
+    fill('council_openai_model', ['openai']);
+    fill('council_claude_model', ['claude']);
+    fill('pi_agent_model', ['gemini', 'openai', 'claude']);
+  }).catch(() => {});
   return { form, inp };
 }
 

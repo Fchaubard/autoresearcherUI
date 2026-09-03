@@ -856,7 +856,9 @@ def start_real(cfg: dict, resume: bool = False) -> RealAgent:
         agent_cmd=agent_cmd, anthropic_key=cfg.get("claude_token", ""),
         setup_prompt=_resume_prompt(cfg) if resume else _setup_prompt(cfg),
         kill_criteria=(cfg.get("kill_criteria") or "1 hour").strip()
-                       or "1 hour")
+                       or "1 hour",
+        model=cfg.get("research_agent_model", "claude-opus-5"),
+        effort=cfg.get("research_agent_effort", "high"))
     _agent.start()
     # Kick off the council-led watchdog review in the background. The
     # review is idempotent (skips if already done), so calling it on

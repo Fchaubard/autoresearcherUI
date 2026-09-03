@@ -28,13 +28,15 @@ import time
 import urllib.error
 import urllib.request
 
+from .model_registry import provider_for
+
 
 _TIMEOUT = 8.0          # seconds per provider — keep onboarding snappy
 
 DEFAULT_MODELS = {
-    "claude": "claude-opus-4-6",
-    "openai": "gpt-5",
-    "gemini": "gemini-2.5-pro",
+    "claude": "claude-opus-5",
+    "openai": "gpt-5.6-sol",
+    "gemini": "gemini-3.8-flash",
 }
 
 # Anthropic short aliases / Cowork model names that are not always in

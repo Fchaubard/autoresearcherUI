@@ -717,7 +717,9 @@ def start(proposal_id: str = "") -> dict:
     # Setting row, and pass it as an explicit env-var prefix into the
     # tmux command line so Claude Code 2.1.x can't miss it.
     _claude_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not _claude_key:
+    _author_model = ""
+    _author_effort = ""
+    if not _claude_key or not _author_model:
         try:
             from .db import SessionLocal as _SL
             from .models import Setting as _S
@@ -727,6 +729,12 @@ def start(proposal_id: str = "") -> dict:
                 if row and isinstance(row.value, dict):
                     _claude_key = (row.value.get("claude_token")
                                     or "").strip()
+                    _author_model = (row.value.get("author_agent_model")
+                                     or row.value.get("research_agent_model")
+                                     or "claude-opus-5").strip()
+                    _author_effort = (row.value.get("author_agent_effort")
+                                      or row.value.get("research_agent_effort")
+                                      or "high").strip()
             finally:
                 db.close()
         except Exception as e:                              # noqa: BLE001
@@ -748,6 +756,10 @@ def start(proposal_id: str = "") -> dict:
         # NORMAL buffer, so the pane keeps real scrollback (scroll to the first
         # message + select + copy) while looking exactly like Claude Code should.
         inner = "claude --dangerously-skip-permissions"
+        if _author_model:
+            inner += f" --model {shlex.quote(_author_model)}"
+        if _author_effort:
+            inner += f" --effort {shlex.quote(_author_effort)}"
         # Make sure Claude uses the API key (set in env) instead of
         # falling into its OAuth flow. See agent.RealAgent._ensure_claude_settings
         # for the full explanation.

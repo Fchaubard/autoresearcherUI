@@ -43,6 +43,7 @@ from .bus import bus
 from .config import DATA_DIR
 from .db import SessionLocal
 from .models import ChatMessage, Event, Gpu, Run, Setting
+from .model_registry import efforts_for, provider_for
 
 _STARTED = False
 _LOCK = threading.Lock()
@@ -51,7 +52,8 @@ _LAST_RUN = 0.0
 
 DEFAULTS = {
     "pi_agent_enabled": True,
-    "pi_agent_model": "gemini-2.5-pro",   # provider chosen from model string
+    "pi_agent_model": "gemini-3.8-flash", # provider chosen from model string
+    "pi_agent_effort": "medium",
     "pi_cadence_minutes": 60,
 }
 
@@ -76,6 +78,11 @@ def _iso() -> str:
 
 # ── what model handles the PI? routes by model-name prefix ─────────────
 def _provider_for(model: str) -> str | None:
+    known = provider_for(model)
+    if known:
+        env = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY",
+               "claude": "ANTHROPIC_API_KEY"}[known]
+        return known if os.environ.get(env) else None
     m = (model or "").lower()
     if m.startswith("gemini"):
         return "gemini" if os.environ.get("GEMINI_API_KEY") else None
@@ -426,6 +433,9 @@ def _call(model: str, system: str, user: str) -> str:
             "generationConfig": {"responseMimeType": "application/json",
                                  "temperature": 0.5},
         }
+        effort = _settings().get("pi_agent_effort")
+        if effort and efforts_for(model):
+            body["generationConfig"]["thinkingConfig"] = {"thinkingLevel": effort}
         data = council._post_json_retry(url, body, {})
         return data["candidates"][0]["content"]["parts"][0]["text"]
     if prov == "openai":
@@ -436,8 +446,9 @@ def _call(model: str, system: str, user: str) -> str:
                          {"role": "user", "content": user}],
             "response_format": {"type": "json_object"},
         }
-        if "gpt-5" in model or model.startswith("o"):
-            body["reasoning_effort"] = "medium"
+        effort = _settings().get("pi_agent_effort", "medium")
+        if efforts_for(model):
+            body["reasoning_effort"] = effort
         data = council._post_json_retry(
             "https://api.openai.com/v1/chat/completions", body,
             {"Authorization": f"Bearer {key}"})

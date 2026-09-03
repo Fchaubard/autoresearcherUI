@@ -1102,8 +1102,17 @@ def _maybe_emit_metrics_changed(run_id: str) -> None:
 
 @router.post("/track/log")
 async def track_log(request: Request):
+    from fastapi.responses import JSONResponse
     body = await request.json()
     run_id = body["run_id"]
+    db = SessionLocal()
+    try:
+        exists = db.query(Run).filter(Run.id == run_id).first() is not None
+    finally:
+        db.close()
+    if not exists:
+        return JSONResponse({"ok": False, "error": "unknown_run",
+                             "run_id": run_id}, status_code=404)
     points = body.get("points", [])
     metrics.append(run_id, points)
     bus.publish("metrics", "metric", {"run_id": run_id, "points": points})
@@ -1118,6 +1127,15 @@ async def track_logs(request: Request):
     body = await request.json()
     run_id = body.get("run_id", "")
     text = body.get("text", "")
+    db = SessionLocal()
+    try:
+        exists = bool(run_id and db.query(Run).filter(Run.id == run_id).first())
+    finally:
+        db.close()
+    if not exists:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"ok": False, "error": "unknown_run",
+                             "run_id": run_id}, status_code=404)
     if run_id and re.match(r"^[A-Za-z0-9_.\-=]+$", run_id) and text:
         try:
             d = DATA_DIR / "run_logs"
@@ -1242,6 +1260,9 @@ async def track_finish(request: Request):
                 print(f"[paper] poke author failed: {e}", flush=True)
     else:
         db.close()
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"ok": False, "error": "unknown_run",
+                             "run_id": run_id}, status_code=404)
     bus.publish("events", "runs_changed", {})
     return {"ok": True}
 
@@ -2243,12 +2264,22 @@ def onboarding_defaults():
     out.update(_c.DEFAULTS)
     out.update(_p.DEFAULTS)
     # research agent (Claude) default model
-    out.setdefault("research_agent_model", "claude-opus-4-6")
+    out.setdefault("research_agent_model", "claude-opus-5")
+    out.setdefault("research_agent_effort", "high")
+    out.setdefault("author_agent_model", "claude-opus-5")
+    out.setdefault("author_agent_effort", "high")
     # Free-text "kill any run that's been training longer than this"
     # policy. Parsed in backend/app/kill_criteria.py — see that module
     # for the supported phrasings (the default below is the simplest).
     out.setdefault("kill_criteria", "1 hour")
     return out
+
+
+@router.get("/models")
+def model_catalog():
+    """One canonical model catalog for onboarding, settings and workers."""
+    from .model_registry import public_registry
+    return public_registry()
 
 
 # Secret / token fields are blanked in /api/settings responses so the UI
@@ -2488,6 +2519,26 @@ async def post_onboarding(request: Request):
                 status_code=401)
         if not str(cfg.get("passcode") or "").strip():
             cfg["passcode"] = _existing_pc
+    # Validate before any persistence/environment/startup side effect. A 4xx
+    # onboarding response must leave the installation exactly as it was.
+    token = (cfg.get("claude_token") or "").strip()
+    if token and not os.environ.get("ARUI_CLAUDE_BIN"):
+        from . import token_check
+        results = token_check.check_all(cfg)
+        if (results.get("claude") or {}).get("ok") is False:
+            return JSONResponse(
+                {"status": "invalid_tokens", "failed": ["claude"],
+                 "tokens": results}, status_code=400)
+        optional_bad = [name for name in ("openai", "gemini", "github", "gmail")
+                        if (results.get(name) or {}).get("ok") is False]
+        if "openai" in optional_bad:
+            cfg["council_enable_openai"] = False
+        if "gemini" in optional_bad:
+            cfg["council_enable_gemini"] = False
+        cfg["token_validation_warnings"] = optional_bad
+        advisor = results.get("advisor") or {}
+        if advisor.get("provider"):
+            cfg["scoping_model"] = advisor["provider"]
     db = SessionLocal()
     row = db.query(Setting).filter(Setting.key == "onboarding").first()
     if row:
@@ -2523,33 +2574,6 @@ async def post_onboarding(request: Request):
     # a Claude token (or the test hook) -> launch the real autonomous agent
     token = (cfg.get("claude_token") or "").strip()
     if token or os.environ.get("ARUI_CLAUDE_BIN"):
-        # Validate ALL configured tokens (auth + configured-model visibility)
-        # BEFORE we launch anything. Skipped under the test/dev ARUI_CLAUDE_BIN
-        # hook so unit tests never hit the network. On any failure we block the
-        # launch and return the structured per-provider results so the UI can
-        # point at exactly which key/model is wrong.
-        if not os.environ.get("ARUI_CLAUDE_BIN"):
-            from . import token_check
-            results = token_check.check_all(cfg)
-            bad = token_check.blocking_failures(results)
-            if bad:
-                return _maybe_set_cookie(JSONResponse(
-                    {"status": "invalid_tokens", "failed": bad,
-                     "tokens": results}, status_code=400))
-            # Pin the EFFECTIVE scoping advisor from the keys present (e.g. the
-            # only-Claude path resolves to Claude, not a Gemini default).
-            adv = (results.get("advisor") or {})
-            if adv.get("provider"):
-                cfg["scoping_model"] = adv["provider"]
-                _db2 = SessionLocal()
-                try:
-                    _r2 = _db2.query(Setting).filter(
-                        Setting.key == "onboarding").first()
-                    if _r2:
-                        _r2.value = cfg
-                    _db2.commit()
-                finally:
-                    _db2.close()
         # Scoping gate (Phase 0): instead of spawning the research agent
         # immediately, run a literature review + direction-confirmation pass
         # first. start_real() is deferred until scoping.confirm()/skip().

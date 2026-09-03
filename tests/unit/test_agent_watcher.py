@@ -225,7 +225,7 @@ def test_auth_zombie_skipped_if_no_api_key(watcher_env, monkeypatch):
                    for (k, _, _) in captured)
 
 
-def test_port_pin_refuses_taken_port(monkeypatch):
+def test_port_pin_refuses_taken_port(monkeypatch, arui_env):
     """backend.main._check_port_or_die must SystemExit if 8000 is
     already bound, instead of silently re-binding to a random port and
     leaving cloudflared pointing at a dead origin."""
@@ -245,7 +245,7 @@ def test_port_pin_refuses_taken_port(monkeypatch):
         sock.close()
 
 
-def test_port_pin_passes_when_free():
+def test_port_pin_passes_when_free(arui_env):
     """When the port is free, _check_port_or_die returns silently."""
     from backend import main as _main
     import socket as _s
