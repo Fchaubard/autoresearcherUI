@@ -237,6 +237,72 @@ def test_review_completion_async_emits_launch_event(arui_env, monkeypatch):
 
 
 # ── research-agent idle-park watchdog (autonomy: never wait on a human) ──────
+def test_dead_expected_agent_restarts_from_persisted_state(arui_env, monkeypatch):
+    """A clean CLI exit must never strand the orchestrator in planning."""
+    from backend.app import supervisor as sv, realrun, lifecycle as lc
+    import backend.app.agent_watcher as aw
+
+    realrun.set_expected(True, reason="test launch")
+    now = dt.datetime.now(dt.timezone.utc).timestamp()
+    sv._dead_agent_save({"missing_at": now - 60, "attempts": 0,
+                         "last_attempt": 0.0})
+    calls = []
+    monkeypatch.setattr(
+        aw, "_restart_session",
+        lambda session, resume=False: calls.append((session, resume)) or True)
+
+    owned = sv._supervise_dead_research_agent(
+        alive=False, halted=False, paused=False, concluding=False)
+
+    assert owned is True
+    assert calls == [("agent", True)]
+    assert lc.status()["health"] == lc.RECOVERING
+    assert sv._dead_agent_state()["attempts"] == 1
+
+
+def test_dead_agent_retries_forever_with_capped_backoff(arui_env, monkeypatch):
+    """Repeated launch failures are rate-limited, never converted to a
+    permanent HARD_STALLED state that requires a human click."""
+    from backend.app import supervisor as sv, realrun, lifecycle as lc
+    import backend.app.agent_watcher as aw
+
+    realrun.set_expected(True, reason="test launch")
+    now = dt.datetime.now(dt.timezone.utc).timestamp()
+    sv._dead_agent_save({"missing_at": now - 9999, "attempts": 20,
+                         "last_attempt": now - 9999})
+    monkeypatch.setattr(aw, "_restart_session",
+                        lambda session, resume=False: False)
+
+    sv._supervise_dead_research_agent(
+        alive=False, halted=False, paused=False, concluding=False)
+
+    assert sv._dead_agent_state()["attempts"] == 21
+    assert lc.status()["health"] == lc.RECOVERING
+    assert lc.status()["health"] != lc.HARD_STALLED
+
+
+def test_dead_agent_recovery_disabled_for_intentional_states(arui_env):
+    from backend.app import supervisor as sv, realrun
+    realrun.set_expected(True, reason="test launch")
+    for guards in ((True, False, False), (False, True, False),
+                   (False, False, True)):
+        halted, paused, concluding = guards
+        assert sv._supervise_dead_research_agent(
+            alive=False, halted=halted, paused=paused,
+            concluding=concluding) is False
+
+
+def test_agent_alive_rejects_dead_remain_on_exit_pane(monkeypatch):
+    from backend.app import supervisor as sv
+
+    class Result:
+        returncode = 0
+        stdout = "1\n"
+
+    monkeypatch.setattr(sv._sp, "run", lambda *a, **k: Result())
+    assert sv._agent_alive() is False
+
+
 def test_idle_nudge_decision_fires_when_parked():
     from backend.app import supervisor as sv
     # alive, running, parked at prompt past grace, no strikes -> nudge

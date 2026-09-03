@@ -16,13 +16,45 @@ import subprocess
 from .agent import RealAgent
 from .config import DATA_DIR, PORT, ROOT, workspace_dir
 from .db import SessionLocal
-from .models import Event, Project
+from .models import Event, Project, Setting
 
 _agent: RealAgent | None = None
+_EXPECTED_KEY = "research_agent_expected"
 
 
 def _iso() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat()
+
+
+def set_expected(expected: bool, *, reason: str = "") -> None:
+    """Persist whether the autonomous research REPL must be kept alive.
+
+    This is deliberately independent of the in-memory ``_agent`` reference:
+    backend restarts lose that object, while the supervisor must still know
+    that a vanished tmux session is an outage requiring recovery.
+    """
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(Setting.key == _EXPECTED_KEY).first()
+        value = {"expected": bool(expected), "updated_at": _iso(),
+                 "reason": reason or ""}
+        if row is None:
+            db.add(Setting(key=_EXPECTED_KEY, value=value))
+        else:
+            row.value = value
+        db.commit()
+    finally:
+        db.close()
+
+
+def expected() -> bool:
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(Setting.key == _EXPECTED_KEY).first()
+        return bool(row and isinstance(row.value, dict)
+                    and row.value.get("expected"))
+    finally:
+        db.close()
 
 
 def _direction(metric: str) -> str:
@@ -726,11 +758,16 @@ def start_real(cfg: dict, resume: bool = False) -> RealAgent:
     global _agent
     name = (cfg.get("repo_name") or "research").strip() or "research"
     metric = (cfg.get("metric") or "val_loss").strip()
+    from .model_registry import provider_for as _provider_for
+    selected_provider = _provider_for(
+        cfg.get("research_agent_model", "claude-opus-5")) or "claude"
     # Fail loudly + persistently if Claude Code is missing on the node.
     # Previously this would spawn `claude --dangerously-skip-permissions`,
     # the shell would 127-exit, tmux would die, and the boot overlay would
     # time out with the unhelpful "agent never started" message.
-    if (not os.environ.get("ARUI_CLAUDE_BIN")) and not claude_binary_present():
+    if (selected_provider == "claude"
+            and not os.environ.get("ARUI_CLAUDE_BIN")
+            and not claude_binary_present()):
         try:
             from .bus import bus
             from .db import SessionLocal as _SL
@@ -863,6 +900,10 @@ def start_real(cfg: dict, resume: bool = False) -> RealAgent:
         openai_key=cfg.get("openai_token", ""),
         gemini_key=cfg.get("gemini_token", ""))
     _agent.start()
+    # Set this only after tmux launch succeeds. The deterministic supervisor
+    # uses it to distinguish an unexpected CLI exit from pre-onboarding,
+    # scoping, reset, and deliberate shutdown states.
+    set_expected(True, reason="research agent launched")
     # Kick off the council-led watchdog review in the background. The
     # review is idempotent (skips if already done), so calling it on
     # both fresh onboarding AND resume is safe. We use a thread because
@@ -897,6 +938,7 @@ def active() -> RealAgent | None:
 def stop() -> None:
     """Kill the agent's tmux session (used by /api/reset)."""
     global _agent
+    set_expected(False, reason="research agent deliberately stopped")
     if _agent is not None:
         subprocess.run(["tmux", "kill-session", "-t", _agent.session],
                        capture_output=True)

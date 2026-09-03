@@ -345,6 +345,13 @@ class RealAgent:
         # launch Claude. The option must be set before claude enters alt-screen.
         subprocess.run(["tmux", "new-session", "-d", "-s", self.session,
                         "-x", "120", "-y", "40"], check=True)
+        # Preserve the pane when the CLI exits so the last frame and exit
+        # status remain inspectable. More importantly, this turns a clean CLI
+        # exit into explicit pane_dead state instead of deleting the whole
+        # session before the supervisor can diagnose and recover it.
+        subprocess.run(["tmux", "set-window-option", "-t", self.session,
+                        "remain-on-exit", "on"], check=True,
+                       capture_output=True)
         subprocess.run(["tmux", "set-window-option", "-t", self.session,
                         "alternate-screen", "off"], capture_output=True)
         # Start the CLI via respawn-pane with tmux's -e environment option.

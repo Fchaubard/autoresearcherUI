@@ -211,7 +211,7 @@ _PROCESS_CHECK_INTERVAL_S = 8
 _last_process_check: dict[str, float] = {}
 
 
-def _restart_session(session: str) -> bool:
+def _restart_session(session: str, resume: bool = False) -> bool:
     """Kill+respawn the named agent session via its restart endpoint.
     Returns True on success."""
     try:
@@ -241,7 +241,7 @@ def _restart_session(session: str) -> bool:
                 return False
             _sp.run(["tmux", "kill-session", "-t", "agent"],
                     capture_output=True, timeout=5)
-            realrun.start_real(cfg)
+            realrun.start_real(cfg, resume=resume)
             return True
     except Exception as e:                              # noqa: BLE001
         print(f"[agent_watcher] restart {session} failed: {e}",

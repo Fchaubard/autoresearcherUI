@@ -223,6 +223,9 @@ _AGENT_IDLE_GRACE_SEC = 420         # 7 min: don't thrash long thinking turns
 _AGENT_IDLE_COOLDOWN_SEC = 420      # min gap between nudges (7 min)
 _AGENT_IDLE_MAX_STRIKES = 3         # after N nudges with no progress -> human
 _AGENT_IDLE_KEY = "research_agent_idle_watch"
+_AGENT_DEAD_KEY = "research_agent_dead_watch"
+_AGENT_DEAD_GRACE_SEC = 15
+_AGENT_RESTART_MAX_BACKOFF_SEC = 300
 
 # Substrings that mean Claude Code is actively working (do NOT nudge).
 # Claude Code shows "esc to interrupt" (and a live "(Ns · ↑/↓ N tokens …)"
@@ -300,11 +303,120 @@ def _agent_pane_low(session: str = _AGENT_SESSION, lines: int = 40) -> str:
 
 
 def _agent_alive(session: str = _AGENT_SESSION) -> bool:
+    """True only when tmux exists *and* its foreground pane is not dead."""
     try:
-        return _sp.run(["tmux", "has-session", "-t", session],
-                       capture_output=True, timeout=4).returncode == 0
+        out = _sp.run(
+            ["tmux", "display-message", "-p", "-t", session,
+             "#{pane_dead}"], capture_output=True, text=True, timeout=4)
+        return out.returncode == 0 and (out.stdout or "").strip() == "0"
     except Exception:                                   # noqa: BLE001
         return False
+
+
+def _dead_agent_state() -> dict:
+    from .db import SessionLocal
+    from .models import Setting
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(Setting.key == _AGENT_DEAD_KEY).first()
+        return (dict(row.value) if row and isinstance(row.value, dict) else {})
+    finally:
+        db.close()
+
+
+def _dead_agent_save(value: dict | None) -> None:
+    from .db import SessionLocal
+    from .models import Setting
+    db = SessionLocal()
+    try:
+        row = db.query(Setting).filter(Setting.key == _AGENT_DEAD_KEY).first()
+        if value is None:
+            if row is not None:
+                db.delete(row)
+                db.commit()
+            return
+        if row is None:
+            db.add(Setting(key=_AGENT_DEAD_KEY, value=value))
+        else:
+            row.value = value
+        db.commit()
+    finally:
+        db.close()
+
+
+def _dead_restart_due(state: dict, now: float,
+                      grace: float = _AGENT_DEAD_GRACE_SEC) -> bool:
+    """Bound restart frequency without ever permanently giving up."""
+    missing_at = float(state.get("missing_at", now))
+    if now - missing_at < grace:
+        return False
+    attempts = max(0, int(state.get("attempts", 0)))
+    last = float(state.get("last_attempt", 0.0))
+    backoff = min(_AGENT_RESTART_MAX_BACKOFF_SEC,
+                  15 * (2 ** min(attempts, 5)))
+    return not last or now - last >= backoff
+
+
+def _supervise_dead_research_agent(*, alive: bool, halted: bool,
+                                   paused: bool, concluding: bool) -> bool:
+    """Recover an expected research REPL whose process/session vanished.
+
+    Returns True when the dead-agent path owns this tick, so the idle-prompt
+    watchdog does not also act. Retries use capped backoff forever: a provider
+    outage is observable and rate-limited, but can never silently strand the
+    orchestrator in ``planning``.
+    """
+    from . import lifecycle, realrun
+    expected = realrun.expected()
+    if not expected or halted or paused or concluding:
+        _dead_agent_save(None)
+        return False
+    if alive:
+        state = _dead_agent_state()
+        if state:
+            _dead_agent_save(None)
+            lifecycle.set_health(lifecycle.HEALTHY,
+                                 "research agent is running")
+            lifecycle.emit_event(
+                "agent_auto_recovered",
+                "Research agent is running after automatic recovery.",
+                severity="info", actor="supervisor")
+        return False
+
+    state = _dead_agent_state()
+    now = _dt.datetime.now(_dt.timezone.utc).timestamp()
+    if not state:
+        state = {"missing_at": now, "attempts": 0, "last_attempt": 0.0}
+        _dead_agent_save(state)
+        lifecycle.set_health(lifecycle.RECOVERING,
+                             "research agent exited; automatic restart pending")
+        lifecycle.emit_event(
+            "agent_exit_detected",
+            "Research agent exited unexpectedly; automatic recovery started.",
+            severity="warning", actor="supervisor")
+        return True
+    if not _dead_restart_due(state, now):
+        return True
+
+    state["attempts"] = int(state.get("attempts", 0)) + 1
+    state["last_attempt"] = now
+    _dead_agent_save(state)
+    lifecycle.set_health(
+        lifecycle.RECOVERING,
+        f"restarting research agent (attempt {state['attempts']})")
+    try:
+        from .agent_watcher import _restart_session
+        ok = _restart_session("agent", resume=True)
+    except Exception as e:                              # noqa: BLE001
+        ok = False
+        print(f"[supervisor] research-agent restart error: {e}", flush=True)
+    lifecycle.emit_event(
+        "agent_restart_started" if ok else "agent_restart_failed",
+        ("Automatically restarted the research agent from persisted state."
+         if ok else
+         "Research-agent restart failed; supervisor will retry automatically."),
+        severity="warning" if ok else "error", actor="supervisor")
+    return True
 
 
 def _agent_busy(pane_low: str) -> bool:
@@ -456,6 +568,11 @@ def _supervise_research_agent() -> None:
         concluding = cs in ("pending", "approved")
     except Exception:                                   # noqa: BLE001
         concluding = False
+
+    if _supervise_dead_research_agent(
+            alive=alive, halted=halted, paused=paused,
+            concluding=concluding):
+        return
 
     pane_low = _agent_pane_low() if alive else ""
     busy = _agent_busy(pane_low)

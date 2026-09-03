@@ -62,3 +62,6 @@ def test_real_agent_never_types_credentials_into_pane(tmp_path, monkeypatch):
                 if isinstance(cmd, list) and cmd[:2] == ["tmux", "respawn-pane"]]
     assert len(respawns) == 1
     assert f"OPENAI_API_KEY={secret}" in respawns[0]
+    assert any(cmd[:4] == ["tmux", "set-window-option", "-t", "agent"]
+               and cmd[-2:] == ["remain-on-exit", "on"]
+               for cmd in calls if isinstance(cmd, list))
