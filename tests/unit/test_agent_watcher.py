@@ -18,6 +18,8 @@ def watcher_env(monkeypatch, tmp_path):
     monkeypatch.setattr(agent_watcher, "_offset", {})
     monkeypatch.setattr(agent_watcher, "_stream_origin", {})
     monkeypatch.setattr(agent_watcher, "_emitted", {})
+    monkeypatch.setattr(agent_watcher, "_last_restart", {})
+    monkeypatch.setattr(agent_watcher, "_last_process_check", {})
     captured: list = []
 
     def fake_emit(phase_key, severity, message):
@@ -223,6 +225,70 @@ def test_auth_zombie_skipped_if_no_api_key(watcher_env, monkeypatch):
     assert calls == []
     assert not any(k == "auth_zombie_recovered"
                    for (k, _, _) in captured)
+
+
+def test_dead_repl_core_dump_triggers_restart(watcher_env, monkeypatch):
+    """A core-dumped Claude process leaves tmux alive at bash; recover it."""
+    import subprocess as _sp
+    aw, captured = watcher_env
+
+    def fake_run(cmd, *args, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = (b"bash\n" if cmd[1] == "display-message" else
+                      b"working\nAborted (core dumped)\nroot@host:~/work# ")
+        return Result()
+
+    monkeypatch.setattr(_sp, "run", fake_run)
+    restarted = []
+    monkeypatch.setattr(aw, "_restart_session",
+                        lambda session: (restarted.append(session), True)[1])
+    aw._check_dead_repl("agent")
+    assert restarted == ["agent"]
+    assert any(key == "dead_repl_recovered" for key, _, _ in captured)
+
+
+def test_dead_repl_ignores_fatal_text_while_claude_is_running(
+        watcher_env, monkeypatch):
+    """Historical/user-displayed crash text cannot kill a live Claude REPL."""
+    import subprocess as _sp
+    aw, captured = watcher_env
+
+    def fake_run(cmd, *args, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = (b"node\n" if cmd[1] == "display-message" else
+                      b"User quoted: Aborted (core dumped)\n")
+        return Result()
+
+    monkeypatch.setattr(_sp, "run", fake_run)
+    restarted = []
+    monkeypatch.setattr(aw, "_restart_session",
+                        lambda session: (restarted.append(session), True)[1])
+    aw._check_dead_repl("agent")
+    assert restarted == []
+    assert captured == []
+
+
+def test_dead_repl_does_not_restart_plain_shell(watcher_env, monkeypatch):
+    """A tmux shell without fatal evidence may simply still be starting."""
+    import subprocess as _sp
+    aw, captured = watcher_env
+
+    def fake_run(cmd, *args, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = (b"bash\n" if cmd[1] == "display-message" else
+                      b"root@host:~/work# ")
+        return Result()
+
+    monkeypatch.setattr(_sp, "run", fake_run)
+    restarted = []
+    monkeypatch.setattr(aw, "_restart_session",
+                        lambda session: (restarted.append(session), True)[1])
+    aw._check_dead_repl("agent")
+    assert restarted == []
+    assert captured == []
 
 
 def test_port_pin_refuses_taken_port(monkeypatch, arui_env):

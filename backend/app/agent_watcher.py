@@ -195,6 +195,21 @@ _RESTART_COOLDOWN_S = 300
 _AUTH_CHECK_INTERVAL_S = 30
 _last_auth_check: dict[str, float] = {}
 
+# A fatal native/Node crash can leave tmux alive at its fallback shell.  That
+# made /agent/alive report a healthy agent and caused subsequent directives to
+# be typed into bash instead of Claude.  Require both pieces of evidence below:
+# a fatal marker in the recent pane and a shell as the pane's foreground
+# command.  The conjunction avoids restarting merely because old scrollback
+# contains the words "core dumped".
+_FATAL_REPL_MARKERS = (
+    "Aborted (core dumped)",
+    "Segmentation fault (core dumped)",
+    "Bus error (core dumped)",
+)
+_SHELL_COMMANDS = {"bash", "sh", "dash", "zsh", "fish"}
+_PROCESS_CHECK_INTERVAL_S = 8
+_last_process_check: dict[str, float] = {}
+
 
 def _restart_session(session: str) -> bool:
     """Kill+respawn the named agent session via its restart endpoint.
@@ -280,6 +295,43 @@ def _check_auth_zombie(session: str) -> None:
               f"Check the Settings tab for a valid Claude token.")
 
 
+def _check_dead_repl(session: str) -> None:
+    """Restart Claude after a fatal exit that leaves its tmux shell alive."""
+    now = time.time()
+    if now - _last_process_check.get(session, 0.0) < _PROCESS_CHECK_INTERVAL_S:
+        return
+    _last_process_check[session] = now
+    import subprocess as _sp
+    try:
+        pane = _sp.run(["tmux", "capture-pane", "-t", session, "-p",
+                        "-S", "-80"], capture_output=True, timeout=4)
+        foreground = _sp.run(
+            ["tmux", "display-message", "-p", "-t", session,
+             "#{pane_current_command}"], capture_output=True, timeout=4)
+        text = (pane.stdout or b"").decode("utf-8", errors="ignore")
+        command = (foreground.stdout or b"").decode(
+            "utf-8", errors="ignore").strip().lower()
+    except Exception:                                   # noqa: BLE001
+        return
+    if command not in _SHELL_COMMANDS:
+        return
+    if not any(marker in text for marker in _FATAL_REPL_MARKERS):
+        return
+    if now - _last_restart.get(session, 0.0) < _RESTART_COOLDOWN_S:
+        return
+    _last_restart[session] = now
+    print(f"[agent_watcher] dead Claude REPL detected in {session} — "
+          f"auto-restarting", flush=True)
+    if _restart_session(session):
+        _emit("dead_repl_recovered", "warning",
+              f"Auto-recovered {session} agent after its Claude process "
+              f"exited fatally while tmux remained alive.")
+    else:
+        _emit("dead_repl_failed", "error",
+              f"Claude exited fatally in {session}, but its automatic "
+              f"restart failed. Check the configured Claude credentials.")
+
+
 def start(sessions: Iterable[str] = ("agent", "author")) -> None:
     """Spawn the background watcher. Idempotent; safe to call from
     main.py lifespan. Sessions default to the two agent tmux names."""
@@ -296,6 +348,7 @@ def start(sessions: Iterable[str] = ("agent", "author")) -> None:
             try:
                 for s in sess_list:
                     _scan_session(s)
+                    _check_dead_repl(s)
                     _check_auth_zombie(s)
             except Exception as e:                      # noqa: BLE001
                 print(f"[agent_watcher] loop error: {e}", flush=True)
