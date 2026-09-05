@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import shutil
 import subprocess
 import threading
 
@@ -317,6 +318,10 @@ class RealAgent:
             self._ensure_claude_settings(self.anthropic_key)
         if self.openai_key:
             env["OPENAI_API_KEY"] = self.openai_key
+            # Do this before tmux starts.  Otherwise a brand-new Codex node
+            # can remain alive forever at "Provide your own API key" even
+            # though the key exists in its environment.
+            self._ensure_codex_login(self.openai_key)
         if self.gemini_key:
             env["GEMINI_API_KEY"] = self.gemini_key
         log = os.path.join(self.workspace, "agent.log")
@@ -546,3 +551,23 @@ fi
         return subprocess.run(
             ["tmux", "has-session", "-t", self.session],
             capture_output=True).returncode == 0
+    @staticmethod
+    def _ensure_codex_login(api_key: str) -> bool:
+        """Persist API-key auth before launching an interactive Codex TUI.
+
+        A fresh Codex install does not consume ``OPENAI_API_KEY`` as an
+        interactive-login decision: it can still stop at the login chooser.
+        Feed the key to Codex's non-interactive login command over stdin so it
+        never appears in argv, tmux scrollback, or logs.  Failure is left for
+        the normal CLI startup diagnostics rather than leaking credentials.
+        """
+        binary = shutil.which("codex")
+        if not binary or not api_key:
+            return False
+        try:
+            result = subprocess.run(
+                [binary, "login", "--with-api-key"], input=api_key,
+                text=True, capture_output=True, timeout=30)
+            return result.returncode == 0
+        except Exception:                               # noqa: BLE001
+            return False

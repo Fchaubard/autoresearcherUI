@@ -194,6 +194,8 @@ _last_restart: dict[str, float] = {}
 _RESTART_COOLDOWN_S = 300
 _AUTH_CHECK_INTERVAL_S = 30
 _last_auth_check: dict[str, float] = {}
+_last_boot_accept: dict[str, float] = {}
+_BOOT_ACCEPT_COOLDOWN_S = 20
 
 # A fatal native/Node crash can leave tmux alive at its fallback shell.  That
 # made /agent/alive report a healthy agent and caused subsequent directives to
@@ -299,6 +301,40 @@ def _check_auth_zombie(session: str) -> None:
               f"Check the Settings tab for a valid Claude token.")
 
 
+def _check_boot_prompt(session: str) -> None:
+    """Accept provider-neutral directory trust prompts on every restart.
+
+    Claude has its own startup feeder, but Codex and future agent CLIs can
+    display the same one-time trust gate.  The process is technically alive
+    while doing no research, so dead-process and idle-prompt watchdogs cannot
+    recover it.  Only press Enter when the visible tail contains both the
+    explicit trust question and its continue instruction.
+    """
+    now = time.time()
+    if now - _last_boot_accept.get(session, 0.0) < _BOOT_ACCEPT_COOLDOWN_S:
+        return
+    import subprocess as _sp
+    try:
+        pane = _sp.run(["tmux", "capture-pane", "-t", session, "-p"],
+                       capture_output=True, timeout=4)
+        text = (pane.stdout or b"").decode("utf-8", errors="ignore").lower()
+    except Exception:                                   # noqa: BLE001
+        return
+    visible = "\n".join(text.splitlines()[-35:])
+    if not (("do you trust" in visible or "trust this folder" in visible)
+            and "press enter to continue" in visible):
+        return
+    try:
+        _sp.run(["tmux", "send-keys", "-t", session, "Enter"],
+                capture_output=True, timeout=4)
+    except Exception:                                   # noqa: BLE001
+        return
+    _last_boot_accept[session] = now
+    _emit("boot_prompt_recovered", "warning",
+          f"Auto-accepted the trusted-workspace prompt for {session}; "
+          "the research brief can continue.")
+
+
 def _check_dead_repl(session: str) -> None:
     """Restart Claude after a fatal exit that leaves its tmux shell alive."""
     now = time.time()
@@ -352,6 +388,7 @@ def start(sessions: Iterable[str] = ("agent", "author")) -> None:
             try:
                 for s in sess_list:
                     _scan_session(s)
+                    _check_boot_prompt(s)
                     _check_dead_repl(s)
                     _check_auth_zombie(s)
             except Exception as e:                      # noqa: BLE001

@@ -20,6 +20,7 @@ def watcher_env(monkeypatch, tmp_path):
     monkeypatch.setattr(agent_watcher, "_emitted", {})
     monkeypatch.setattr(agent_watcher, "_last_restart", {})
     monkeypatch.setattr(agent_watcher, "_last_process_check", {})
+    monkeypatch.setattr(agent_watcher, "_last_boot_accept", {})
     captured: list = []
 
     def fake_emit(phase_key, severity, message):
@@ -98,6 +99,22 @@ def test_scan_no_session_is_noop(watcher_env):
     aw, captured = watcher_env
     aw._scan_session("never_existed")
     assert captured == []
+
+
+def test_codex_trust_prompt_is_auto_accepted(watcher_env, monkeypatch):
+    import subprocess as _sp
+    aw, captured = watcher_env
+    calls = []
+
+    class Result:
+        stdout = (b"Do you trust the contents of this directory?\n"
+                  b"1. Yes, continue\nPress enter to continue\n")
+
+    monkeypatch.setattr(_sp, "run",
+                        lambda cmd, **kwargs: calls.append(cmd) or Result())
+    aw._check_boot_prompt("agent")
+    assert any(cmd[-1] == "Enter" for cmd in calls)
+    assert any(key == "boot_prompt_recovered" for key, _, _ in captured)
 
 
 def test_event_ids_are_unique_across_calls():

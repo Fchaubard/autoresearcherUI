@@ -63,6 +63,10 @@ def test_real_agent_never_types_credentials_into_pane(tmp_path, monkeypatch):
     typed = [cmd for cmd in calls
              if isinstance(cmd, list) and cmd[:2] == ["tmux", "send-keys"]]
     assert all(secret not in " ".join(cmd) for cmd in typed)
+    login = [cmd for cmd in calls
+             if isinstance(cmd, list) and "--with-api-key" in cmd]
+    assert len(login) == 1
+    assert all(secret not in " ".join(cmd) for cmd in login)
     respawns = [cmd for cmd in calls
                 if isinstance(cmd, list) and cmd[:2] == ["tmux", "respawn-pane"]]
     assert len(respawns) == 1

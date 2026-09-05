@@ -312,6 +312,59 @@ def test_idle_nudge_decision_fires_when_parked():
         idle_age=500, nudge_age=1e9, strikes=0) == "nudge"
 
 
+def test_nudge_retries_enter_when_text_remains_in_prompt(monkeypatch):
+    """Regression: tmux delivered the nudge text but lost Enter, parking the
+    live agent indefinitely. The sender verifies and retries once."""
+    import subprocess as _sp
+    from backend.app import supervisor as sv
+    calls = []
+
+    class Result:
+        returncode = 0
+        stdout = b""
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        result = Result()
+        if cmd[:2] == ["tmux", "capture-pane"]:
+            result.stdout = (b"\xe2\x9d\xaf [AUTONOMY - no human is watching "
+                             b"this session] continue research\n"
+                             b"bypass permissions on\n")
+        return result
+
+    monkeypatch.setattr(_sp, "run", fake_run)
+    monkeypatch.setattr("time.sleep", lambda _: None)
+    assert sv._send_agent_nudge() is True
+    enters = [c for c in calls if c[:4] == ["tmux", "send-keys", "-t", "agent"]
+              and c[-1] == "Enter"]
+    assert len(enters) == 2
+
+
+def test_nudge_does_not_double_submit_once_agent_is_busy(monkeypatch):
+    import subprocess as _sp
+    from backend.app import supervisor as sv
+    calls = []
+
+    class Result:
+        returncode = 0
+        stdout = b""
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        result = Result()
+        if cmd[:2] == ["tmux", "capture-pane"]:
+            result.stdout = (b"[AUTONOMY - no human is watching this session]\n"
+                             b"Working (12s \xc2\xb7 esc to interrupt)\n")
+        return result
+
+    monkeypatch.setattr(_sp, "run", fake_run)
+    monkeypatch.setattr("time.sleep", lambda _: None)
+    assert sv._send_agent_nudge() is True
+    enters = [c for c in calls if c[:4] == ["tmux", "send-keys", "-t", "agent"]
+              and c[-1] == "Enter"]
+    assert len(enters) == 1
+
+
 def test_idle_nudge_waits_within_grace():
     from backend.app import supervisor as sv
     assert sv._should_nudge_idle_agent(

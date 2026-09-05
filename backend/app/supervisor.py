@@ -535,8 +535,30 @@ def _send_agent_nudge(text: str = _AGENT_NUDGE,
         _sp.run(["tmux", "send-keys", "-t", session, "-l", text],
                 capture_output=True, timeout=4)
         _t.sleep(0.2)
-        _sp.run(["tmux", "send-keys", "-t", session, "Enter"],
-                capture_output=True, timeout=4)
+        submitted = _sp.run(["tmux", "send-keys", "-t", session, "Enter"],
+                            capture_output=True, timeout=4)
+        if submitted.returncode != 0:
+            return False
+
+        # tmux occasionally delivers the literal text but loses the following
+        # Enter while the TUI is repainting.  That leaves an apparently alive
+        # agent parked forever with our nudge in its input box.  Verify the
+        # visible state after submission and retry Enter exactly once only
+        # when the distinctive nudge marker is still an editable prompt.
+        _t.sleep(1.0)
+        pane = _sp.run(["tmux", "capture-pane", "-t", session, "-p",
+                        "-S", "-40"], capture_output=True, timeout=4)
+        pane_low = (pane.stdout or b"").decode(
+            "utf-8", errors="ignore").lower()
+        marker = "[autonomy - no human is watching this session]"
+        if (pane.returncode == 0 and marker in pane_low
+                and not _agent_busy(pane_low)
+                and (_agent_has_draft(pane_low)
+                     or _agent_idle_prompt(pane_low))):
+            retried = _sp.run(["tmux", "send-keys", "-t", session, "Enter"],
+                              capture_output=True, timeout=4)
+            if retried.returncode != 0:
+                return False
         return True
     except Exception:                                   # noqa: BLE001
         return False
