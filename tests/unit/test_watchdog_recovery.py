@@ -107,7 +107,7 @@ def test_watchdog_recycles_alive_but_unreachable_tunnel_over_http2(tmp_path):
     second = subprocess.run(["bash", WATCHDOG], env=env, capture_output=True)
     assert second.returncode == 0
     calls = tmux_calls.read_text()
-    assert "kill-session -t arui-cf" in calls
+    assert "kill-session -t =arui-cf" in calls
     assert "new-session -d -s arui-cf" in calls
     assert "cloudflared tunnel --protocol http2" in calls
     assert not (data / ".watchdog_tunnel_strike").exists()
@@ -132,8 +132,8 @@ def test_watchdog_preserves_only_safe_runtime_configuration(tmp_path):
         fake_bin,
         "tmux",
         f'echo "$*" >> "{tmux_calls}"\n'
-        'case "$1:$3" in has-session:arui) exit 1 ;; '
-        'has-session:arui-cf) exit 0 ;; *) exit 0 ;; esac',
+        'case "$1:$3" in has-session:=arui) exit 1 ;; '
+        'has-session:=arui-cf) exit 0 ;; *) exit 0 ;; esac',
     )
     _fake_command(fake_bin, "curl", "exit 0")
     _fake_command(fake_bin, "pgrep", "echo 4242")
@@ -154,3 +154,33 @@ def test_watchdog_preserves_only_safe_runtime_configuration(tmp_path):
     assert "must-not-be-copied" not in saved
     calls = tmux_calls.read_text()
     assert ".watchdog_runtime.env" in calls
+
+
+def test_watchdog_does_not_confuse_arui_cf_with_missing_backend(tmp_path):
+    """tmux prefix matching must not hide a missing `arui` session."""
+    root = tmp_path / "repo"
+    data = root / "data"
+    fake_bin = tmp_path / "bin"
+    data.mkdir(parents=True)
+    fake_bin.mkdir()
+    tmux_calls = tmp_path / "tmux.calls"
+
+    _fake_command(
+        fake_bin,
+        "tmux",
+        f'echo "$*" >> "{tmux_calls}"\n'
+        'case "$1:$3" in has-session:=arui) exit 1 ;; '
+        'has-session:=arui-cf) exit 0 ;; *) exit 0 ;; esac',
+    )
+    _fake_command(fake_bin, "curl", "exit 0")
+    _fake_command(fake_bin, "pgrep", "exit 1")
+    _fake_command(fake_bin, "cloudflared", "exit 0")
+
+    env = os.environ.copy()
+    env.update({"ARUI_ROOT": str(root), "PATH": f"{fake_bin}:{env['PATH']}"})
+    result = subprocess.run(["bash", WATCHDOG], env=env, capture_output=True)
+    assert result.returncode == 0
+    calls = tmux_calls.read_text()
+    assert "has-session -t =arui" in calls
+    assert "new-session -d -s arui" in calls
+    assert "kill-session -t =arui" in calls

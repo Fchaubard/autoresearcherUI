@@ -44,7 +44,10 @@ TUNNEL_STRIKE="$ROOT/data/.watchdog_tunnel_strike"
 RUNTIME_ENV="$ROOT/data/.watchdog_runtime.env"
 mkdir -p "$ROOT/data"
 
-have_session() { tmux has-session -t "$1" 2>/dev/null; }
+# tmux accepts unique prefixes as targets by default. That makes `arui`
+# accidentally match `arui-cf` when the backend session is missing — exactly
+# the state this watchdog must repair. A leading `=` requires an exact name.
+have_session() { tmux has-session -t "=$1" 2>/dev/null; }
 backend_up()   { curl -fsS -m 10 "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; }
 
 # Probe the public route, not merely the cloudflared process. A quick tunnel
@@ -94,7 +97,7 @@ snapshot_backend_env() {
 }
 
 launch_backend() {
-  tmux kill-session -t arui 2>/dev/null || true
+  tmux kill-session -t '=arui' 2>/dev/null || true
   tmux new-session -d -s arui \
     "cd $ROOT && { [ -f data/.watchdog_runtime.env ] && . ./data/.watchdog_runtime.env; [ -f data/arui.env ] && set -a && . ./data/arui.env && set +a; } ; while true; do \
        ARUI_PORT=$PORT .venv/bin/python -m backend.main 2>&1 | tee -a $LOG; \
@@ -105,7 +108,7 @@ launch_backend() {
 }
 
 launch_tunnel() {
-  tmux kill-session -t arui-cf 2>/dev/null || true
+  tmux kill-session -t '=arui-cf' 2>/dev/null || true
   tmux new-session -d -s arui-cf \
     "while true; do cloudflared tunnel --protocol http2 --url http://localhost:$PORT 2>&1 | tee -a $CFLOG; echo '[arui-cf] cloudflared exited; respawning in 2s' >>$CFLOG; sleep 2; done"
   echo "[watchdog $(date -u +%FT%TZ)] relaunched tunnel session 'arui-cf'" >>"$CFLOG"
