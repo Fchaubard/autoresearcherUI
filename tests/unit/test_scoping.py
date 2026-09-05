@@ -334,7 +334,7 @@ def test_api_scope_confirm_preview_endpoint(client):
 
 # ════════════════ onboarding -> gate wiring (the key seam) ══════════════════
 def test_onboarding_triggers_scoping_when_gate_on(client, monkeypatch):
-    from backend.app import scoping, realrun
+    from backend.app import agent_cli, scoping, realrun
     monkeypatch.setenv("ARUI_SCOPING_GATE", "1")
     scope_calls, agent_calls = [], []
     monkeypatch.setattr(scoping, "start",
@@ -344,6 +344,8 @@ def test_onboarding_triggers_scoping_when_gate_on(client, monkeypatch):
     monkeypatch.setattr(token_check, "check_all",
                         lambda cfg: {"claude": {"ok": True},
                                      "advisor": {"provider": "claude"}})
+    monkeypatch.setattr(agent_cli, "command",
+                        lambda *a, **k: ("claude", "claude"))
     r = client.post("/api/onboarding", json={
         "repo_name": "p", "metric": "m", "claude_token": "sk-ant-x",
         "research_agent_model": "claude-opus-5", "purpose": "y"})
@@ -353,7 +355,7 @@ def test_onboarding_triggers_scoping_when_gate_on(client, monkeypatch):
 
 
 def test_onboarding_starts_agent_directly_when_gate_off(client, monkeypatch):
-    from backend.app import scoping, realrun
+    from backend.app import agent_cli, scoping, realrun
     monkeypatch.setenv("ARUI_SCOPING_GATE", "0")
     scope_calls, agent_calls = [], []
     monkeypatch.setattr(scoping, "start", lambda cfg, **k: scope_calls.append(cfg))
@@ -362,6 +364,8 @@ def test_onboarding_starts_agent_directly_when_gate_off(client, monkeypatch):
     monkeypatch.setattr(token_check, "check_all",
                         lambda cfg: {"claude": {"ok": True},
                                      "advisor": {"provider": "claude"}})
+    monkeypatch.setattr(agent_cli, "command",
+                        lambda *a, **k: ("claude", "claude"))
     r = client.post("/api/onboarding", json={
         "repo_name": "p", "metric": "m", "claude_token": "sk-ant-x",
         "research_agent_model": "claude-opus-5", "purpose": "y"})
