@@ -217,11 +217,14 @@ import os as _os
 import re as _re
 import subprocess as _sp
 import datetime as _dt
+import hashlib as _hashlib
 
 _AGENT_SESSION = "agent"
 _AGENT_IDLE_GRACE_SEC = 420         # 7 min: don't thrash long thinking turns
 _AGENT_IDLE_COOLDOWN_SEC = 420      # min gap between nudges (7 min)
 _AGENT_IDLE_MAX_STRIKES = 3         # after N nudges with no progress -> human
+_AGENT_FROZEN_PENDING_SEC = int(_os.environ.get(
+    "ARUI_AGENT_FROZEN_PENDING_SEC", "1200"))  # 20m; long reasoning is valid
 _AGENT_IDLE_KEY = "research_agent_idle_watch"
 _AGENT_DEAD_KEY = "research_agent_dead_watch"
 _AGENT_DEAD_GRACE_SEC = 15
@@ -461,6 +464,16 @@ def _agent_idle_prompt(pane_low: str) -> bool:
             or pane_low.rstrip().endswith("❯"))
 
 
+def _agent_pending_turn(pane_low: str) -> bool:
+    """Codex accepted input but is not rendering an active spinner.
+
+    This footer means new input would be queued, so it is not an idle prompt.
+    A provider/network hang can leave it unchanged forever; idle detection
+    therefore cannot recover it without separate progress tracking.
+    """
+    return "tab to queue message" in pane_low
+
+
 def _should_nudge_idle_agent(disable_bg: bool, alive: bool, halted: bool,
                              paused: bool, concluding: bool,
                              boot_screen: bool, busy: bool, idle_prompt: bool,
@@ -616,6 +629,42 @@ def _supervise_research_agent() -> None:
             return max(0.0, now - _dt.datetime.fromisoformat(iso).timestamp())
         except Exception:                               # noqa: BLE001
             return 1e9
+
+    # A Codex pending-turn footer without a live spinner is neither "busy" nor
+    # "idle" in the ordinary TUI contract. Track exact visible-pane movement.
+    # If it remains byte-identical for 20 minutes, cancel the wedged provider
+    # turn and refeed through the verified nudge path. Any output change resets
+    # the clock, preserving arbitrarily long but visibly progressing work.
+    pending = _agent_pending_turn(pane_low) and not busy
+    if (not disable_bg and alive and not halted and not paused and
+            not concluding and not boot_screen and pending):
+        fingerprint = _hashlib.sha256(pane_low.encode()).hexdigest()
+        if state.get("pending_fingerprint") != fingerprint:
+            _agent_idle_save({"pending_fingerprint": fingerprint,
+                              "pending_since": _agent_iso(),
+                              "strikes": int(state.get("strikes", 0))})
+            return
+        frozen_age = _age("pending_since")
+        if frozen_age < _AGENT_FROZEN_PENDING_SEC:
+            return
+        try:
+            _sp.run(["tmux", "send-keys", "-t", _AGENT_SESSION, "Escape"],
+                    capture_output=True, timeout=4)
+        except Exception:                               # noqa: BLE001
+            pass
+        ok = _send_agent_nudge()
+        _agent_idle_save({"last_nudge": _agent_iso(), "strikes": 1})
+        lifecycle.emit_event(
+            "agent_frozen_turn_recovered",
+            (f"Research-agent provider turn showed no visible progress for "
+             f"{int(frozen_age)}s; cancelled it and submitted a fresh "
+             "autonomy directive."),
+            severity="warning", actor="supervisor")
+        if not ok:
+            lifecycle.emit_event("supervisor_error",
+                                 "frozen-turn recovery send failed",
+                                 severity="warning")
+        return
 
     # First time we see the agent parked, idle_since is unset -> treat idle_age
     # as 0 (clock just started) so we set idle_since and WAIT one grace window

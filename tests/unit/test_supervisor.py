@@ -497,6 +497,41 @@ def test_live_spinner_reads_busy_completion_does_not():
     assert sv._agent_busy("✻ cogitated for 5m 15s".lower()) is False
 
 
+def test_codex_queue_footer_is_pending_not_idle():
+    from backend.app import supervisor as sv
+    pane = "previous output\n\ntab to queue message          35% context left"
+    assert sv._agent_pending_turn(pane) is True
+    assert sv._agent_idle_prompt(pane) is False
+    assert sv._agent_busy(pane) is False
+
+
+def test_frozen_codex_pending_turn_is_cancelled_and_refed(
+        arui_env, monkeypatch):
+    import datetime as dt
+    import backend.app.supervisor as sv
+    from backend.app import notify, council
+    monkeypatch.delenv("ARUI_DISABLE_BG", raising=False)
+    monkeypatch.setattr(notify, "research_halted", lambda: (False, ""))
+    monkeypatch.setattr(notify, "research_paused", lambda: False)
+    monkeypatch.setattr(council, "conclusion_state", lambda: {"status": "none"})
+    monkeypatch.setattr(sv, "_agent_alive", lambda: True)
+    pane = "unchanged output\n\ntab to queue message   35% context left"
+    monkeypatch.setattr(sv, "_agent_pane_low", lambda: pane)
+    fingerprint = sv._hashlib.sha256(pane.encode()).hexdigest()
+    old = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1)).isoformat()
+    sv._agent_idle_save({"pending_fingerprint": fingerprint,
+                         "pending_since": old, "strikes": 0})
+    sent = []
+    monkeypatch.setattr(sv, "_send_agent_nudge",
+                        lambda: sent.append("nudge") or True)
+    tmux = []
+    monkeypatch.setattr(sv._sp, "run",
+                        lambda cmd, **kwargs: tmux.append(cmd))
+    sv._supervise_research_agent()
+    assert sent == ["nudge"]
+    assert any(cmd[-1] == "Escape" for cmd in tmux)
+
+
 def test_first_park_tick_waits_then_nudges():
     """Grace must actually apply: idle_age 0 (just parked) -> wait; only after
     the grace window -> nudge."""
