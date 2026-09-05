@@ -436,19 +436,24 @@ def _agent_boot_screen(pane_low: str) -> bool:
 
 def _agent_has_draft(pane_low: str) -> bool:
     """True if the agent has typed a non-trivial next-step into the prompt (a
-    line beginning with the ❯ marker with real content). We must NOT nudge then
-    — clearing its own plan with C-u is exactly the counterproductive thrash we
-    saw (148 nudges wiping 'build richer momentum/volatility features...')."""
+    line beginning with a Claude (❯) or Codex (›) marker with real content).
+    We must NOT nudge then — clearing its own plan with C-u is exactly the
+    counterproductive thrash we saw (148 nudges wiping an in-progress plan)."""
     for ln in pane_low.splitlines():
         t = ln.strip()
-        if t.startswith("❯ ") and len(t) > 8 and 'try "' not in t:
+        # Codex renders its generic placeholder as literal capture-pane text,
+        # unlike a browser placeholder. It is not a user draft and must not
+        # suppress autonomous recovery.
+        placeholder = t.lower() == "› ask codex to do anything"
+        if (t.startswith(("❯ ", "› ")) and len(t) > 8
+                and 'try "' not in t and not placeholder):
             return True
     return False
 
 
 def _agent_idle_prompt(pane_low: str) -> bool:
     """A live REPL waiting for input shows the prompt box + the "bypass
-    permissions on" footer (or a bare ❯ prompt)."""
+    permissions on" footer (or a bare Claude/Codex prompt)."""
     if not pane_low:
         return False
     # A parked REPL shows EITHER the plain prompt (bypass-permissions footer /
@@ -460,7 +465,8 @@ def _agent_idle_prompt(pane_low: str) -> bool:
             or "auto mode on" in pane_low
             or "enter to select" in pane_low
             or "\n❯ " in pane_low
-            or pane_low.rstrip().endswith("❯"))
+            or "\n› " in pane_low
+            or pane_low.rstrip().endswith(("❯", "›")))
 
 
 def _agent_pending_turn(pane_low: str) -> bool:

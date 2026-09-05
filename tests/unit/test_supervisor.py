@@ -432,6 +432,20 @@ def test_idle_prompt_detection():
     assert sv._agent_idle_prompt("") is False
 
 
+def test_codex_idle_prompt_and_draft_detection():
+    """Current Codex uses ›, not Claude's ❯, for its input prompt."""
+    from backend.app import supervisor as sv
+    parked = ("  completed the current batch\n"
+              "──────────\n"
+              "› Ask Codex to do anything\n"
+              "  gpt-5.6-sol · working directory")
+    low = parked.lower()
+    assert sv._agent_idle_prompt(low) is True
+    assert sv._agent_has_draft(low) is False
+    assert sv._agent_has_draft("result\n› launch the next experiment") is True
+    assert sv._agent_has_draft("result\n› \n  gpt-5.6-sol") is False
+
+
 def test_busy_and_boot_markers():
     from backend.app import supervisor as sv
     assert sv._agent_busy("✳ improvising… (39s · esc to interrupt)".lower())
