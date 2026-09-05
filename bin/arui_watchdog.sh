@@ -40,7 +40,14 @@ STRIKE="$ROOT/data/.watchdog_healthz_strike"
 mkdir -p "$ROOT/data"
 
 have_session() { tmux has-session -t "$1" 2>/dev/null; }
-backend_up()   { curl -fsS -m 3 "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; }
+backend_up()   { curl -fsS -m 10 "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; }
+
+# Return the Python backend PID (not the tmux/bash supervisor). Recording the
+# PID with the strike count prevents failures from carrying across a normal
+# respawn and gives a fresh process time to load a large historical registry.
+backend_pid() {
+  pgrep -f "^[^ ]*python[^ ]* -m backend\.main$" 2>/dev/null | head -1
+}
 
 launch_backend() {
   tmux kill-session -t arui 2>/dev/null || true
@@ -64,14 +71,23 @@ if ! have_session arui; then
   launch_backend
   rm -f "$STRIKE"
 elif ! backend_up; then
-  # Session exists but isn't answering. Could be the normal 2s respawn
-  # window (PR 10) — tolerate ONE failing run; recycle only on the second.
+  # A loaded backend can spend well over three seconds reconciling hundreds
+  # of historical runs. The old binary two-strike marker repeatedly killed
+  # each fresh process before it stabilized. Count failures per Python PID and
+  # recycle only after five consecutive cron checks (~5 minutes). A normal
+  # process respawn resets the count automatically.
+  PID="$(backend_pid)"
+  OLD_PID=""; COUNT=0
   if [ -f "$STRIKE" ]; then
-    echo "[watchdog $(date -u +%FT%TZ)] healthz failed twice; recycling 'arui'" >>"$LOG"
+    read -r OLD_PID COUNT <"$STRIKE" || true
+  fi
+  case "$COUNT" in ''|*[!0-9]*) COUNT=0 ;; esac
+  if [ -z "$PID" ] || [ "$PID" != "$OLD_PID" ]; then COUNT=1; else COUNT=$((COUNT + 1)); fi
+  printf '%s %s\n' "$PID" "$COUNT" >"$STRIKE"
+  if [ "$COUNT" -ge 5 ]; then
+    echo "[watchdog $(date -u +%FT%TZ)] healthz failed $COUNT consecutive checks for pid ${PID:-missing}; recycling 'arui'" >>"$LOG"
     launch_backend
     rm -f "$STRIKE"
-  else
-    touch "$STRIKE"
   fi
 else
   rm -f "$STRIKE"

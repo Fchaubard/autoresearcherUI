@@ -43,7 +43,10 @@ def test_watchdog_relaunches_missing_backend_and_has_strike_guard():
     # resurrects on a missing session
     assert "have_session arui" in src
     assert "launch_backend" in src
-    # tolerates a single transient healthz blip (PR 10's 2s respawn window)
+    # Failure accounting is PID-aware and requires five consecutive checks;
+    # this prevents a loaded fresh backend from entering a cron restart loop.
+    assert "backend_pid" in src
+    assert '"$COUNT" -ge 5' in src
     assert "STRIKE" in src and "healthz" in src.lower()
     # checks the real liveness endpoint
     assert "/healthz" in src

@@ -66,6 +66,22 @@ def test_exit_report_is_bounded_when_backend_stays_down(monkeypatch):
     assert clock[0] >= 20
 
 
+def test_exit_report_stops_retrying_permanent_unknown_run(monkeypatch):
+    from arui import launcher
+    clock = [0.0]
+
+    def unknown(req, **kwargs):
+        raise urllib.error.HTTPError(req.full_url, 404, "unknown run", {}, None)
+
+    monkeypatch.setattr(launcher.urllib.request, "urlopen", unknown)
+    monkeypatch.setattr(launcher.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(launcher.time, "sleep",
+                        lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setenv("ARUI_EXIT_REPORT_RETRY_SEC", "300")
+    assert launcher._report("untracked-probe", 0) is False
+    assert 10 <= clock[0] < 30
+
+
 def test_sdk_post_retries_transient_transport_failure(monkeypatch):
     import arui
     calls = []

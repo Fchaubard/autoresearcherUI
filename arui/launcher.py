@@ -49,6 +49,17 @@ def _report(run_id: str, returncode: int) -> bool:
         try:
             with urllib.request.urlopen(req, timeout=5) as response:
                 return 200 <= response.status < 300
+        except urllib.error.HTTPError as exc:
+            # 404 means this was an intentionally untracked local probe (or a
+            # malformed run id), not a backend reload. Give a genuine
+            # start/exit registration race a brief chance, then stop; otherwise
+            # many smoke probes create five-minute retry storms.
+            if 400 <= exc.code < 500 and (
+                    retry_window - max(0.0, deadline - time.monotonic())) >= 10:
+                return False
+            if time.monotonic() >= deadline:
+                return False
+            delay = min(15.0, 0.25 if not delay else delay * 2)
         except (OSError, urllib.error.URLError):
             if time.monotonic() >= deadline:
                 return False
