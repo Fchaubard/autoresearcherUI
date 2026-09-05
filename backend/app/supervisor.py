@@ -293,10 +293,20 @@ def _agent_iso() -> str:
     return _dt.datetime.now(_dt.timezone.utc).isoformat()
 
 
+def _pane_target(session: str) -> str:
+    """Return an exact tmux target-pane for a session's active window.
+
+    Some tmux releases do not coerce a bare session name to a pane for
+    ``capture-pane``/``send-keys``. The trailing colon selects its active
+    window and the leading equals sign prevents prefix ambiguity.
+    """
+    return f"={session}:"
+
+
 def _agent_pane_low(session: str = _AGENT_SESSION, lines: int = 40) -> str:
     """Lowercased tail of the agent tmux pane. "" on any failure."""
     try:
-        out = _sp.run(["tmux", "capture-pane", "-t", session, "-p",
+        out = _sp.run(["tmux", "capture-pane", "-t", _pane_target(session), "-p",
                        "-S", str(-lines)],
                       capture_output=True, text=True, timeout=4)
         return (out.stdout or "").lower() if out.returncode == 0 else ""
@@ -550,15 +560,16 @@ def _send_agent_nudge(text: str = _AGENT_NUDGE,
         # "enter to select · esc to cancel" prompt) so we land back on the text
         # prompt; harmless at a plain prompt. Then C-u clears any half-typed
         # draft, and we type + submit the nudge.
-        _sp.run(["tmux", "send-keys", "-t", session, "Escape"],
+        target = _pane_target(session)
+        _sp.run(["tmux", "send-keys", "-t", target, "Escape"],
                 capture_output=True, timeout=4)
         _t.sleep(0.3)
-        _sp.run(["tmux", "send-keys", "-t", session, "C-u"],
+        _sp.run(["tmux", "send-keys", "-t", target, "C-u"],
                 capture_output=True, timeout=4)
-        _sp.run(["tmux", "send-keys", "-t", session, "-l", text],
+        _sp.run(["tmux", "send-keys", "-t", target, "-l", text],
                 capture_output=True, timeout=4)
         _t.sleep(0.2)
-        submitted = _sp.run(["tmux", "send-keys", "-t", session, "Enter"],
+        submitted = _sp.run(["tmux", "send-keys", "-t", target, "Enter"],
                             capture_output=True, timeout=4)
         if submitted.returncode != 0:
             return False
@@ -569,7 +580,7 @@ def _send_agent_nudge(text: str = _AGENT_NUDGE,
         # visible state after submission and retry Enter exactly once only
         # when the distinctive nudge marker is still an editable prompt.
         _t.sleep(1.0)
-        pane = _sp.run(["tmux", "capture-pane", "-t", session, "-p",
+        pane = _sp.run(["tmux", "capture-pane", "-t", target, "-p",
                         "-S", "-40"], capture_output=True, timeout=4)
         pane_low = (pane.stdout or b"").decode(
             "utf-8", errors="ignore").lower()
@@ -578,7 +589,7 @@ def _send_agent_nudge(text: str = _AGENT_NUDGE,
                 and not _agent_busy(pane_low)
                 and (_agent_has_draft(pane_low)
                      or _agent_idle_prompt(pane_low))):
-            retried = _sp.run(["tmux", "send-keys", "-t", session, "Enter"],
+            retried = _sp.run(["tmux", "send-keys", "-t", target, "Enter"],
                               capture_output=True, timeout=4)
             if retried.returncode != 0:
                 return False
@@ -653,7 +664,8 @@ def _supervise_research_agent() -> None:
         if frozen_age < _AGENT_FROZEN_PENDING_SEC:
             return
         try:
-            _sp.run(["tmux", "send-keys", "-t", _AGENT_SESSION, "Escape"],
+            _sp.run(["tmux", "send-keys", "-t",
+                     _pane_target(_AGENT_SESSION), "Escape"],
                     capture_output=True, timeout=4)
         except Exception:                               # noqa: BLE001
             pass

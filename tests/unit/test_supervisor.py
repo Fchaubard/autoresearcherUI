@@ -336,7 +336,7 @@ def test_nudge_retries_enter_when_text_remains_in_prompt(monkeypatch):
     monkeypatch.setattr(_sp, "run", fake_run)
     monkeypatch.setattr("time.sleep", lambda _: None)
     assert sv._send_agent_nudge() is True
-    enters = [c for c in calls if c[:4] == ["tmux", "send-keys", "-t", "agent"]
+    enters = [c for c in calls if c[:4] == ["tmux", "send-keys", "-t", "=agent:"]
               and c[-1] == "Enter"]
     assert len(enters) == 2
 
@@ -361,7 +361,7 @@ def test_nudge_does_not_double_submit_once_agent_is_busy(monkeypatch):
     monkeypatch.setattr(_sp, "run", fake_run)
     monkeypatch.setattr("time.sleep", lambda _: None)
     assert sv._send_agent_nudge() is True
-    enters = [c for c in calls if c[:4] == ["tmux", "send-keys", "-t", "agent"]
+    enters = [c for c in calls if c[:4] == ["tmux", "send-keys", "-t", "=agent:"]
               and c[-1] == "Enter"]
     assert len(enters) == 1
 
@@ -430,6 +430,20 @@ def test_idle_prompt_detection():
     assert sv._agent_idle_prompt(working.lower()) is False
     assert sv._agent_busy(working.lower()) is True
     assert sv._agent_idle_prompt("") is False
+
+
+def test_agent_pane_capture_uses_exact_pane_target(monkeypatch):
+    from backend.app import supervisor as sv
+    calls = []
+
+    class Result:
+        returncode = 0
+        stdout = "› Ask Codex to do anything\n"
+
+    monkeypatch.setattr(sv._sp, "run",
+                        lambda cmd, **kwargs: calls.append(cmd) or Result())
+    assert sv._agent_pane_low() == "› ask codex to do anything\n"
+    assert calls[0][3] == "=agent:"
 
 
 def test_codex_idle_prompt_and_draft_detection():
