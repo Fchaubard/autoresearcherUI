@@ -256,7 +256,8 @@ def _restart_session(session: str, resume: bool = False,
                 realrun.start_real(cfg, resume=resume)
                 return True
     except Exception as e:                              # noqa: BLE001
-        print(f"[agent_watcher] restart {session} failed: {e}",
+        from .safe_errors import describe
+        print(f"[agent_watcher] restart {session} failed: {describe(e)}",
               flush=True)
     return False
 

@@ -2278,7 +2278,9 @@ async def agent_restart(request: Request):
                 # credentials and the complete private research brief.
                 results["research"] = {"ok": True, "status": "started"}
             except Exception as e:                              # noqa: BLE001
-                results["research"] = {"ok": False, "error": str(e)}
+                from .safe_errors import describe
+                results["research"] = {"ok": False,
+                                       "error": describe(e)}
     if "author" in targets:
         try:
             from . import author_agent

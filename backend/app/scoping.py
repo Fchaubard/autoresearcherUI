@@ -385,8 +385,10 @@ def confirm(final_direction: str = "", keep_user=None, keep_new=None) -> dict:
             from . import realrun
             realrun.start_real(cfg)
         except Exception as e:                              # noqa: BLE001
-            print(f"[scope] start_real failed: {e}", flush=True)
-            return _patch(status="error", error=f"start_real failed: {e}")
+            from .safe_errors import describe
+            safe = describe(e)
+            print(f"[scope] start_real failed: {safe}", flush=True)
+            return _patch(status="error", error=f"start_real failed: {safe}")
     return new_st
 
 
@@ -401,7 +403,9 @@ def skip(reason: str = "") -> dict:
             from . import realrun
             realrun.start_real(cfg)
         except Exception as e:                              # noqa: BLE001
-            return _patch(status="error", error=f"start_real failed: {e}")
+            from .safe_errors import describe
+            return _patch(status="error",
+                          error=f"start_real failed: {describe(e)}")
     return new_st
 
 

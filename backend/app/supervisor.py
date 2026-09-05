@@ -410,7 +410,9 @@ def _supervise_dead_research_agent(*, alive: bool, halted: bool,
         ok = _restart_session("agent", resume=True, only_if_missing=True)
     except Exception as e:                              # noqa: BLE001
         ok = False
-        print(f"[supervisor] research-agent restart error: {e}", flush=True)
+        from .safe_errors import describe
+        print(f"[supervisor] research-agent restart error: {describe(e)}",
+              flush=True)
     lifecycle.emit_event(
         "agent_restart_started" if ok else "agent_restart_failed",
         ("Automatically restarted the research agent from persisted state."
