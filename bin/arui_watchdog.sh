@@ -41,6 +41,7 @@ LOG="$ROOT/data/arui.log"
 CFLOG="$ROOT/data/cloudflared.log"
 STRIKE="$ROOT/data/.watchdog_healthz_strike"
 TUNNEL_STRIKE="$ROOT/data/.watchdog_tunnel_strike"
+RUNTIME_ENV="$ROOT/data/.watchdog_runtime.env"
 mkdir -p "$ROOT/data"
 
 have_session() { tmux has-session -t "$1" 2>/dev/null; }
@@ -69,10 +70,33 @@ backend_pid() {
   pgrep -f "^[^ ]*python[^ ]* -m backend\.main$" 2>/dev/null | head -1
 }
 
+# Preserve non-secret launch configuration before recycling the backend. GPU
+# deployments commonly point ARUI_DATA_DIR at a tmpfs from the parent shell;
+# cron does not inherit that shell, so a resurrection used to come up against
+# the default DB and make the live run history appear to vanish. Deliberately
+# allow-list configuration only — provider credentials must never be copied
+# out of /proc into this file.
+snapshot_backend_env() {
+  PID="$(backend_pid)"
+  [ -n "$PID" ] || return 0
+  ENVIRON="${ARUI_WATCHDOG_ENVIRON_FILE:-/proc/$PID/environ}"
+  [ -r "$ENVIRON" ] || return 0
+  CONTENT=""
+  for NAME in ARUI_DATA_DIR ARUI_CLAUDE_BIN ARUI_CODEX_BIN ARUI_TELEMETRY_DISABLED; do
+    VALUE="$(tr '\0' '\n' <"$ENVIRON" | sed -n "s/^$NAME=//p" | tail -1)"
+    if [ -n "$VALUE" ]; then
+      printf -v LINE 'export %s=%q\n' "$NAME" "$VALUE"
+      CONTENT="${CONTENT}${LINE}"
+    fi
+  done
+  [ -n "$CONTENT" ] && printf '%s' "$CONTENT" >"$RUNTIME_ENV"
+  return 0
+}
+
 launch_backend() {
   tmux kill-session -t arui 2>/dev/null || true
   tmux new-session -d -s arui \
-    "cd $ROOT && { [ -f data/arui.env ] && set -a && . ./data/arui.env && set +a; } ; while true; do \
+    "cd $ROOT && { [ -f data/.watchdog_runtime.env ] && . ./data/.watchdog_runtime.env; [ -f data/arui.env ] && set -a && . ./data/arui.env && set +a; } ; while true; do \
        ARUI_PORT=$PORT .venv/bin/python -m backend.main 2>&1 | tee -a $LOG; \
        echo \"[arui] backend exited at \$(date -u +%FT%TZ); respawning in 2s\" >>$LOG; \
        sleep 2; \
@@ -88,6 +112,7 @@ launch_tunnel() {
 }
 
 # ── backend ──────────────────────────────────────────────────────────────
+snapshot_backend_env
 if ! have_session arui; then
   launch_backend
   rm -f "$STRIKE"
@@ -119,7 +144,10 @@ if command -v cloudflared >/dev/null 2>&1; then
   if ! have_session arui-cf; then
     launch_tunnel
     rm -f "$TUNNEL_STRIKE"
-  elif ! tunnel_up; then
+  # Do not blame Cloudflare while the local origin is unhealthy. Backend
+  # recovery has its own PID-aware strike policy above; recycling a healthy
+  # tunnel cannot repair a blocked origin and needlessly rotates its URL.
+  elif backend_up && ! tunnel_up; then
     COUNT=0
     if [ -f "$TUNNEL_STRIKE" ]; then
       read -r COUNT <"$TUNNEL_STRIKE" || true

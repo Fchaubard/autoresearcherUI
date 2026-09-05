@@ -111,3 +111,46 @@ def test_watchdog_recycles_alive_but_unreachable_tunnel_over_http2(tmp_path):
     assert "new-session -d -s arui-cf" in calls
     assert "cloudflared tunnel --protocol http2" in calls
     assert not (data / ".watchdog_tunnel_strike").exists()
+
+
+def test_watchdog_preserves_only_safe_runtime_configuration(tmp_path):
+    """A cron resurrection keeps tmpfs/model paths without copying tokens."""
+    root = tmp_path / "repo"
+    data = root / "data"
+    fake_bin = tmp_path / "bin"
+    data.mkdir(parents=True)
+    fake_bin.mkdir()
+    environ = tmp_path / "environ"
+    environ.write_bytes(
+        b"ARUI_DATA_DIR=/dev/shm/arui-runtime.test\0"
+        b"ARUI_CODEX_BIN=/opt/codex test\0"
+        b"OPENAI_API_KEY=must-not-be-copied\0"
+    )
+    tmux_calls = tmp_path / "tmux.calls"
+
+    _fake_command(
+        fake_bin,
+        "tmux",
+        f'echo "$*" >> "{tmux_calls}"\n'
+        'case "$1:$3" in has-session:arui) exit 1 ;; '
+        'has-session:arui-cf) exit 0 ;; *) exit 0 ;; esac',
+    )
+    _fake_command(fake_bin, "curl", "exit 0")
+    _fake_command(fake_bin, "pgrep", "echo 4242")
+    _fake_command(fake_bin, "cloudflared", "exit 0")
+
+    env = os.environ.copy()
+    env.update({
+        "ARUI_ROOT": str(root),
+        "ARUI_WATCHDOG_ENVIRON_FILE": str(environ),
+        "PATH": f"{fake_bin}:{env['PATH']}",
+    })
+    result = subprocess.run(["bash", WATCHDOG], env=env, capture_output=True)
+    assert result.returncode == 0
+    saved = (data / ".watchdog_runtime.env").read_text()
+    assert "ARUI_DATA_DIR=/dev/shm/arui-runtime.test" in saved
+    assert "ARUI_CODEX_BIN=/opt/codex\\ test" in saved
+    assert "OPENAI_API_KEY" not in saved
+    assert "must-not-be-copied" not in saved
+    calls = tmux_calls.read_text()
+    assert ".watchdog_runtime.env" in calls
