@@ -58,7 +58,10 @@ def expected() -> bool:
 
 
 def _direction(metric: str) -> str:
-    m = (metric or "").lower()
+    m = (metric or "").lower().replace(" ", "_").replace("-", "_")
+    if any(t in m for t in ("higher_is_better", "higher_better",
+                            "maximize", "maximise")):
+        return "maximize"
     up = ("acc", "f1", "score", "reward", "bleu", "pass", "win", "exact")
     return "maximize" if any(t in m for t in up) else "minimize"
 
@@ -100,6 +103,16 @@ does. Do not drift into generic/boring research the operator explicitly ruled
 out. On a GPU node keep every idle GPU busy; on a CPU-only
 node (see COMPUTE CONTEXT) run CPU-sized experiments instead. Do not stop —
 keep researching.
+
+## HARNESS OWNERSHIP BOUNDARY (mandatory)
+You may inspect autoresearcherUI health and report a suspected harness outage,
+but NEVER kill, signal, restart, replace, or launch the `arui` backend,
+`arui-cf` tunnel, cron watchdog, or their processes/tmux sessions. Do not run
+background diagnostic loops that signal those processes. They are owned by an
+external resurrection supervisor; manipulating them from the research agent
+can create a self-sustaining restart loop and corrupt run accounting. Limit
+process control to your own experiment sessions. If an ingest request fails,
+keep the experiment alive and let the SDK retry.
 
 ## EXPERIMENT ISOLATION CONTRACT (mandatory for every substantive idea)
 Each substantive idea from ideas.md MUST run in FULL isolation so a failed

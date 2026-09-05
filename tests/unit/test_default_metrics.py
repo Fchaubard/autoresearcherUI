@@ -273,3 +273,11 @@ def test_setup_prompt_demands_default_plots():
                 "train_acc", "time_per_step", "samples_per_sec"):
         assert key in text, (
             f"setup_prompt does not name required default plot {key!r}")
+
+
+def test_setup_prompt_forbids_research_agent_harness_restarts():
+    from backend.app import realrun
+    text = realrun.DEFAULT_AGENT_INSTRUCTIONS
+    assert "HARNESS OWNERSHIP BOUNDARY" in text
+    assert "NEVER kill, signal, restart" in text
+    assert "process control to your own experiment sessions" in text
