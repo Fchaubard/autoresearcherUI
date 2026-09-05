@@ -345,7 +345,8 @@ def test_onboarding_triggers_scoping_when_gate_on(client, monkeypatch):
                         lambda cfg: {"claude": {"ok": True},
                                      "advisor": {"provider": "claude"}})
     r = client.post("/api/onboarding", json={
-        "repo_name": "p", "metric": "m", "claude_token": "sk-ant-x", "purpose": "y"})
+        "repo_name": "p", "metric": "m", "claude_token": "sk-ant-x",
+        "research_agent_model": "claude-opus-5", "purpose": "y"})
     assert r.json()["status"] == "scoping"
     assert len(scope_calls) == 1          # scoping started…
     assert agent_calls == []              # …and the agent is NOT spawned yet
@@ -362,7 +363,8 @@ def test_onboarding_starts_agent_directly_when_gate_off(client, monkeypatch):
                         lambda cfg: {"claude": {"ok": True},
                                      "advisor": {"provider": "claude"}})
     r = client.post("/api/onboarding", json={
-        "repo_name": "p", "metric": "m", "claude_token": "sk-ant-x", "purpose": "y"})
+        "repo_name": "p", "metric": "m", "claude_token": "sk-ant-x",
+        "research_agent_model": "claude-opus-5", "purpose": "y"})
     assert r.json()["status"] == "started"
     assert len(agent_calls) == 1          # agent launched directly…
     assert scope_calls == []              # …scoping bypassed

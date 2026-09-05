@@ -61,6 +61,7 @@ def test_agent_cli_reports_missing_provider_binary(monkeypatch):
 
 def test_real_agent_never_types_credentials_into_pane(tmp_path, monkeypatch):
     from backend.app.agent import RealAgent
+    from backend.app import agent as agent_mod
     import subprocess
 
     calls = []
@@ -73,6 +74,12 @@ def test_real_agent_never_types_credentials_into_pane(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "run",
                         lambda cmd, *args, **kwargs:
                         calls.append(cmd) or Result())
+    # GitHub's clean unit runner intentionally has no provider CLIs. Binary
+    # discovery is not under test here; pin it so the credential transport
+    # assertions exercise the same path on every machine.
+    monkeypatch.setattr(agent_mod.shutil, "which",
+                        lambda name: "/usr/bin/codex"
+                        if name == "codex" else None)
     from backend.app import pane_stream
     monkeypatch.setattr(pane_stream, "enable", lambda *args, **kwargs: None)
     monkeypatch.setattr(pane_stream, "apply_remembered_size",
