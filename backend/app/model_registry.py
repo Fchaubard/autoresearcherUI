@@ -8,7 +8,8 @@ GEMINI_EFFORTS = ("low", "medium", "high")
 # models remain available to council/scoping/PI roles. Updating future CLI
 # availability is intentionally a single-set edit here.
 AGENT_CLI_MODELS = {
-    "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.2",
+    "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+    "gpt-5.5", "gpt-5.2",
     "claude-fable-5-1", "claude-opus-5", "claude-fable-5",
     "claude-sonnet-5", "claude-haiku-4-5-20251001", "claude-opus-4-8",
     "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
@@ -18,6 +19,7 @@ AGENT_CLI_MODELS = {
 
 MODELS = (
     # OpenAI API models (current family first, compatibility models retained).
+    {"id": "gpt-6-astra", "label": "GPT-6 Astra", "provider": "openai", "efforts": ("low", "medium", "high", "xhigh", "max")},
     {"id": "gpt-5.6-sol", "label": "GPT-5.6 Sol", "provider": "openai", "efforts": OPENAI_EFFORTS},
     {"id": "gpt-5.6-terra", "label": "GPT-5.6 Terra", "provider": "openai", "efforts": OPENAI_EFFORTS},
     {"id": "gpt-5.6-luna", "label": "GPT-5.6 Luna", "provider": "openai", "efforts": OPENAI_EFFORTS},
@@ -74,5 +76,5 @@ def public_registry() -> dict:
     return {"models": [dict(m, efforts=list(m.get("efforts") or ()),
                             agent_cli=m["id"] in AGENT_CLI_MODELS)
                        for m in MODELS],
-            "defaults": {"claude": "claude-opus-5", "openai": "gpt-5.6-sol",
+            "defaults": {"claude": "claude-opus-5", "openai": "gpt-6-astra",
                          "gemini": "gemini-3.8-flash"}}

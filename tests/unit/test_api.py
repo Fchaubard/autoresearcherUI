@@ -251,8 +251,13 @@ def test_agent_restart_never_serializes_agent_secrets(
 def test_model_catalog_has_current_families(client):
     body = client.get("/api/models").json()
     ids = {m["id"] for m in body["models"]}
-    assert {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+    assert {"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
             "gemini-3.8-flash", "claude-opus-5", "claude-fable-5-1"} <= ids
+    assert body["defaults"]["openai"] == "gpt-6-astra"
+    astra = next(model for model in body["models"]
+                 if model["id"] == "gpt-6-astra")
+    assert astra["agent_cli"] is True
+    assert astra["efforts"] == ["low", "medium", "high", "xhigh", "max"]
 
 
 def test_reset_removes_managed_workspace_and_runtime_captures(client):

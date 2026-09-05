@@ -3937,7 +3937,7 @@ const OB_FIELDS = [
   // fast, which matters because the plan re-synthesizes after every message.
   ['scoping_model',
     'Scoping agent — model for the pre-research lit review + plan critique',
-    'select', 'gemini-3.8-flash|gemini-3.1-pro-preview|gpt-5.6-sol|'
+    'select', 'gemini-3.8-flash|gemini-3.1-pro-preview|gpt-6-astra|gpt-5.6-sol|'
     + 'claude-opus-5|claude-fable-5-1'],
   ['skip_perms', 'Run the agent with --dangerously-skip-permissions',
     'check', ''],
@@ -3978,13 +3978,13 @@ const OB_FIELDS = [
     + 'format, …). Edit to customise; blank uses the default.', 'area', ''],
   ['research_agent_model', 'Research agent model', 'select',
     'claude-fable-5-1|claude-opus-5|claude-sonnet-5|claude-fable-5|'
-    + 'gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna|gemini-3.8-flash|'
+    + 'gpt-6-astra|gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna|gemini-3.8-flash|'
     + 'gemini-3.1-pro-preview'],
   ['research_agent_effort', 'Research agent effort', 'select',
     'high|medium|low|none|xhigh|max'],
   ['author_agent_model', 'Paper author model', 'select',
     'claude-fable-5-1|claude-opus-5|claude-sonnet-5|claude-fable-5|'
-    + 'gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna|gemini-3.8-flash|'
+    + 'gpt-6-astra|gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna|gemini-3.8-flash|'
     + 'gemini-3.1-pro-preview'],
   ['author_agent_effort', 'Paper author effort', 'select',
     'high|medium|low|none|xhigh|max'],
@@ -3997,7 +3997,7 @@ const OB_FIELDS = [
     'medium|low|high|none|xhigh|max'],
   ['council_enable_openai', 'Enable reviewer B', 'check', ''],
   ['council_openai_model', 'Council — reviewer B model', 'select',
-    'gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna|gpt-5.2|gpt-5.1|'
+    'gpt-6-astra|gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna|gpt-5.2|gpt-5.1|'
     + 'gpt-5|gpt-5-mini|gpt-5-nano|o3|o3-pro'],
   ['council_openai_effort', 'Council — OpenAI reasoning effort', 'select',
     'high|medium|low|none|xhigh|max|minimal'],
@@ -4049,7 +4049,7 @@ const OB_FIELDS = [
   ['pi_agent_enabled', 'Run the PI agent on a schedule', 'check', ''],
   ['pi_agent_model', 'PI agent model', 'select',
     'gemini-3.8-flash|gemini-3.7-flash|gemini-3.6-flash|gemini-3.5-flash|'
-    + 'gemini-3.1-pro-preview|gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna|'
+    + 'gemini-3.1-pro-preview|gpt-6-astra|gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna|'
     + 'gpt-5.2|gpt-5.1|gpt-5|claude-opus-5|claude-sonnet-5|'
     + 'claude-fable-5|claude-opus-4-8|claude-opus-4-6'],
   ['pi_agent_effort', 'PI agent reasoning / thinking effort', 'select',

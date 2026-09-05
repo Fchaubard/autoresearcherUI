@@ -19,6 +19,11 @@ def test_agent_cli_builds_each_provider_command(monkeypatch):
     assert "model_reasoning_effort=xhigh" in codex
     assert "read brief" in codex
 
+    provider, astra = agent_cli.command("gpt-6-astra", "max", "read brief")
+    assert provider == "openai"
+    assert "--model gpt-6-astra" in astra
+    assert "model_reasoning_effort=max" in astra
+
     provider, gemini = agent_cli.command("gemini-3.8-flash", "high", "read brief")
     assert provider == "gemini"
     assert "gemini --approval-mode=yolo" in gemini

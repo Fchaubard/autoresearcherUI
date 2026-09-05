@@ -35,7 +35,7 @@ _TIMEOUT = 8.0          # seconds per provider — keep onboarding snappy
 
 DEFAULT_MODELS = {
     "claude": "claude-opus-5",
-    "openai": "gpt-5.6-sol",
+    "openai": "gpt-6-astra",
     "gemini": "gemini-3.8-flash",
 }
 

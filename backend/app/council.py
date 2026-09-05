@@ -66,7 +66,7 @@ _load_keys_env()
 DEFAULTS = {
     "council_gemini_model": "gemini-3.8-flash",
     "council_gemini_effort": "medium",
-    "council_openai_model": "gpt-5.6-sol",
+    "council_openai_model": "gpt-6-astra",
     "council_openai_effort": "high",
     "council_claude_model": "claude-opus-5",
     "council_claude_effort": "high",

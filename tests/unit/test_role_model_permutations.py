@@ -18,6 +18,7 @@ ROLE_FIELDS = (
 MODELS = (
     "claude-opus-5",
     "claude-fable-5-1",
+    "gpt-6-astra",
     "gpt-5.6-sol",
     "gpt-5.5",
     "gemini-3.8-flash",
