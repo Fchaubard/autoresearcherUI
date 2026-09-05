@@ -404,7 +404,10 @@ def _supervise_dead_research_agent(*, alive: bool, halted: bool,
         f"restarting research agent (attempt {state['attempts']})")
     try:
         from .agent_watcher import _restart_session
-        ok = _restart_session("agent", resume=True)
+        # agent_watcher may have recovered the same missing session while this
+        # supervisor tick was waiting. The shared restart transaction rechecks
+        # under its lock and never kills a newly healthy replacement.
+        ok = _restart_session("agent", resume=True, only_if_missing=True)
     except Exception as e:                              # noqa: BLE001
         ok = False
         print(f"[supervisor] research-agent restart error: {e}", flush=True)

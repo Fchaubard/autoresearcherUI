@@ -95,6 +95,10 @@ _emitted: dict[tuple[str, int], set[str]] = {}
 _offset: dict[str, int] = {}
 _stream_origin: dict[str, int] = {}     # bytes at first sight — marker for rotation
 _lock = threading.Lock()
+# Agent recovery is requested independently by this watcher and supervisor.py.
+# Serialize the full kill+spawn transaction so two correct detections cannot
+# kill each other's freshly-created tmux session.
+_session_restart_lock = threading.Lock()
 
 
 # ANSI escape stripping — keeps the regex matching against plain text.
@@ -213,38 +217,44 @@ _PROCESS_CHECK_INTERVAL_S = 8
 _last_process_check: dict[str, float] = {}
 
 
-def _restart_session(session: str, resume: bool = False) -> bool:
+def _restart_session(session: str, resume: bool = False,
+                     only_if_missing: bool = False) -> bool:
     """Kill+respawn the named agent session via its restart endpoint.
     Returns True on success."""
     try:
-        if session == "author":
-            from . import author_agent
+        with _session_restart_lock:
             import subprocess as _sp
-            _sp.run(["tmux", "kill-session", "-t", "author"],
-                    capture_output=True, timeout=5)
-            author_agent.start()
-            return True
-        elif session == "agent":
-            from . import realrun
-            from .db import SessionLocal as _SL
-            from .models import Setting as _S
-            import subprocess as _sp
-            db = _SL()
-            try:
-                row = db.query(_S).filter(_S.key == "onboarding").first()
-                cfg = dict(row.value) if row and isinstance(row.value, dict) else {}
-            finally:
-                db.close()
-            from .model_registry import provider_for
-            provider = provider_for(cfg.get("research_agent_model", ""))
-            token_key = {"claude": "claude_token", "openai": "openai_token",
-                         "gemini": "gemini_token"}.get(provider, "")
-            if (not token_key or not cfg.get(token_key)) and not _stat_env_var():
-                return False
-            _sp.run(["tmux", "kill-session", "-t", "agent"],
-                    capture_output=True, timeout=5)
-            realrun.start_real(cfg, resume=resume)
-            return True
+            if only_if_missing:
+                alive = _sp.run(["tmux", "has-session", "-t", session],
+                                capture_output=True, timeout=4)
+                if alive.returncode == 0:
+                    return True
+            if session == "author":
+                from . import author_agent
+                _sp.run(["tmux", "kill-session", "-t", "author"],
+                        capture_output=True, timeout=5)
+                author_agent.start()
+                return True
+            elif session == "agent":
+                from . import realrun
+                from .db import SessionLocal as _SL
+                from .models import Setting as _S
+                db = _SL()
+                try:
+                    row = db.query(_S).filter(_S.key == "onboarding").first()
+                    cfg = dict(row.value) if row and isinstance(row.value, dict) else {}
+                finally:
+                    db.close()
+                from .model_registry import provider_for
+                provider = provider_for(cfg.get("research_agent_model", ""))
+                token_key = {"claude": "claude_token", "openai": "openai_token",
+                             "gemini": "gemini_token"}.get(provider, "")
+                if (not token_key or not cfg.get(token_key)) and not _stat_env_var():
+                    return False
+                _sp.run(["tmux", "kill-session", "-t", "agent"],
+                        capture_output=True, timeout=5)
+                realrun.start_real(cfg, resume=resume)
+                return True
     except Exception as e:                              # noqa: BLE001
         print(f"[agent_watcher] restart {session} failed: {e}",
               flush=True)

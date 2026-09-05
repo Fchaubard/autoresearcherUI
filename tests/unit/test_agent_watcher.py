@@ -220,6 +220,24 @@ def test_auth_zombie_rate_limited(watcher_env, monkeypatch):
     assert calls == ["author"]
 
 
+def test_missing_only_restart_preserves_concurrently_recovered_session(
+        watcher_env, monkeypatch):
+    """Supervisor and watcher can observe the same outage. After one wins the
+    restart lock, the loser must not kill the fresh replacement."""
+    import subprocess as _sp
+    aw, _ = watcher_env
+    calls = []
+
+    class Result:
+        returncode = 0
+
+    monkeypatch.setattr(_sp, "run",
+                        lambda cmd, **kwargs: calls.append(cmd) or Result())
+    assert aw._restart_session("agent", resume=True,
+                               only_if_missing=True) is True
+    assert calls == [["tmux", "has-session", "-t", "agent"]]
+
+
 def test_auth_zombie_skipped_if_no_api_key(watcher_env, monkeypatch):
     """If no Claude key is in env, don't restart — respawn would just
     hit the same wall, and we'd emit noise every cycle."""

@@ -249,13 +249,14 @@ def test_dead_expected_agent_restarts_from_persisted_state(arui_env, monkeypatch
     calls = []
     monkeypatch.setattr(
         aw, "_restart_session",
-        lambda session, resume=False: calls.append((session, resume)) or True)
+        lambda session, resume=False, only_if_missing=False:
+            calls.append((session, resume, only_if_missing)) or True)
 
     owned = sv._supervise_dead_research_agent(
         alive=False, halted=False, paused=False, concluding=False)
 
     assert owned is True
-    assert calls == [("agent", True)]
+    assert calls == [("agent", True, True)]
     assert lc.status()["health"] == lc.RECOVERING
     assert sv._dead_agent_state()["attempts"] == 1
 
