@@ -22,6 +22,9 @@
 #     consecutive runs (a wedged/hung process the in-loop supervisor can't
 #     catch because the process didn't exit) -> recycle it.
 #   - If the `arui-cf` cloudflared session is gone -> relaunch the tunnel.
+#   - If cloudflared is alive but its published URL is unreachable for two
+#     consecutive checks -> recycle it using HTTP/2 (some GPU providers drop
+#     the QUIC/UDP transport while leaving the process alive forever).
 #
 #   It NEVER touches the agent / author sessions, and never kills a healthy
 #   backend (single transient healthz blip is tolerated via the 2-strike
@@ -37,10 +40,27 @@ PORT="${ARUI_PORT:-8000}"
 LOG="$ROOT/data/arui.log"
 CFLOG="$ROOT/data/cloudflared.log"
 STRIKE="$ROOT/data/.watchdog_healthz_strike"
+TUNNEL_STRIKE="$ROOT/data/.watchdog_tunnel_strike"
 mkdir -p "$ROOT/data"
 
 have_session() { tmux has-session -t "$1" 2>/dev/null; }
 backend_up()   { curl -fsS -m 10 "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; }
+
+# Probe the public route, not merely the cloudflared process. A quick tunnel
+# can remain alive while every QUIC reconnect times out and its hostname has
+# already gone NXDOMAIN. Restrict the probe target to Cloudflare-assigned
+# hostnames parsed from our own log so this can never become an arbitrary URL
+# fetcher if the log contains unrelated text.
+tunnel_url() {
+  [ -f "$CFLOG" ] || return 1
+  grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$CFLOG" 2>/dev/null | tail -1
+}
+
+tunnel_up() {
+  URL="$(tunnel_url)" || return 1
+  [ -n "$URL" ] || return 1
+  curl -fsS -m 10 "$URL/healthz" >/dev/null 2>&1
+}
 
 # Return the Python backend PID (not the tmux/bash supervisor). Recording the
 # PID with the strike count prevents failures from carrying across a normal
@@ -61,8 +81,9 @@ launch_backend() {
 }
 
 launch_tunnel() {
+  tmux kill-session -t arui-cf 2>/dev/null || true
   tmux new-session -d -s arui-cf \
-    "while true; do cloudflared tunnel --url http://localhost:$PORT 2>&1 | tee -a $CFLOG; echo '[arui-cf] cloudflared exited; respawning in 2s' >>$CFLOG; sleep 2; done"
+    "while true; do cloudflared tunnel --protocol http2 --url http://localhost:$PORT 2>&1 | tee -a $CFLOG; echo '[arui-cf] cloudflared exited; respawning in 2s' >>$CFLOG; sleep 2; done"
   echo "[watchdog $(date -u +%FT%TZ)] relaunched tunnel session 'arui-cf'" >>"$CFLOG"
 }
 
@@ -94,6 +115,24 @@ else
 fi
 
 # ── tunnel ───────────────────────────────────────────────────────────────
-if command -v cloudflared >/dev/null 2>&1 && ! have_session arui-cf; then
-  launch_tunnel
+if command -v cloudflared >/dev/null 2>&1; then
+  if ! have_session arui-cf; then
+    launch_tunnel
+    rm -f "$TUNNEL_STRIKE"
+  elif ! tunnel_up; then
+    COUNT=0
+    if [ -f "$TUNNEL_STRIKE" ]; then
+      read -r COUNT <"$TUNNEL_STRIKE" || true
+    fi
+    case "$COUNT" in ''|*[!0-9]*) COUNT=0 ;; esac
+    COUNT=$((COUNT + 1))
+    printf '%s\n' "$COUNT" >"$TUNNEL_STRIKE"
+    if [ "$COUNT" -ge 2 ]; then
+      echo "[watchdog $(date -u +%FT%TZ)] public tunnel failed $COUNT consecutive checks; recycling 'arui-cf' with HTTP/2" >>"$CFLOG"
+      launch_tunnel
+      rm -f "$TUNNEL_STRIKE"
+    fi
+  else
+    rm -f "$TUNNEL_STRIKE"
+  fi
 fi
