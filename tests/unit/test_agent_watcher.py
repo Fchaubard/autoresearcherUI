@@ -20,6 +20,7 @@ def watcher_env(monkeypatch, tmp_path):
     monkeypatch.setattr(agent_watcher, "_emitted", {})
     monkeypatch.setattr(agent_watcher, "_last_restart", {})
     monkeypatch.setattr(agent_watcher, "_last_process_check", {})
+    monkeypatch.setattr(agent_watcher, "_last_runtime_check", {})
     monkeypatch.setattr(agent_watcher, "_last_boot_accept", {})
     captured: list = []
 
@@ -115,6 +116,30 @@ def test_codex_trust_prompt_is_auto_accepted(watcher_env, monkeypatch):
     aw._check_boot_prompt("agent")
     assert any(cmd[-1] == "Enter" for cmd in calls)
     assert any(key == "boot_prompt_recovered" for key, _, _ in captured)
+
+
+def test_broken_codex_runtime_triggers_resume_restart(watcher_env, monkeypatch):
+    """A live REPL missing its helper binary must not park forever."""
+    import subprocess as _sp
+    aw, captured = watcher_env
+
+    class Result:
+        returncode = 0
+        stdout = (b"Blocked before execution: the command runtime's internal "
+                  b"codex-code-mode-host binary is missing.\n"
+                  b"Ask Codex to do anything\n")
+
+    monkeypatch.setattr(_sp, "run", lambda *a, **k: Result())
+    restarted = []
+    monkeypatch.setattr(
+        aw, "_restart_session",
+        lambda session, resume=False:
+            restarted.append((session, resume)) or True)
+
+    aw._check_broken_runtime("agent")
+
+    assert restarted == [("agent", True)]
+    assert any(k == "broken_runtime_recovered" for k, _, _ in captured)
 
 
 def test_event_ids_are_unique_across_calls():

@@ -281,3 +281,17 @@ def test_setup_prompt_forbids_research_agent_harness_restarts():
     assert "HARNESS OWNERSHIP BOUNDARY" in text
     assert "NEVER kill, signal, restart" in text
     assert "process control to your own experiment sessions" in text
+
+
+def test_setup_and_resume_prompts_require_succinct_metric_text(monkeypatch):
+    """Long formulas belong in evaluation docs, not dashboard labels."""
+    from backend.app import realrun
+
+    monkeypatch.setattr(realrun, "_compute_context_note", lambda: "compute")
+    cfg = {"metric": "episode_return", "purpose": "test",
+           "baseline": "baseline", "eval": "evaluation"}
+    for prompt in (realrun._setup_prompt(cfg), realrun._resume_prompt(cfg)):
+        low = prompt.lower()
+        assert "metric text concise" in low
+        assert "short metric name" in low
+        assert "full formula" in low

@@ -3,6 +3,27 @@ from __future__ import annotations
 import pytest
 
 
+def test_binary_prefers_active_path_cli_over_stale_nvm(tmp_path, monkeypatch):
+    """A Codex standalone migration must not relaunch an old NVM shim."""
+    from backend.app import agent_cli
+
+    active = tmp_path / "local" / "bin" / "codex"
+    active.parent.mkdir(parents=True)
+    active.touch()
+    stale = tmp_path / ".nvm" / "versions" / "node" / "v22" / "bin" / "codex"
+    stale.parent.mkdir(parents=True)
+    stale.touch()
+    monkeypatch.delenv("ARUI_CODEX_BIN", raising=False)
+    monkeypatch.setattr(agent_cli.shutil, "which",
+                        lambda name: str(active) if name == "codex" else None)
+    monkeypatch.setattr(agent_cli.Path, "home", lambda: tmp_path)
+
+    chosen = agent_cli._binary("openai")
+
+    assert str(active) in chosen
+    assert str(stale) not in chosen
+
+
 def test_agent_cli_builds_each_provider_command(monkeypatch):
     from backend.app import agent_cli
     monkeypatch.setattr(agent_cli, "_binary", lambda provider: {

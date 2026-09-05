@@ -17,18 +17,22 @@ def _binary(provider: str) -> str:
     name = {"claude": "claude", "openai": "codex", "gemini": "gemini"}[provider]
     override = os.environ.get(f"ARUI_{name.upper()}_BIN", "").strip()
     candidates = [Path(override)] if override else []
+    # Prefer the command currently selected by PATH. Modern Codex upgrades
+    # migrate from the npm/NVM layout to an immutable standalone release and
+    # remove the old npm package. Choosing a merely-existing NVM shim first
+    # can launch the old native process just as its sibling
+    # `codex-code-mode-host` is removed, leaving a live but unusable REPL.
+    # The standalone `current` symlink resolves into a versioned release, so
+    # its helper binaries remain beside the running executable across updates.
+    found = shutil.which(name)
+    if found:
+        candidates.append(Path(found))
     if name in {"codex", "gemini"}:
         # Backend services often start with a minimal PATH that omits nvm even
         # though the current coding CLIs require its modern Node runtime.
         candidates += sorted(Path.home().glob(f".nvm/versions/node/*/bin/{name}"),
                              reverse=True)
     binary = next((p for p in candidates if p.is_file()), None)
-    found = shutil.which(name)
-    if binary is None and found:
-        # shutil.which already guarantees an executable path. Keeping this
-        # branch separate also makes command resolution straightforward to
-        # isolate in tests.
-        binary = Path(found)
     if not binary:
         raise AgentCLIUnavailable(
             f"{name} CLI is required for this autonomous agent")

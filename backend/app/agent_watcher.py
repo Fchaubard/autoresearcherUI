@@ -215,6 +215,15 @@ _FATAL_REPL_MARKERS = (
 _SHELL_COMMANDS = {"bash", "sh", "dash", "zsh", "fish"}
 _PROCESS_CHECK_INTERVAL_S = 8
 _last_process_check: dict[str, float] = {}
+_last_runtime_check: dict[str, float] = {}
+
+# Provider CLIs can remain alive at their prompt after an auxiliary executable
+# disappears during an in-place upgrade. Dead-process supervision cannot see
+# this state: tmux and the main CLI are both healthy, but every tool call fails.
+_BROKEN_RUNTIME_MARKERS = (
+    ("codex-code-mode-host", "binary is missing"),
+    ("missing optional dependency", "reinstall codex"),
+)
 
 
 def _restart_session(session: str, resume: bool = False,
@@ -383,6 +392,41 @@ def _check_dead_repl(session: str) -> None:
               f"restart failed. Check the configured Claude credentials.")
 
 
+def _check_broken_runtime(session: str) -> None:
+    """Restart a live provider REPL whose command runtime is unusable."""
+    now = time.time()
+    if now - _last_runtime_check.get(session, 0.0) < _PROCESS_CHECK_INTERVAL_S:
+        return
+    _last_runtime_check[session] = now
+    import subprocess as _sp
+    try:
+        pane = _sp.run(["tmux", "capture-pane", "-t", session, "-p",
+                        "-S", "-80"], capture_output=True, timeout=4)
+        text = (pane.stdout or b"").decode("utf-8", errors="ignore")
+    except Exception:                                   # noqa: BLE001
+        return
+    # Match only the visible tail. Old diagnostic text in scrollback must not
+    # restart a replacement CLI that is already doing useful work.
+    tail = "\n".join([ln for ln in text.lower().splitlines()
+                       if ln.strip()][-12:])
+    if not any(all(part in tail for part in marker)
+               for marker in _BROKEN_RUNTIME_MARKERS):
+        return
+    if now - _last_restart.get(session, 0.0) < _RESTART_COOLDOWN_S:
+        return
+    _last_restart[session] = now
+    print(f"[agent_watcher] broken provider runtime in {session} — "
+          "auto-restarting", flush=True)
+    if _restart_session(session, resume=True):
+        _emit("broken_runtime_recovered", "warning",
+              f"Auto-recovered {session}: the provider command runtime was "
+              "missing an internal executable after an upgrade.")
+    else:
+        _emit("broken_runtime_failed", "error",
+              f"Detected a broken provider command runtime in {session}, "
+              "but automatic restart failed; retry remains enabled.")
+
+
 def start(sessions: Iterable[str] = ("agent", "author")) -> None:
     """Spawn the background watcher. Idempotent; safe to call from
     main.py lifespan. Sessions default to the two agent tmux names."""
@@ -401,6 +445,7 @@ def start(sessions: Iterable[str] = ("agent", "author")) -> None:
                     _scan_session(s)
                     _check_boot_prompt(s)
                     _check_dead_repl(s)
+                    _check_broken_runtime(s)
                     _check_auth_zombie(s)
             except Exception as e:                      # noqa: BLE001
                 print(f"[agent_watcher] loop error: {e}", flush=True)

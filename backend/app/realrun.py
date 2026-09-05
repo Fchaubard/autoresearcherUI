@@ -705,6 +705,13 @@ Rules:
 {cfg.get('eval', '')}
 Validation metric: {metric}.
 
+# Metric display hygiene
+Keep metric text concise on every human-facing surface. Use a short metric name
+(preferably a compact key) and, when a description is needed, one brief
+sentence. Do not put the full formula in the label or repeat the direction or
+"higher/lower is better" wording in the label; the dashboard already shows
+direction separately.
+
 # Seed ideas
 {cfg.get('seed_ideas', '')}
 
@@ -733,6 +740,10 @@ been restored into this directory.
 {_compute_context_note()}
 
 Validation metric: {metric}.
+
+Keep metric text concise: use a short metric name and at most one brief
+sentence of description. Do not put the full formula or repeated direction
+wording in dashboard labels.
 
 # You are RESUMING — do NOT restart from scratch
 First reconstruct where the research stands:

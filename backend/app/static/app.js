@@ -163,8 +163,12 @@ function frontier(runs) {                  // mark running-best improvements
       if (best === null || better(r.headline_metric, best)) {
         best = r.headline_metric; r._frontier = true;
       }
-      r._best = best;
     }
+    // Carry the incumbent through *every* subsequent experiment. Previously
+    // _best was only assigned to kept frontier-eligible rows. A replicate,
+    // discarded run, or running row therefore inserted NaN into the canvas
+    // path and made the green line appear broken / erratic.
+    r._best = best;
   }
   return runs;
 }
@@ -268,7 +272,7 @@ class ProgressChart {
     c.strokeStyle = '#34D399'; c.lineWidth = 2; c.beginPath();
     let started = false, prevY = 0;
     for (const r of runs) {
-      if (!r._finite) continue;
+      if (r._best == null || !isFinite(r._best)) continue;
       const x = X(r.exp), y = Y(r._best);
       if (!started) { c.moveTo(x, y); started = true; }
       else { c.lineTo(x, prevY); c.lineTo(x, y); }
@@ -276,13 +280,20 @@ class ProgressChart {
     }
     if (started) c.lineTo(w - pad.r, prevY);
     c.stroke();
-    // dots
-    for (const r of runs) {
+    // Dots. Thousands of full-opacity marks made the desktop chart much
+    // noisier than the email summary. Preserve every important state, but
+    // deterministically thin ordinary observations to roughly one per pixel.
+    const rawStride = Math.max(1, Math.ceil(runs.length /
+      Math.max(600, w - pad.l - pad.r)));
+    for (let ri = 0; ri < runs.length; ri++) {
+      const r = runs[ri];
       const x = X(r.exp);
       if (r.status === 'crashed' || (!r._finite && r.status !== 'running')) {
-        c.strokeStyle = '#F43F5E'; c.lineWidth = 1.6;
-        c.beginPath(); c.moveTo(x - 4, pad.t + fl / 2 - 4); c.lineTo(x + 4, pad.t + fl / 2 + 4);
-        c.moveTo(x + 4, pad.t + fl / 2 - 4); c.lineTo(x - 4, pad.t + fl / 2 + 4); c.stroke();
+        // A compact density tick avoids the solid row of red Xs that used to
+        // dominate long research histories.
+        c.strokeStyle = 'rgba(244,63,94,.55)'; c.lineWidth = 1;
+        c.beginPath(); c.moveTo(x, pad.t + fl / 2 - 3);
+        c.lineTo(x, pad.t + fl / 2 + 3); c.stroke();
       } else if (r.status === 'running') {
         c.fillStyle = '#FBBF24';
         c.beginPath(); c.arc(x, pad.t + fl / 2, 4, 0, 7); c.fill();
@@ -291,20 +302,25 @@ class ProgressChart {
         c.beginPath(); c.arc(x, Y(r.headline_metric), 4.5, 0, 7); c.fill();
         c.strokeStyle = '#0B0D10'; c.lineWidth = 1.5; c.stroke();
       } else {
-        c.fillStyle = '#39414d';
-        c.beginPath(); c.arc(x, Y(r.headline_metric), 3, 0, 7); c.fill();
+        if (ri % rawStride !== 0 || !r._finite) continue;
+        c.fillStyle = 'rgba(91,103,120,.48)';
+        c.beginPath(); c.arc(x, Y(r.headline_metric), 2, 0, 7); c.fill();
       }
     }
-    // frontier labels
-    c.font = '9.5px ' + MONO; c.fillStyle = '#7d8590'; c.textBaseline = 'bottom';
-    let lastLx = -99;
-    for (const r of runs) {
-      if (!r._frontier) continue;
-      const x = X(r.exp);
-      if (x - lastLx < 46) continue; lastLx = x;
-      c.textAlign = x > w - 110 ? 'right' : 'left';
-      c.fillText(r.run_name.slice(0, 18), x + (x > w - 110 ? -6 : 6),
-        Y(r.headline_metric) - 9);
+    // One terminal incumbent label is legible; labeling every improvement
+    // caused collisions and made the green trajectory look more chaotic.
+    const lastFrontier = [...runs].reverse().find(r => r._frontier);
+    if (lastFrontier) {
+      c.font = '10px ' + MONO; c.fillStyle = '#34D399';
+      c.textBaseline = 'bottom'; c.textAlign = 'right';
+      c.fillText('best ' + fmt(lastFrontier.headline_metric, 3), w - pad.r - 4,
+        Y(lastFrontier.headline_metric) - 7);
+    }
+    const activeCount = runs.filter(r => r.status === 'running').length;
+    if (activeCount) {
+      c.font = '10px ' + MONO; c.fillStyle = '#FBBF24';
+      c.textBaseline = 'top'; c.textAlign = 'right';
+      c.fillText(activeCount + ' active', w - pad.r, pad.t - 1);
     }
     // crosshair + hover dot
     if (this.hx != null && this.hit) {

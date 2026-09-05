@@ -235,7 +235,13 @@ def _check_port_or_die(port: int) -> None:
 def run() -> None:
     _check_port_or_die(PORT)
     print(f"\n  autoresearcherUI  ->  http://localhost:{PORT}\n")
-    uvicorn.run("backend.main:app", host=HOST, port=PORT, reload=False)
+    # SSE/terminal streams are intentionally long-lived. Without a bound,
+    # Uvicorn can wait forever for those browser connections during a clean
+    # shutdown, preventing the outer tmux supervisor from ever reaching its
+    # respawn loop. Ten seconds is ample for ordinary requests while keeping
+    # backend recovery deterministic.
+    uvicorn.run("backend.main:app", host=HOST, port=PORT, reload=False,
+                timeout_graceful_shutdown=10)
 
 
 if __name__ == "__main__":
