@@ -505,6 +505,17 @@ def test_codex_queue_footer_is_pending_not_idle():
     assert sv._agent_busy(pane) is False
 
 
+def test_autonomy_nudge_is_objective_neutral():
+    from backend.app import supervisor as sv
+    low = sv._AGENT_NUDGE.lower()
+    assert "_setup_prompt.txt" in low
+    assert "research objective" in low
+    assert "authoritative run" in low
+    for leaked_domain in ("scikit-learn", "estimator families",
+                          "target transforms", "feature sets"):
+        assert leaked_domain not in low
+
+
 def test_frozen_codex_pending_turn_is_cancelled_and_refed(
         arui_env, monkeypatch):
     import datetime as dt

@@ -276,17 +276,16 @@ _AGENT_BOOT_MARKERS = (
 _AGENT_NUDGE = (
     "[AUTONOMY - no human is watching this session] Do not stop and ask for "
     "confirmation or say \"your call\". You are the autonomous research agent. "
-    "FIRST, if you have not started yet, Read _setup_prompt.txt in this "
-    "directory — it is your full research brief — and follow it. "
-    "Re-read your mandate now: the project purpose, directives.jsonl, and "
-    "ideas.md. Then IMMEDIATELY generate a batch of 10-20 NEW, DIVERSE "
-    "on-mandate experiments (new feature sets, new estimator families, "
-    "ensembles/stacking, new hyperparameters, target transforms) and launch "
-    "them in parallel. The operator's #1 priority is RELENTLESS exploration: "
-    "NEVER stop, NEVER idle, NEVER ask the operator for a decision, and do NOT "
-    "conclude — the scikit-learn idea space is effectively infinite, so if one "
-    "direction plateaus, PIVOT to a different family/feature set and keep "
-    "going. Keep researching forever until the operator halts you."
+    "Re-read _setup_prompt.txt, the project purpose, directives.jsonl, "
+    "ideas.md, results.md, and lessons.md. Inspect the authoritative run "
+    "ledger and currently active processes, preserve valid in-flight work, "
+    "then continue the highest-priority unfinished work that directly serves "
+    "this workspace's research objective. Generate and launch a diverse batch "
+    "of new on-mandate experiments when compute is available; choose methods, "
+    "replication, and concurrency from the actual brief and evidence rather "
+    "than assumptions from another project. NEVER idle or wait for a human "
+    "decision. Keep researching until the operator halts you or the harness's "
+    "explicit terminal protocol is satisfied."
 )
 
 
