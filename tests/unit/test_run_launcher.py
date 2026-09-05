@@ -23,6 +23,49 @@ def test_launcher_streams_output_and_reports_exact_exit(tmp_path, monkeypatch):
     assert reports == [("run-1", 23)]
 
 
+def test_exit_report_survives_backend_reload_longer_than_old_window(
+        monkeypatch):
+    """A completed run must keep its tmux wrapper alive while a realistically
+    slow backend restart releases DuckDB and begins accepting callbacks."""
+    from arui import launcher
+    calls = []
+    clock = [0.0]
+
+    class Response:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+
+    def slow_reload(*args, **kwargs):
+        calls.append(clock[0])
+        if clock[0] < 20:
+            raise urllib.error.URLError("backend reloading")
+        return Response()
+
+    monkeypatch.setattr(launcher.urllib.request, "urlopen", slow_reload)
+    monkeypatch.setattr(launcher.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(launcher.time, "sleep",
+                        lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setenv("ARUI_EXIT_REPORT_RETRY_SEC", "60")
+    assert launcher._report("finished-run", 0) is True
+    assert calls[-1] >= 20
+
+
+def test_exit_report_is_bounded_when_backend_stays_down(monkeypatch):
+    from arui import launcher
+    clock = [0.0]
+    monkeypatch.setattr(
+        launcher.urllib.request, "urlopen",
+        lambda *a, **k: (_ for _ in ()).throw(
+            urllib.error.URLError("still down")))
+    monkeypatch.setattr(launcher.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(launcher.time, "sleep",
+                        lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setenv("ARUI_EXIT_REPORT_RETRY_SEC", "20")
+    assert launcher._report("finished-run", 0) is False
+    assert clock[0] >= 20
+
+
 def test_sdk_post_retries_transient_transport_failure(monkeypatch):
     import arui
     calls = []

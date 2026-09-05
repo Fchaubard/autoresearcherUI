@@ -29,17 +29,30 @@ def _report(run_id: str, returncode: int) -> bool:
         f"{base}/api/track/process-exit", data=payload, method="POST",
         headers={"Content-Type": "application/json",
                  **({"Authorization": f"Bearer {token}"} if token else {})})
-    # Keep the tmux wrapper alive across a short backend reload. The call is
-    # idempotent, so retrying an ambiguous response is safe.
-    for delay in (0, 0.25, 0.5, 1, 2, 4):
+    # Keep the tmux wrapper alive across backend reloads. In production a
+    # reload can take tens of seconds while DuckDB releases its single-writer
+    # lock; the old 7.75-second retry window let a completed run disappear
+    # before its exit was recorded, and crashed_silently then mislabeled it.
+    # The endpoint is idempotent, so retain the tmux session and retry for a
+    # bounded five-minute reconciliation window. This also means the watchdog
+    # continues to see the session as alive while accounting catches up.
+    try:
+        retry_window = max(1.0, float(os.environ.get(
+            "ARUI_EXIT_REPORT_RETRY_SEC", "300")))
+    except ValueError:
+        retry_window = 300.0
+    deadline = time.monotonic() + retry_window
+    delay = 0.0
+    while True:
         if delay:
             time.sleep(delay)
         try:
             with urllib.request.urlopen(req, timeout=5) as response:
                 return 200 <= response.status < 300
         except (OSError, urllib.error.URLError):
-            continue
-    return False
+            if time.monotonic() >= deadline:
+                return False
+            delay = min(15.0, 0.25 if not delay else delay * 2)
 
 
 def run(command: list[str], run_id: str, log_path: str) -> int:
