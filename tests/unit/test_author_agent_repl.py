@@ -34,3 +34,11 @@ def test_busy_detection_recognizes_live_codex_turn(monkeypatch):
         author, "_pane_text",
         lambda session: "Working (12s) · esc to interrupt")
     assert author._looks_busy("author") is True
+
+
+def test_author_contract_authenticates_every_local_api_call():
+    from backend.app import author_agent as author
+
+    assert "X-Arui-Passcode: $ARUI_INGEST_TOKEN" in author.SYSTEM
+    assert "$ARUI_INGEST_TOKEN" in author._AUTHOR_BRIEF
+    assert "passcode required" in author.SYSTEM

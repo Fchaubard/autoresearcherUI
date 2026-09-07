@@ -164,9 +164,19 @@ WRITING STYLE — NON-NEGOTIABLE (an automated lint pass BLOCKS the bundle)
 MANDATORY: report each transition immediately
 ═══════════════════════════════════════════════════════════════════════
 
+AUTHENTICATION: ARUI_INGEST_TOKEN is already injected into your environment.
+EVERY curl request to the local backend must include the following header:
+
+    -H "X-Arui-Passcode: $ARUI_INGEST_TOKEN"
+
+Never print, echo, log, or reveal the token. A "passcode required" response
+means the request failed: add the header and retry immediately. This rule
+applies to every API example in this prompt.
+
 At every phase entry, FIRST call (do this before anything else):
 
     curl -sS -X POST http://127.0.0.1:8000/api/paper/phase \\
+         -H "X-Arui-Passcode: $ARUI_INGEST_TOKEN" \\
          -H 'Content-Type: application/json' \\
          -d '{"phase":"<phase>","actor":"author",
               "progress":{...},"detail":{...}}'
@@ -503,8 +513,10 @@ def is_running() -> bool:
 _AUTHOR_BRIEF = (
     "Read .author_prompt.txt in this directory and carry out the "
     "paper-writing work it describes. First read claims.md, paper_runs.md, "
-    "paper_figures.md, lessons.md. Report each phase via POST "
-    "/api/paper/phase. You are on AUTOPILOT: there are no human approval "
+    "paper_figures.md, lessons.md. Include the X-Arui-Passcode header using "
+    "$ARUI_INGEST_TOKEN on every local API curl, without printing the token. "
+    "Report each phase via POST /api/paper/phase. You are on AUTOPILOT: "
+    "there are no human approval "
     "gates, so do not stop and wait for anyone. Keep going until the PI and "
     "council stop finding issues. If positive evidence is incomplete, stay in "
     "Paper mode, enter paper.develop_evidence, design and queue the decisive "
