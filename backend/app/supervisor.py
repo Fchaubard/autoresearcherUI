@@ -70,14 +70,18 @@ _AUTHOR_RESTART_MAX_BACKOFF_SEC = 300
 def _should_refeed(fallback_used: bool, alive: bool, busy: bool,
                    spawn_age: float, feed_remediations: int,
                    grace: float = _AUTHOR_BOOT_GRACE_SEC,
-                   max_rem: int | None = None) -> bool:
-    """Pure decision (testable): is the author parked at boot (alive, idle
-    pane, never reported a phase, past the boot grace) so we should re-feed
-    its brief? Bounded by a 3-strike circuit breaker."""
+                   max_rem: int | None = None,
+                   blocked: bool = False) -> bool:
+    """Is a live author parked at an idle prompt long enough to re-feed?
+
+    This applies after phase reports too: a REPL can finish one turn and park
+    midway through paper work. An explicit science/human blocker is the only
+    state where an idle author should remain idle.
+    """
     if not alive or busy:
         return False                 # dead (handled elsewhere) or working
-    if not fallback_used:
-        return False                 # it reported a phase -> it started fine
+    if blocked:
+        return False
     if spawn_age < grace:
         return False                 # still within a normal boot window
     return max_rem is None or feed_remediations < max_rem
@@ -126,7 +130,8 @@ def _supervise_paper_mode() -> None:
         busy = True
     if _should_refeed(bool(st.get("fallback_used", True)), alive, busy,
                       author_agent.spawn_age_sec(),
-                      lifecycle.remediation_count("paper_author_feed")):
+                      lifecycle.remediation_count("paper_author_feed"),
+                      blocked=bool((st.get("detail") or {}).get("blocker"))):
         lifecycle.set_phase(lifecycle.PHASE_PAPER)
         lifecycle.record_persistent_recovery(
             "paper_author_feed",

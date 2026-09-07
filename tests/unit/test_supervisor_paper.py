@@ -48,8 +48,13 @@ def test_no_refeed_while_still_booting(arui_env):
     assert S._should_refeed(True, True, False, 30, 0) is False
 
 
-def test_no_refeed_once_phase_reported(arui_env):
-    assert S._should_refeed(False, True, False, 999, 0) is False
+def test_refeed_after_phase_report_if_author_parks(arui_env):
+    assert S._should_refeed(False, True, False, 999, 0) is True
+
+
+def test_no_refeed_for_explicit_blocker(arui_env):
+    assert S._should_refeed(False, True, False, 999, 0,
+                            blocked=True) is False
 
 
 def test_no_refeed_when_pane_busy(arui_env):
