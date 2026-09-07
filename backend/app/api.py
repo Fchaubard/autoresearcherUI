@@ -4528,6 +4528,10 @@ def _revert_paper_to_research(reason: str) -> dict:
         db.close()
     author_agent.stop()
     _paper.set_project_mode("research")
+    from . import lifecycle as _lifecycle
+    _lifecycle.set_phase(
+        _lifecycle.PHASE_RUNNING,
+        "paper blocker returned ownership to autonomous research")
     # Resume the autonomous research loop we paused on /paper/enter.
     _set_setting("pi_agent_enabled", True)
     try:
