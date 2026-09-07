@@ -594,14 +594,34 @@ def reviewer_sim_median():
         db.close()
 
 
+def positive_evidence_blocker() -> str:
+    """Return why the paper lacks a publication-ready positive claim."""
+    db = SessionLocal()
+    try:
+        claims = db.query(PaperClaim).all()
+        live = [c for c in claims
+                if (c.status or "active") not in ("killed", "parked")]
+        if not live:
+            return "No active paper claim exists."
+        if not any(bool(c.ready) and
+                   (c.evidence_strength or "").lower() == "strong"
+                   for c in live):
+            return ("No active claim is marked publication-ready with strong "
+                    "positive evidence. Continue evidence development, revise "
+                    "or kill provisional claims, and rerun the gate.")
+        return ""
+    finally:
+        db.close()
+
+
 def bundle_blockers(folder=None, waive=()) -> list[dict]:
     """Everything that must pass before the paper can be BUNDLED for
     submission. Returns a list of {gate, detail}; empty == clear to bundle.
     `waive` is a set of gate names the OPERATOR explicitly overrides.
 
-    Gates are AUTOMATIC quality lints only (no human approval): (1) compile
-    clean (no undefined refs), (2) no em-dash / AI-slop prose, (3) complete +
-    consistent citations, (4) assets are TikZ/CSV not raster. The reviewer
+    Gates are AUTOMATIC: (1) at least one strong, publication-ready positive
+    claim, (2) compile clean, (3) no em-dash / AI-slop prose, (4) complete +
+    consistent citations, (5) assets are TikZ/CSV not raster. The reviewer
     simulator is NOT a gate anymore — it's advisory feedback the author/PI act
     on, never a human approval the paper waits on."""
     from . import paper_lint, paper_compile
@@ -610,6 +630,9 @@ def bundle_blockers(folder=None, waive=()) -> list[dict]:
     out: list[dict] = []
     if not folder:
         return [{"gate": "folder", "detail": "no paper folder yet"}]
+    evidence_detail = positive_evidence_blocker()
+    if evidence_detail:
+        out.append({"gate": "evidence", "detail": evidence_detail})
     st = paper_compile.status()
     if not st.get("ok"):
         bl = ", ".join(st.get("blockers") or
@@ -628,7 +651,8 @@ def bundle_blockers(folder=None, waive=()) -> list[dict]:
     # NOTE: reviewer_sim is intentionally NOT a gate (operator: no reviewer
     # gating, no human approvals — the paper just rips). reviewer_sim_median()
     # is still computed for advisory display, but never blocks the bundle.
-    return [b for b in out if b["gate"] not in waive]
+    return [b for b in out
+            if b["gate"] == "evidence" or b["gate"] not in waive]
 
 
 def paper_ingest_env_prefix(project: str) -> str:

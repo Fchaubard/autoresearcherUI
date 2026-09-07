@@ -55,7 +55,8 @@ def tick() -> None:
 # terminal/manual. (Autopilot: there is no operator_review wait phase anymore.)
 _PAPER_WORKING_PHASES = {
     "paper.whittle_claims", "paper.lit_review", "paper.draft_v0",
-    "paper.plan_ablations", "paper.build_gantt", "paper.run_ablations",
+    "paper.plan_ablations", "paper.build_gantt", "paper.develop_evidence",
+    "paper.run_ablations",
     "paper.reviewer_simulator",
 }
 

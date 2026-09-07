@@ -34,6 +34,13 @@ def test_blocks_reviewer_and_submission_too(arui_env, db_session):
     assert pp.set_phase("paper.submission_ready").get("blocked") is True
 
 
+def test_blocks_evidence_development_until_matrix_is_queued(arui_env,
+                                                              db_session):
+    from backend.app import paper_phase as pp
+    _add_figure(db_session)
+    assert pp.set_phase("paper.develop_evidence").get("blocked") is True
+
+
 def test_allows_once_runs_are_tagged(arui_env, db_session):
     from backend.app import paper_phase as pp
     _add_figure(db_session)

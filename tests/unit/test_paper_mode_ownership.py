@@ -25,7 +25,7 @@ def test_paper_entry_clears_research_agent_expectation(arui_env, monkeypatch):
     assert calls == [(False, "paper mode owns the autonomous loop")]
 
 
-def test_author_blocker_schedules_return_to_research(arui_env, monkeypatch):
+def test_evidence_gap_stays_in_paper_mode(arui_env, monkeypatch):
     from fastapi.testclient import TestClient
     from backend.app import api, paper
     from backend.main import app
@@ -42,12 +42,37 @@ def test_author_blocker_schedules_return_to_research(arui_env, monkeypatch):
     monkeypatch.setattr(api.threading, "Thread", ImmediateThread)
     client = TestClient(app)
     response = client.post("/api/paper/phase", json={
-        "phase": "paper.whittle_claims", "actor": "author",
-        "detail": {"blocker": "No validated positive result yet."}})
+        "phase": "paper.develop_evidence", "actor": "author",
+        "detail": {"blocker": "More validation is required.",
+                   "blocker_type": "evidence_gap"}})
 
     assert response.status_code == 200
+    assert response.json()["developing_evidence"] is True
+    assert calls == []
+
+
+def test_explicit_fundamental_blocker_returns_to_research(arui_env,
+                                                           monkeypatch):
+    from fastapi.testclient import TestClient
+    from backend.app import api, paper
+    from backend.main import app
+    paper.set_project_mode("paper")
+    calls = []
+
+    class ImmediateThread:
+        def __init__(self, target, args=(), **kwargs):
+            self.args = args
+        def start(self):
+            calls.append(self.args[0])
+
+    monkeypatch.setattr(api.threading, "Thread", ImmediateThread)
+    response = TestClient(app).post("/api/paper/phase", json={
+        "phase": "paper.whittle_claims", "actor": "author",
+        "detail": {"blocker": "Objective cannot be investigated here.",
+                   "blocker_type": "fundamental",
+                   "return_to_research": True}})
     assert response.json()["returning_to_research"] is True
-    assert calls == ["No validated positive result yet."]
+    assert calls == ["Objective cannot be investigated here."]
 
 
 def test_revert_repairs_stale_author_after_mode_already_changed(

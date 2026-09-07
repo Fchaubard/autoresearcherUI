@@ -681,6 +681,15 @@ const _PHASE_LABELS = {
   concluding:             'Concluding — pending council',
   complete:               'Complete ✓ council-approved',
   error:                  'Error',
+  'paper.whittle_claims':   'Whittling provisional claims',
+  'paper.lit_review':       'Reviewing literature',
+  'paper.plan_ablations':   'Planning evidence',
+  'paper.build_gantt':      'Scheduling experiments',
+  'paper.develop_evidence': 'Developing evidence',
+  'paper.draft_v0':         'Drafting v0',
+  'paper.run_ablations':    'Running final ablations',
+  'paper.reviewer_simulator': 'Simulating review',
+  'paper.submission_ready': 'Submission ready',
 };
 // Severity → pill style class (matches the existing rh-* CSS).
 const _SEV_CLASS = ['rh-healthy', 'rh-needs_direction', 'rh-stalled'];

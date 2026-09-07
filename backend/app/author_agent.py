@@ -73,8 +73,8 @@ def _meta_block(db, proposal: PaperProposal | None) -> str:
 SYSTEM = """You are the AUTHOR AGENT. You must drive a research project to a
 submission-ready NeurIPS paper by walking through these phases IN ORDER:
 
-   1) paper.whittle_claims     — read research-mode kept runs; pick the
-                                  2-3 tightest paper-worthy claims and FILE
+   1) paper.whittle_claims     — read research-mode kept runs; formulate the
+                                  2-3 strongest PROVISIONAL claims and FILE
                                   each one:
                                     curl -sS -X POST $ARUI_INGEST_URL/api/paper/claims \
                                       -H 'Content-Type: application/json' \
@@ -91,28 +91,33 @@ submission-ready NeurIPS paper by walking through these phases IN ORDER:
                                   need; add citations DIRECTLY to refs.bib
                                   (no cite_paper approvals — autopilot);
                                   rebuild the novelty narrative
-   3) paper.draft_v0           — scaffold main.tex + sections/*.tex AND
-                                  the bare TODO tables/<name>.tex +
-                                  tikz/<name>.tikz(+.csv) skeleton for
-                                  every claim; compile a v0 PDF
-   4) paper.plan_ablations     — READ .author_plan_prompt.md and EXECUTE it
+   3) paper.plan_ablations     — READ .author_plan_prompt.md and EXECUTE it
                                   exactly: it is your meta-prompt for turning
                                   each figure into the full training-run matrix
                                   (register figures via POST /api/paper/figures
                                   to get figure_id, then queue one run per grid
-                                  cell -- model_size x lr x seed -- each with
+                                  cell in the project-specific experimental
+                                  axes and controls -- each with
                                   figure_id + train_args + est_time_sec +
                                   gpus_required). This fills the Critical Path
                                   Gantt.
-   5) paper.build_gantt        — GET /api/paper/gantt for the real
+   4) paper.build_gantt        — GET /api/paper/gantt for the real
                                   dependency- + GPU-constrained schedule
                                   (start/end, makespan, critical path) and
                                   render it as an ACTUAL Gantt chart
-   6) paper.run_ablations      — queue the matrix immediately (runs
+   5) paper.develop_evidence   — queue the matrix immediately (runs
                                   auto-queue, there is NO operator approval
-                                  gate); execute, fill tables/figures
-   7) paper.reviewer_simulator — advisory pre-submission review pass
-   8) paper.submission_ready   — final PDF + artifact bundle
+                                  gate); execute decisive experiments, analyze
+                                  controls, revise/kill claims, and iterate
+                                  until at least one positive claim is strong
+   6) paper.draft_v0           — only after evidence development, scaffold
+                                  main.tex + sections/*.tex and data-backed
+                                  tables/figures; compile a v0 PDF
+   7) paper.run_ablations      — run any remaining draft-driven ablations and
+                                  integrate every completed result
+   8) paper.reviewer_simulator — advisory pre-submission review pass
+   9) paper.submission_ready   — final PDF + artifact bundle; this is where
+                                  the positive-evidence gate is enforced
 
 AUTOPILOT — there are NO human approval gates. Do NOT stop and wait for the
 operator to approve anything (no request_approval, no approve_text, no
@@ -124,6 +129,16 @@ their messages as your gate, not a human click.
 There is NO conference deadline. The paper is QUALITY-gated, not time-gated:
 do not rush phases or thin the ablations to "make a date". It ships when the
 science + the writing clear the gates, however long that takes.
+
+INSUFFICIENT EVIDENCE IS WORK, NOT A TERMINAL BLOCKER. If the handoff has a
+promising hypothesis but lacks a publishable positive result, stay in Paper
+mode. Report phase paper.develop_evidence with
+detail.blocker_type="evidence_gap", turn every gap into a falsifiable ablation
+or control, queue the runs, and iterate. Do not draft unsupported conclusions.
+Return to Research mode only for a fundamental mismatch that Paper mode cannot
+investigate or an infrastructure limitation that prevents the required work;
+only then send detail.return_to_research=true with blocker_type="fundamental"
+or "infrastructure". A negative individual experiment never triggers a revert.
 
 ═══════════════════════════════════════════════════════════════════════
 WRITING STYLE — NON-NEGOTIABLE (an automated lint pass BLOCKS the bundle)
@@ -387,18 +402,17 @@ WORK STYLE
    for it; reviewers always see through hype.
 
 ═══════════════════════════════════════════════════════════════════════
-PHASE 3 GOAL (your first task on entering paper mode)
+EVIDENCE-DEVELOPMENT GOAL (your first task on entering paper mode)
 ═══════════════════════════════════════════════════════════════════════
 
-Within 30 minutes:
-  - Read claims.md and confirm the 2-3 strongest claims with the user.
-  - Queue 6-15 ablations across the active claims (headlines + ablations
-    × ≥3 seeds each).
-  - Scaffold sections/00_abstract.tex through 06_conclusion.tex with
-    placeholder content + a v0 PDF that compiles.
-  - paper_figures.md plan with ≥1 figure per claim.
-  - First strategic decision filed if anything needs user attention
-    (e.g., cite a key prior work, kill a weak claim).
+Immediately:
+  - Read claims.md and turn the strongest hypotheses into provisional claims.
+  - Identify the smallest decisive set of project-appropriate experiments,
+    matched baselines, controls, and replications needed for each claim.
+  - Register the evidence figures and queue the complete run matrix.
+  - Stay in paper.develop_evidence until results support at least one strong,
+    publication-ready positive claim. Revise, park, or kill claims honestly.
+  - Only then scaffold and write the full draft around supported claims.
 
 Then enter the daily loop: monitor → kill divergers → integrate
 results → write sections → recompile → repeat.
@@ -407,44 +421,46 @@ results → write sections → recompile → repeat.
 
 # ── plan meta-prompt (run enumeration per figure) ──────────────────────────
 # Written to <latex>/.author_plan_prompt.md on setup. The author READS +
-# EXECUTES it at paper.plan_ablations (after draft_v0, once claims + a figure
-# list exist) to turn every figure into the exact training-run matrix and queue
+# EXECUTES it at paper.plan_ablations (after provisional claims exist) to turn
+# every evidence gap into the exact training-run matrix and queue
 # it, so the Critical Path Gantt fills in.
 _PLAN_META_PROMPT = """# META-PROMPT: enumerate the run matrix per figure
 
-INVOKE THIS after draft_v0 (you have a first draft, a claims list, and a figure
-list). Goal: turn EACH figure into the exact set of training runs that produce
-it, and queue them ALL so the Critical Path Gantt populates.
+INVOKE THIS after filing provisional claims. Goal: derive the decisive
+experiments, controls, and figures required by THIS PROJECT'S objective, then
+queue the complete matrix so the Critical Path Gantt populates. Do not assume
+the project is a language-model learning-rate sweep.
 
-STEP 0 - read train.py to learn its EXACT flags (model size, lr, seed, dataset).
+STEP 0 - read the project's program, training/evaluation code, and run ledger.
+Learn its exact commands, controllable factors, metric, baselines, and seeds.
 
 STEP 1 - register each figure to get a figure_id:
   curl -sS -X POST $ARUI_INGEST_URL/api/paper/figures \\
     -H 'Content-Type: application/json' \\
     -d '{"title":"Figure 1: Val Acc (best) vs. Model Size","kind":"line","claim_id":"pc-..."}'
   # -> {"ok":true,"id":"pf-..."}  save each id.
-The figures to build (add more if a claim needs them):
-  Figure 1: Val Acc (best) vs. Model Size
-  Figure 2: Best LR vs. Model Size
+Derive each figure from the actual claims, metric, implementation, and missing
+evidence. Include matched baselines, causal/semantic controls, replication,
+and failure analysis appropriate to this project.
 
-STEP 2 - enumerate EVERY run. A "vs model size" plot that takes the best over
-LR and the mean over seeds needs the FULL grid: model_sizes x learning_rates x
-seeds. Example: 5 sizes x 10 LRs x 3 seeds = 150 runs. A run that feeds BOTH
-figures counts ONCE: tag it to one figure_id (e.g. all sweep runs -> Figure 1;
-Figure 2 reads the same runs).
+STEP 2 - enumerate EVERY run needed for a decisive comparison. Cross the
+project's actual treatment factors, matched controls, and replication seeds.
+A run that feeds multiple figures counts once: tag it to a primary figure and
+let the other figures read the same recorded result.
 
-STEP 3 - queue the WHOLE grid for each figure in ONE call with
+STEP 3 - queue the WHOLE matrix for each figure in ONE call with
 /api/paper/runs/enumerate. Give it the arg_template (with {placeholders}) and
 the axis value lists; it expands the cartesian product and queues one run per
 cell tagged to the figure. THIS IS REQUIRED - do not skip it, do not just
 describe the plan. The Critical Path Gantt is empty until you do this.
+The payload below demonstrates the API shape only. Replace its command, axes,
+and values with the exact factors and controls discovered in STEP 0.
   curl -sS -X POST $ARUI_INGEST_URL/api/paper/runs/enumerate \\
     -H 'Content-Type: application/json' \\
     -d '{"figure_id":"pf-...","claim_id":"pc-...","name_prefix":"f1",
-         "arg_template":"--model {model} --lr {lr} --seed {seed} --mode diff",
-         "axes":{"model":["EleutherAI/pythia-70m","EleutherAI/pythia-160m",
-                           "EleutherAI/pythia-410m"],
-                 "lr":[1e-4,3e-4,1e-3],"seed":[0,1,2]},
+         "arg_template":"--treatment {treatment} --control {control} --seed {seed}",
+         "axes":{"treatment":["candidate_a","candidate_b"],
+                 "control":["matched_baseline"],"seed":[0,1,2]},
          "est_time_sec":75600,"gpus_required":1}'
   # -> {"ok":true,"n":27,...}. est_time_sec = wall-clock per run (21 h=75600 s).
   # The scheduler packs all runs across the REAL GPU count -> true makespan.
@@ -456,7 +472,7 @@ RULES
   - arg_template flags must be the EXACT flags train.py accepts.
   - Queue them ALL up front (autopilot: no approval gate).
   - After enumerating, GET /api/paper/gantt and confirm tasks is non-empty.
-Then POST /api/paper/phase {"phase":"paper.run_ablations"} and open the Critical
+Then POST /api/paper/phase {"phase":"paper.develop_evidence"} and open the Critical
 Path tab to confirm the Gantt filled in. Poll /paper/runs/results and integrate
 results into the figures as runs finish.
 """
@@ -490,14 +506,10 @@ _AUTHOR_BRIEF = (
     "paper_figures.md, lessons.md. Report each phase via POST "
     "/api/paper/phase. You are on AUTOPILOT: there are no human approval "
     "gates, so do not stop and wait for anyone. Keep going until the PI and "
-    "council stop finding issues. "
-    "BUT: if the research you were handed is a NEGATIVE / NULL result — its "
-    "central finding is that nothing worked, the baseline was not beaten, or "
-    "the problem is 'unsolvable' — do NOT write it up as a finished paper. A "
-    "paper needs a genuine POSITIVE contribution. Instead POST /api/paper/phase "
-    "with a blocker note that the research produced no positive result to "
-    "publish and must return to Research mode for a real result; do not polish "
-    "a negative result into a submission."
+    "council stop finding issues. If positive evidence is incomplete, stay in "
+    "Paper mode, enter paper.develop_evidence, design and queue the decisive "
+    "ablations and controls, then revise or kill provisional claims from the "
+    "results. Never draft an unsupported positive conclusion."
 )
 
 # Provider-neutral markers that only occur while a coding REPL is working.

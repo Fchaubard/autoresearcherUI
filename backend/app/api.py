@@ -3500,12 +3500,13 @@ async def post_paper_phase(request: Request):
         from . import paper_phase as pp
         out = pp.set_phase(phase, actor=actor, progress=progress,
                            detail=detail)
-        # A blocker means the author explicitly cannot write a valid paper.
-        # Leaving project_mode="paper" strands both loops and shows a generic
-        # writing banner forever. Return the HTTP response first, then perform
-        # the canonical paper->research transition in the background (which
-        # stops this author session and resumes the research watchdog).
-        if detail.get("blocker") and actor == "author":
+        # Evidence gaps remain in Paper mode: its experiment loop exists to
+        # close them. Only an explicit fundamental/infrastructure blocker may
+        # hand ownership back to Research mode.
+        blocker_type = str(detail.get("blocker_type") or "").lower()
+        should_revert = bool(detail.get("return_to_research")) or \
+            blocker_type in {"fundamental", "infrastructure"}
+        if detail.get("blocker") and actor == "author" and should_revert:
             reason = str(detail.get("blocker") or detail.get("reason") or
                          "Author reported a paper blocker")[:4000]
             threading.Thread(target=_delayed_blocker_revert, args=(reason,),
@@ -3513,6 +3514,11 @@ async def post_paper_phase(request: Request):
                              name="paper-blocker-revert").start()
             out = dict(out)
             out["returning_to_research"] = True
+        elif detail.get("blocker") and actor == "author":
+            # Evidence gaps are the normal input to Paper mode's experiment
+            # loop. Keep ownership here and make that state explicit.
+            out = dict(out)
+            out["developing_evidence"] = True
         return out
     except Exception as e:                                  # noqa: BLE001
         return {"ok": False, "error": str(e)[:240]}
@@ -5087,7 +5093,8 @@ async def paper_submit_bundle(request: Request):
     if blockers:
         return {"ok": False, "blocked": True, "blockers": blockers,
                 "detail": "bundle gate failed; fix the gates or waive them",
-                "waivable": [b["gate"] for b in blockers]}
+                "waivable": [b["gate"] for b in blockers
+                              if b["gate"] != "evidence"]}
     pdf = folder / "build" / "main.pdf"
     if not pdf.exists():
         return {"ok": False, "detail": "no PDF compiled yet"}

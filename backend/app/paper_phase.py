@@ -10,11 +10,11 @@ Phases in canonical order:
 
     paper.whittle_claims     reduce kept runs → tight set of claims
     paper.lit_review         find related work, file citation decisions
-    paper.draft_v0           scaffold main.tex with TODO tables/figures
     paper.plan_ablations     derive the full ablation matrix
     paper.build_gantt        schedule the matrix against available GPUs
-    paper.operator_review    WAIT for human approval — GPU gate
-    paper.run_ablations      execute the approved matrix
+    paper.develop_evidence   execute decisive experiments and revise claims
+    paper.draft_v0           scaffold main.tex from supported claims
+    paper.run_ablations      execute any remaining draft-driven matrix
     paper.reviewer_simulator internal pre-submission review pass
     paper.submission_ready   PDF + artifact bundle ready
     paper.error              author crashed; needs human attention
@@ -37,14 +37,16 @@ from .models import Event, PaperClaim, PaperCitation, PaperDecision, \
 
 
 # AUTOPILOT flow — no human gate. operator_review is removed: the author goes
-# straight from build_gantt to run_ablations (runs auto-queue). reviewer_simulator
+# straight from build_gantt to evidence development (runs auto-queue).
+# reviewer_simulator
 # is an ADVISORY pass, not a gate. The PI + council review each revision.
 PAPER_PHASES = (
     "paper.whittle_claims",
     "paper.lit_review",
-    "paper.draft_v0",
     "paper.plan_ablations",
     "paper.build_gantt",
+    "paper.develop_evidence",
+    "paper.draft_v0",
     "paper.run_ablations",
     "paper.reviewer_simulator",
     "paper.submission_ready",
@@ -58,6 +60,7 @@ PHASE_LABELS = {
     "paper.draft_v0":           "Drafting v0",
     "paper.plan_ablations":     "Planning ablations",
     "paper.build_gantt":        "Building Gantt",
+    "paper.develop_evidence":   "Developing evidence",
     "paper.run_ablations":      "Running ablations",
     "paper.reviewer_simulator": "Reviewer simulation",
     "paper.submission_ready":   "Submission ready",
@@ -77,7 +80,8 @@ def _iso(seconds_ago: float = 0) -> str:
 # makes enumeration a HARD step the author cannot skip (no PI needed): if
 # figures are planned but no run is tagged to any of them, advancing into
 # run_ablations / reviewer_simulator / submission_ready is rejected.
-_REQUIRES_RUNS = {"paper.run_ablations", "paper.reviewer_simulator",
+_REQUIRES_RUNS = {"paper.develop_evidence", "paper.run_ablations",
+                  "paper.reviewer_simulator",
                   "paper.submission_ready"}
 
 
@@ -110,6 +114,12 @@ def set_phase(phase: str, *, actor: str = "author",
     submission_ready while figures exist but no run is tagged to them -- the
     author must enumerate the run matrix first.
     """
+    if phase == "paper.submission_ready":
+        from .paper import positive_evidence_blocker
+        evidence_detail = positive_evidence_blocker()
+        if evidence_detail:
+            return {"ok": False, "blocked": True, "phase": phase,
+                    "gate": "evidence", "detail": evidence_detail}
     if phase in _REQUIRES_RUNS and _run_matrix_missing():
         return {"ok": False, "blocked": True, "phase": phase,
                 "detail": ("Queue the figure run-matrix FIRST: call POST "
