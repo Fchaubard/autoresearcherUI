@@ -1257,8 +1257,16 @@ function statusBar() {
     pill.style.color = '#a78bfa';
     pill.title = 'Writing the paper — the research loop is paused';
     sb.append(pill);
+    const phaseObj = (ps.state && ps.state.phase) ||
+      (ps.status && ps.status.phase) || {};
+    const detail = phaseObj.detail || {};
+    const phaseNote = detail.note || detail.reason || detail.message || '';
+    const lifecycle = (S.health && S.health.lifecycle) || {};
+    const recovery = lifecycle.blocker_reason || '';
+    const paperMessage = phaseNote || recovery ||
+      'Research paused while the Author Agent is actively writing.';
     sb.append(el('div', 'sb-alert',
-      '<span style="color:var(--muted)">Research paused — the Author Agent is writing the paper.</span>'));
+      `<span style="color:var(--muted)">${esc(paperMessage)}</span>`));
     sb.append(el('div', 'sb-spacer'));
     // Read the canonical, paper-scoped counts from /api/paper/status rather
     // than re-deriving from a run list that isn't populated here (which made

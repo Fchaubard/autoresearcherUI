@@ -24,6 +24,16 @@ def _binary(provider: str) -> str:
     # `codex-code-mode-host` is removed, leaving a live but unusable REPL.
     # The standalone `current` symlink resolves into a versioned release, so
     # its helper binaries remain beside the running executable across updates.
+    # Codex's standalone installer is deliberately independent of Node.  A
+    # system service often has a smaller PATH than an interactive shell and
+    # can otherwise find an old npm wrapper first.  That wrapper may be
+    # syntactically incompatible with the service's Node and die before its
+    # REPL appears.  Prefer the installer's stable `current` link and then its
+    # newest immutable release.
+    if name == "codex" and not override:
+        root = Path.home() / ".codex" / "packages" / "standalone"
+        candidates.append(root / "current" / "bin" / name)
+        candidates += sorted(root.glob(f"releases/*/bin/{name}"), reverse=True)
     found = shutil.which(name)
     if found:
         candidates.append(Path(found))

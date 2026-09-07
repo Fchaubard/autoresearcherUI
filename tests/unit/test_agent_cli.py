@@ -24,6 +24,27 @@ def test_binary_prefers_active_path_cli_over_stale_nvm(tmp_path, monkeypatch):
     assert str(stale) not in chosen
 
 
+def test_binary_prefers_standalone_codex_over_path_npm_wrapper(tmp_path,
+                                                               monkeypatch):
+    from backend.app import agent_cli
+    standalone = (tmp_path / ".codex" / "packages" / "standalone" /
+                  "current" / "bin" / "codex")
+    standalone.parent.mkdir(parents=True)
+    standalone.touch()
+    npm = tmp_path / "usr" / "local" / "bin" / "codex"
+    npm.parent.mkdir(parents=True)
+    npm.touch()
+    monkeypatch.delenv("ARUI_CODEX_BIN", raising=False)
+    monkeypatch.setattr(agent_cli.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(agent_cli.shutil, "which",
+                        lambda name: str(npm) if name == "codex" else None)
+
+    chosen = agent_cli._binary("openai")
+
+    assert str(standalone) in chosen
+    assert str(npm) not in chosen
+
+
 def test_agent_cli_builds_each_provider_command(monkeypatch):
     from backend.app import agent_cli
     monkeypatch.setattr(agent_cli, "_binary", lambda provider: {

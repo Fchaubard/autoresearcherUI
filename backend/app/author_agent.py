@@ -500,9 +500,11 @@ _AUTHOR_BRIEF = (
     "a negative result into a submission."
 )
 
-# Substrings that mean Claude Code is actively working (brief was accepted).
-_BUSY_MARKERS = ("cultivat", "waddl", "tokens", "running ", "thinking",
-                 "↑", "esc to interrupt to")
+# Provider-neutral markers that only occur while a coding REPL is working.
+# Do not match token arrows or old spinner verbs: both remain in scrollback
+# after a turn and made an idle prompt look busy forever.
+_BUSY_MARKERS = ("esc to interrupt", "tab to queue message",
+                 "press up to edit queued", "compacting conversation")
 
 
 def _pane_text(session: str) -> str:
@@ -521,7 +523,7 @@ def _send_keys(session: str, *args, literal: str | None = None) -> None:
 
 
 def _looks_busy(session: str) -> bool:
-    low = _pane_text(session).lower()
+    low = "\n".join(_pane_text(session).lower().splitlines()[-16:])
     return any(m in low for m in _BUSY_MARKERS)
 
 
@@ -583,8 +585,10 @@ def _feed_brief_inner(session: str = None, brief: str = None,
             consent_done = True
             time.sleep(3)
             continue
-        # REPL prompt box "❯" or the tips line both mean it is ready for input.
-        if "❯" in txt or 'try "' in low or "/help" in low:
+        # Claude, Codex, and Gemini render different prompt glyphs/copy.
+        if ("❯" in txt or "›" in txt or 'try "' in low or "/help" in low
+                or "ask codex to do anything" in low
+                or "ask claude" in low or "type your message" in low):
             ready = True
             break
         time.sleep(2)
@@ -620,6 +624,10 @@ def refeed_if_idle() -> bool:
         return False
     if os.environ.get("ARUI_DISABLE_BG"):
         return False
+    # Treat a re-feed like a fresh boot for watchdog cooldown purposes. This
+    # prevents the six-second monitor loop from launching duplicate feeders
+    # while the REPL is accepting and starting the message.
+    _record_spawn()
     threading.Thread(target=feed_brief, daemon=True,
                      name="author-refeed").start()
     return True
@@ -769,8 +777,12 @@ def start(proposal_id: str = "") -> dict:
         # NORMAL buffer, so the pane keeps real scrollback (scroll to the first
         # message + select + copy) while looking exactly like Claude Code should.
         from .agent_cli import command
+        # Always boot an interactive REPL first. Passing a first prompt on the
+        # command line is provider/version-sensitive: some Codex builds open
+        # the TUI but leave that prompt unsubmitted. The verified feeder below
+        # is the single delivery path for every provider.
         provider, inner = command(_author_model or "claude-opus-5",
-                                  _author_effort, _AUTHOR_BRIEF)
+                                  _author_effort, "")
         # Make sure Claude uses the API key (set in env) instead of
         # falling into its OAuth flow. See agent.RealAgent._ensure_claude_settings
         # for the full explanation.
@@ -811,12 +823,11 @@ def start(proposal_id: str = "") -> dict:
         # Record spawn time so the supervisor can tell "still booting" from
         # "parked idle, never got the brief" (see refeed_if_idle).
         _record_spawn()
-        # Once Claude Code has booted, hand it the brief via the robust,
+        # Once the coding REPL has booted, hand it the brief via the robust,
         # polling feeder (waits for readiness, dismisses consent only if it
         # shows, verifies the brief was accepted, retries if it sits queued).
         # Run in a background thread so start() returns immediately.
-        if (not cmd_override and provider == "claude"
-                and not os.environ.get("ARUI_DISABLE_BG")):
+        if not cmd_override and not os.environ.get("ARUI_DISABLE_BG"):
             threading.Thread(target=feed_brief, daemon=True,
                              name="author-feed").start()
     except Exception as e:

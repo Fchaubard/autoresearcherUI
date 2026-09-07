@@ -152,6 +152,26 @@ def record_remediation(key: str, reason: str) -> dict:
     return st
 
 
+def record_persistent_recovery(key: str, reason: str) -> dict:
+    """Record a rate-limited infrastructure recovery without giving up.
+
+    Some failures need a human decision after repeated attempts. A dead
+    autonomous-agent process does not: leaving it permanently stalled is
+    strictly worse than retrying with backoff. Callers must enforce their own
+    cooldown before using this unbounded recovery counter.
+    """
+    st = status()
+    rem = dict(st.get("remediation") or {})
+    rem[key] = int(rem.get(key, 0)) + 1
+    st["remediation"] = rem
+    st["health"] = RECOVERING
+    st["blocker_reason"] = f"{reason} (recovery attempt {rem[key]})"
+    st["updated_at"] = _iso()
+    _set(_STATUS_KEY, st)
+    emit_event("remediation", st["blocker_reason"], severity="warning")
+    return st
+
+
 def summary_line() -> str:
     """One human-readable line for the email digest + dashboard: what phase
     we're in and (if not healthy) WHY we're stuck."""

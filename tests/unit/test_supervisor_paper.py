@@ -1,7 +1,4 @@
-"""The PI/supervisor keeps PAPER mode unblocked too: a dead author session
-during an active author phase gets restarted (3-strike -> HARD_STALLED), but
-it never touches a phase that legitimately waits for the human.
-"""
+"""The PI/supervisor keeps PAPER mode unblocked too."""
 from backend.app import supervisor as S
 
 
@@ -10,9 +7,9 @@ def test_restart_dead_author_in_working_phase(arui_env):
     assert action == "restart" and "draft_v0" in reason
 
 
-def test_hard_stall_after_three_restarts(arui_env):
+def test_keeps_recovering_after_three_restarts(arui_env):
     action, _ = S._paper_action("paper.run_ablations", False, False, 3)
-    assert action == "hard_stall"
+    assert action == "restart"
 
 
 def test_noop_when_author_alive(arui_env):
@@ -63,5 +60,12 @@ def test_no_refeed_when_author_dead(arui_env):
     assert S._should_refeed(True, False, False, 999, 0) is False
 
 
-def test_refeed_circuit_breaker(arui_env):
-    assert S._should_refeed(True, True, False, 999, 3) is False
+def test_refeed_does_not_permanently_give_up(arui_env):
+    assert S._should_refeed(True, True, False, 999, 30) is True
+
+
+def test_author_restart_has_capped_backoff(arui_env):
+    assert S._author_restart_due(14, 0) is False
+    assert S._author_restart_due(15, 0) is True
+    assert S._author_restart_due(299, 30) is False
+    assert S._author_restart_due(300, 30) is True

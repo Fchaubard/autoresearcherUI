@@ -64,12 +64,13 @@ _PAPER_WORKING_PHASES = {
 # before "alive but no phase + idle pane" counts as a parked boot needing the
 # brief re-fed. A normal boot + first phase report lands well under this.
 _AUTHOR_BOOT_GRACE_SEC = 180
+_AUTHOR_RESTART_MAX_BACKOFF_SEC = 300
 
 
 def _should_refeed(fallback_used: bool, alive: bool, busy: bool,
                    spawn_age: float, feed_remediations: int,
                    grace: float = _AUTHOR_BOOT_GRACE_SEC,
-                   max_rem: int = 3) -> bool:
+                   max_rem: int | None = None) -> bool:
     """Pure decision (testable): is the author parked at boot (alive, idle
     pane, never reported a phase, past the boot grace) so we should re-feed
     its brief? Bounded by a 3-strike circuit breaker."""
@@ -79,28 +80,34 @@ def _should_refeed(fallback_used: bool, alive: bool, busy: bool,
         return False                 # it reported a phase -> it started fine
     if spawn_age < grace:
         return False                 # still within a normal boot window
-    return feed_remediations < max_rem
+    return max_rem is None or feed_remediations < max_rem
 
 
 def _paper_action(phase: str, fallback_used: bool, author_alive: bool,
                   remediations: int):
     """Pure decision (testable): what should the PI do about paper mode now?
-    Returns (action, reason) where action is None | 'restart' | 'hard_stall'."""
+    Returns (action, reason) where action is None | 'restart'. Infrastructure
+    failures are retried with capped backoff and never become a permanent
+    human gate."""
     if fallback_used or phase not in _PAPER_WORKING_PHASES:
         return (None, "")                # paper mode idle / waiting on human / done
     if author_alive:
         return (None, "")                # author is working — nothing to do
     label = phase.replace("paper.", "")
-    if remediations >= 3:                # MAX_REMEDIATION
-        return ("hard_stall",
-                f"the author agent keeps dying during {label}")
     return ("restart", f"the author agent died during {label}")
+
+
+def _author_restart_due(spawn_age: float, attempts: int) -> bool:
+    """Exponential retry delay, capped at five minutes."""
+    delay = min(_AUTHOR_RESTART_MAX_BACKOFF_SEC,
+                max(15, 15 * (2 ** min(attempts, 5))))
+    return spawn_age >= delay
 
 
 def _supervise_paper_mode() -> None:
     """Keep PAPER mode unblocked the same way the research loop is: if the
     paper is in an active author phase but the 'author' tmux session has died,
-    restart it (3-strike circuit breaker -> HARD_STALLED). The author then
+    restart it with capped backoff. The author then
     resumes from its phase + the persisted decisions, so a crashed author
     never silently strands the paper."""
     from . import author_agent, lifecycle, paper_phase
@@ -121,7 +128,7 @@ def _supervise_paper_mode() -> None:
                       author_agent.spawn_age_sec(),
                       lifecycle.remediation_count("paper_author_feed")):
         lifecycle.set_phase(lifecycle.PHASE_PAPER)
-        lifecycle.record_remediation(
+        lifecycle.record_persistent_recovery(
             "paper_author_feed",
             "author booted but never started working -- re-feeding the brief")
         try:
@@ -134,19 +141,18 @@ def _supervise_paper_mode() -> None:
     action, reason = _paper_action(
         phase, bool(st.get("fallback_used", True)), alive,
         lifecycle.remediation_count("paper_author"))
-    if action == "restart":
+    attempts = lifecycle.remediation_count("paper_author")
+    if action == "restart" and _author_restart_due(
+            author_agent.spawn_age_sec(), attempts):
         lifecycle.set_phase(lifecycle.PHASE_PAPER)
-        lifecycle.record_remediation("paper_author",
-                                     reason + " -- restarting it")
+        lifecycle.record_persistent_recovery(
+            "paper_author", reason + " -- restarting it")
         try:
             author_agent.start()
         except Exception as e:                          # noqa: BLE001
             lifecycle.emit_event("supervisor_error",
                                  f"author restart failed: {e}",
                                  severity="warning")
-    elif action == "hard_stall":
-        lifecycle.set_phase(lifecycle.PHASE_PAPER)
-        lifecycle.set_health(lifecycle.HARD_STALLED, reason + " -- needs you")
 
 
 def _supervise_completion_review() -> None:
