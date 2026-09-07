@@ -459,6 +459,12 @@ body.resizing{user-select:none}
   align-items:center;justify-content:center;gap:10px;padding:40px;
   text-align:center;color:var(--text-2);background:var(--panel)}
 .paper-empty-ic{font-size:38px;opacity:.7}
+.paper-writing-spinner{width:46px;height:46px;border-radius:50%;
+  border:4px solid rgba(167,139,250,.18);border-top-color:#a78bfa;
+  border-right-color:#34d399;animation:paper-writing-spin .9s linear infinite;
+  filter:drop-shadow(0 0 12px rgba(167,139,250,.25));margin-bottom:4px}
+@keyframes paper-writing-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.paper-writing-spinner{animation:none}}
 .paper-empty-title{font-size:15px;font-weight:600;color:var(--text)}
 .paper-empty-body{font-size:12.5px;color:var(--text-2);max-width:540px;
   line-height:1.55}

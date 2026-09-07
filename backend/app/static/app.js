@@ -6510,7 +6510,15 @@ async function paintPaperViewer(c, kind) {
     // a PDF to show. Otherwise the iframe ends up displaying the raw
     // JSON error response, which looks broken.
     let bs = null;
-    try { bs = await api('/paper/build_log'); } catch(e) {}
+    let authorAlive = false;
+    try {
+      const states = await Promise.all([
+        api('/paper/build_log'),
+        api('/agent/alive?session=author').catch(() => ({ alive: false }))
+      ]);
+      bs = states[0];
+      authorAlive = !!(states[1] && states[1].alive);
+    } catch(e) {}
     // A PDF on disk is enough to render — latexmk routinely exits with
     // code 1 (unresolved \cite, undefined \ref) while still producing
     // a usable PDF. `pdf_exists` is the ground truth; `ok` is whether
@@ -6527,25 +6535,36 @@ async function paintPaperViewer(c, kind) {
       const lowLog = log.toLowerCase();
       let title = 'PDF not built yet';
       let body  = 'The Author Agent will scaffold main.tex and request the first build shortly.';
+      let showWriting = authorAlive;
       if (lowLog.indexOf('no main.tex') >= 0 ||
           lowLog.indexOf("hasn't scaffolded") >= 0) {
-        title = 'Author Agent is scaffolding';
-        body  = 'The Author Agent is being spawned. As soon as it writes main.tex the PDF will appear here.';
+        title = authorAlive ? 'Author Agent is writing the paper' : 'Preparing the Author Agent';
+        body  = authorAlive
+          ? 'The PDF will appear here after the first successful build. Follow the Author Agent on the right to watch its progress.'
+          : 'The Author Agent is starting. Its first successful build will appear here.';
       } else if (lowLog.indexOf('neither latexmk nor pdflatex') >= 0 ||
                  lowLog.indexOf('install tex live') >= 0) {
+        showWriting = false;
         title = 'TeX Live is not installed on this node';
         body  = 'Paper Mode needs latexmk/pdflatex to compile. SSH in and run: ' +
                 'apt-get update && apt-get install -y texlive-latex-extra texlive-fonts-recommended latexmk';
       } else if (bs && bs.ok === false && bs.at) {
+        showWriting = false;
         title = 'Build failed';
         body  = (log || '').slice(-600) || 'See LaTeX log for details.';
       } else if (bs && bs.stale) {
+        showWriting = false;
         title = 'PDF is stale';
         body  = 'Click Rebuild to recompile the latest LaTeX.';
+      } else if (authorAlive) {
+        title = 'Author Agent is writing the paper';
+        body = 'The PDF will appear here after the first successful build. Follow the Author Agent on the right to watch its progress.';
       }
       v.innerHTML =
         '<div class="paper-empty">' +
-          '<div class="paper-empty-ic">📄</div>' +
+          (showWriting
+            ? '<div class="paper-writing-spinner" aria-label="Author Agent is writing"></div>'
+            : '<div class="paper-empty-ic">📄</div>') +
           `<div class="paper-empty-title">${esc(title)}</div>` +
           `<div class="paper-empty-body">${esc(body)}</div>` +
           (log ? `<pre class="paper-empty-log">${esc(log.slice(-1200))}</pre>` : '') +
