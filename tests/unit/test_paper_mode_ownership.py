@@ -1,0 +1,50 @@
+from __future__ import annotations
+
+
+def test_paper_entry_clears_research_agent_expectation(arui_env, monkeypatch):
+    """The dead-agent watchdog must not resurrect research in paper mode."""
+    from backend.app import paper, realrun
+
+    calls = []
+    monkeypatch.setattr(realrun, "set_expected",
+                        lambda value, reason="": calls.append((value, reason)))
+    monkeypatch.setattr(paper, "project_mode", lambda: "research")
+    monkeypatch.setattr(paper, "set_project_mode", lambda mode: None)
+    monkeypatch.setattr(paper, "populate_claims_from_proposal", lambda pid: 0)
+    monkeypatch.setattr(paper.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(paper, "_set_onboarding_key", lambda *a, **k: None)
+    monkeypatch.setenv("ARUI_DISABLE_BG", "1")
+    from backend.app import author_agent, paper_runner
+    monkeypatch.setattr(author_agent, "start", lambda **k: {"status": "started"})
+    monkeypatch.setattr(paper_runner, "start", lambda: None)
+    monkeypatch.setattr(paper.threading, "Thread",
+                        lambda *a, **k: type("T", (), {"start": lambda self: None})())
+
+    paper.enter_paper_mode()
+
+    assert calls == [(False, "paper mode owns the autonomous loop")]
+
+
+def test_author_blocker_schedules_return_to_research(arui_env, monkeypatch):
+    from fastapi.testclient import TestClient
+    from backend.app import api, paper
+    from backend.main import app
+
+    paper.set_project_mode("paper")
+    calls = []
+
+    class ImmediateThread:
+        def __init__(self, target, args=(), **kwargs):
+            self.target, self.args = target, args
+        def start(self):
+            calls.append(self.args[0])
+
+    monkeypatch.setattr(api.threading, "Thread", ImmediateThread)
+    client = TestClient(app)
+    response = client.post("/api/paper/phase", json={
+        "phase": "paper.whittle_claims", "actor": "author",
+        "detail": {"blocker": "No validated positive result yet."}})
+
+    assert response.status_code == 200
+    assert response.json()["returning_to_research"] is True
+    assert calls == ["No validated positive result yet."]

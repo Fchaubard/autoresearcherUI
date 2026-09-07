@@ -177,7 +177,11 @@ def enter_paper_mode(meta: dict | None = None, proposal_id: str = "",
         pass
     claims_added = populate_claims_from_proposal(proposal_id)
     # Pause the research loop so it stops launching experiments and starving
-    # the Paper Runner. In-flight training runs are NOT killed.
+    # the Paper Runner. Clear the persisted expectation BEFORE killing tmux;
+    # otherwise the dead-agent watchdog immediately resurrects research behind
+    # the author after a mode flip.
+    from . import realrun
+    realrun.set_expected(False, reason="paper mode owns the autonomous loop")
     for sess in ("agent", "coord"):
         try:
             subprocess.run(["tmux", "kill-session", "-t", sess],

@@ -3498,8 +3498,22 @@ async def post_paper_phase(request: Request):
     detail = body.get("detail") or {}
     try:
         from . import paper_phase as pp
-        return pp.set_phase(phase, actor=actor, progress=progress,
-                              detail=detail)
+        out = pp.set_phase(phase, actor=actor, progress=progress,
+                           detail=detail)
+        # A blocker means the author explicitly cannot write a valid paper.
+        # Leaving project_mode="paper" strands both loops and shows a generic
+        # writing banner forever. Return the HTTP response first, then perform
+        # the canonical paper->research transition in the background (which
+        # stops this author session and resumes the research watchdog).
+        if detail.get("blocker") and actor == "author":
+            reason = str(detail.get("blocker") or detail.get("reason") or
+                         "Author reported a paper blocker")[:4000]
+            threading.Thread(target=_delayed_blocker_revert, args=(reason,),
+                             daemon=True,
+                             name="paper-blocker-revert").start()
+            out = dict(out)
+            out["returning_to_research"] = True
+        return out
     except Exception as e:                                  # noqa: BLE001
         return {"ok": False, "error": str(e)[:240]}
 
@@ -4487,17 +4501,12 @@ async def paper_author_send(request: Request):
     return {"ok": bool(ok), "sent": text[:120]}
 
 
-@router.post("/paper/revert")
-async def paper_revert(request: Request):
-    """Flip back to research mode. Body: {reason}. Kills Author Agent,
-    pauses paper_runs, captures Paper Snapshot."""
+def _revert_paper_to_research(reason: str) -> dict:
+    """Canonical synchronous paper->research transition. Idempotent."""
     from . import paper as _paper
     from . import author_agent
-    body = await _safe_json(request)
-    reason = (body.get("reason") or "").strip()
-    if not reason or len(reason) < 5:
-        return {"status": "error",
-                "detail": "reason required (1+ sentence)"}
+    if _paper.project_mode() != "paper":
+        return {"status": "already_in_research"}
     snap = _paper.take_snapshot()
     db = SessionLocal()
     try:
@@ -4526,8 +4535,12 @@ async def paper_revert(request: Request):
         from .config import ROOT
         from pathlib import Path
         # Pick the project's existing workspace dir if one's known.
-        proj = SessionLocal().query(Project).first()
-        repo = (proj.name if proj else "project")
+        db2 = SessionLocal()
+        try:
+            proj = db2.query(Project).first()
+            repo = (proj.name if proj else "project")
+        finally:
+            db2.close()
         # Restart the research orchestrator/agent in 'agent' tmux. If a
         # session is somehow still alive (shouldn't be), this is a no-op
         # because orchestrator.start handles that.
@@ -4539,6 +4552,29 @@ async def paper_revert(request: Request):
               flush=True)
     bus.publish("paper", "mode_reverted", {"reason": reason})
     return {"status": "reverted"}
+
+
+def _delayed_blocker_revert(reason: str) -> None:
+    """Let the author's phase POST finish before stopping its tmux session."""
+    import time
+    time.sleep(0.5)
+    try:
+        _revert_paper_to_research(reason)
+    except Exception as e:                              # noqa: BLE001
+        from .safe_errors import describe
+        print(f"[paper/blocker] auto-revert failed: {describe(e)}", flush=True)
+
+
+@router.post("/paper/revert")
+async def paper_revert(request: Request):
+    """Flip back to research mode. Body: {reason}. Kills Author Agent,
+    pauses paper_runs, captures Paper Snapshot."""
+    body = await _safe_json(request)
+    reason = (body.get("reason") or "").strip()
+    if not reason or len(reason) < 5:
+        return {"status": "error",
+                "detail": "reason required (1+ sentence)"}
+    return _revert_paper_to_research(reason)
 
 
 @router.get("/paper/state")
