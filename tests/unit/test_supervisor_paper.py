@@ -36,6 +36,32 @@ def test_supervise_paper_mode_is_safe_when_no_paper(arui_env, fake_subprocess):
     S.tick()
 
 
+def test_paper_watchdog_does_not_resurrect_author_in_research_mode(
+        arui_env, monkeypatch):
+    from backend.app import author_agent, paper, paper_phase
+    monkeypatch.setattr(paper, "project_mode", lambda: "research")
+    monkeypatch.setattr(paper_phase, "get_phase", lambda: {
+        "phase": "paper.draft_v0", "fallback_used": False})
+    monkeypatch.setattr(
+        author_agent, "start",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("author must not restart in research mode")))
+    S._supervise_paper_mode()
+
+
+def test_research_watchdog_does_not_resurrect_agent_in_paper_mode(
+        arui_env, monkeypatch):
+    from backend.app import agent_watcher, paper, realrun
+    monkeypatch.setattr(paper, "project_mode", lambda: "paper")
+    monkeypatch.setattr(realrun, "expected", lambda: True)
+    monkeypatch.setattr(S, "_agent_alive", lambda: False)
+    monkeypatch.setattr(
+        agent_watcher, "_restart_session",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("research must not restart in paper mode")))
+    S._supervise_research_agent()
+
+
 # ── boot-parking re-feed (author alive but never started) ──────────────────
 
 def test_refeed_when_parked_at_boot(arui_env):

@@ -114,7 +114,11 @@ def _supervise_paper_mode() -> None:
     restart it with capped backoff. The author then
     resumes from its phase + the persisted decisions, so a crashed author
     never silently strands the paper."""
-    from . import author_agent, lifecycle, paper_phase
+    from . import author_agent, lifecycle, paper, paper_phase
+    # paper.phase is intentionally retained as history across a revert. It is
+    # not authority to run an author: project_mode owns that decision.
+    if paper.project_mode() != "paper":
+        return
     st = paper_phase.get_phase()
     phase = st.get("phase", "")
     try:
@@ -613,7 +617,15 @@ def _supervise_research_agent() -> None:
     """Un-park a research agent that is ALIVE but idling at its prompt while
     research is supposed to be running. Deterministic, LOCAL + FAST (tmux +
     SQLite only). Mirrors paper-mode's refeed_if_idle with a 3-strike breaker."""
-    from . import lifecycle, notify
+    from . import lifecycle, notify, paper
+
+    # Belt-and-suspenders ownership guard. A stale `realrun.expected` value
+    # from an interrupted mode transition must never resurrect research while
+    # the author owns paper mode.
+    if paper.project_mode() == "paper":
+        _dead_agent_save(None)
+        _agent_idle_save(None)
+        return
 
     disable_bg = bool(_os.environ.get("ARUI_DISABLE_BG"))
     alive = _agent_alive()
