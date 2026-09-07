@@ -4506,6 +4506,14 @@ def _revert_paper_to_research(reason: str) -> dict:
     from . import paper as _paper
     from . import author_agent
     if _paper.project_mode() != "paper":
+        # Reconcile a transition that committed project_mode before the
+        # process was interrupted. Idempotence must repair stale ownership,
+        # not merely report it.
+        author_agent.stop()
+        from . import lifecycle as _lifecycle
+        _lifecycle.set_phase(
+            _lifecycle.PHASE_RUNNING,
+            "autonomous research owns the loop")
         return {"status": "already_in_research"}
     snap = _paper.take_snapshot()
     db = SessionLocal()

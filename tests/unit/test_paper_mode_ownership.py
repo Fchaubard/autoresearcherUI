@@ -48,3 +48,21 @@ def test_author_blocker_schedules_return_to_research(arui_env, monkeypatch):
     assert response.status_code == 200
     assert response.json()["returning_to_research"] is True
     assert calls == ["No validated positive result yet."]
+
+
+def test_revert_repairs_stale_author_after_mode_already_changed(
+        arui_env, monkeypatch):
+    from backend.app import api, author_agent, lifecycle, paper
+    stopped = []
+    phases = []
+    monkeypatch.setattr(paper, "project_mode", lambda: "research")
+    monkeypatch.setattr(author_agent, "stop", lambda: stopped.append(True))
+    monkeypatch.setattr(lifecycle, "set_phase",
+                        lambda phase, reason="": phases.append((phase, reason)))
+
+    out = api._revert_paper_to_research("already committed")
+
+    assert out["status"] == "already_in_research"
+    assert stopped == [True]
+    assert phases == [(lifecycle.PHASE_RUNNING,
+                       "autonomous research owns the loop")]
