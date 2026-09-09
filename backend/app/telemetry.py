@@ -30,7 +30,7 @@ import uuid
 _POSTHOG_TOKEN = "phc_uWpUipwK9xdKjZTvPEvqKCEjcGdBZaC5374LS8SKsMUy"
 _POSTHOG_HOST = "https://us.i.posthog.com/i/v0/e/"
 _PROJECT = "autoresearcherui"
-_VERSION = "0.1.0"
+_VERSION = "0.2.0"
 
 
 def telemetry_disabled() -> bool:

@@ -147,7 +147,7 @@ arXiv + Semantic Scholar. Flip back to Research at any time.
   off the paper's claims) - the up-front review is cached and reused.
 - **Paper Runner** - daemon that reads paper-mode `Run` rows with
   `status='queued'`, resolves deps, bin-packs onto the GPU table, launches
-  them. Local backend in v0.1.0; SLURM/K8s pluggable later.
+  them. Local backend in v0.2.0; SLURM/K8s pluggable later.
 
 ## Scoping gate (Phase 0) - plan before you compute
 
