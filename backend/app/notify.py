@@ -27,6 +27,7 @@ import urllib.request
 from email.message import EmailMessage
 
 from .config import DATA_DIR, WORKSPACE_DIR
+from .safe_errors import describe as _safe_error
 from .db import SessionLocal
 from .models import Event, Project, Run, Setting
 
@@ -332,11 +333,15 @@ def research_paused() -> bool:
     configured. Gate is intentionally co-located with `emails_paused`
     because both are pause flags on the onboarding settings row read by
     multiple subsystems."""
+    from . import research_control
+    if research_control.read().get("paused"):
+        return True
     try:
         cfg = _cfg() or {}
+        research_control.remember_workspace(cfg)
         return bool(cfg.get("research_paused"))
     except Exception:                                       # noqa: BLE001
-        return False
+        return True  # DB outage must not resume queued research.
 
 
 # ───────────────────── tmux interrupt helpers (Pause robustness) ─────────────
@@ -471,7 +476,23 @@ def set_research_paused(paused: bool) -> dict:
     from sqlalchemy.orm.attributes import flag_modified
     from .db import SessionLocal
     from .models import Setting
+    from . import research_control
     sessions_hit: list[str] = []
+    errors: list[str] = []
+    warnings: list[str] = []
+    if not paused:
+        halted, reason = research_halted()
+        from . import directives
+        if halted or directives.open_halt():
+            return {"ok": False, "blocked": True, "paused": research_paused(),
+                    "reason": "research_halted" if halted else "halt_directive",
+                    "errors": [reason or "Resolve the HALT directive before resuming"],
+                    "sessions_interrupted": []}
+    if paused:
+        try:
+            research_control.write(paused=True)
+        except Exception as exc:
+            errors.append(f"Cannot persist pause gate: {_safe_error(exc)}")
     try:
         db = SessionLocal()
         try:
@@ -481,14 +502,18 @@ def set_research_paused(paused: bool) -> dict:
                 row = Setting(key="onboarding", value={})
                 db.add(row)
             cur = dict(row.value) if isinstance(row.value, dict) else {}
+            research_control.remember_workspace(cur)
             cur["research_paused"] = bool(paused)
             row.value = cur
             flag_modified(row, "value")
             db.commit()
+            if not paused:
+                research_control.write(paused=False, stop_all=False)
         finally:
             db.close()
     except Exception as e:                                  # noqa: BLE001
-        print(f"[notify] set_research_paused DB write failed: {e}",
+        errors.append(f"Cannot persist research pause state: {_safe_error(e)}")
+        print(f"[notify] set_research_paused DB write failed: {_safe_error(e)}",
               flush=True)
     # Then reach into tmux. We do this AFTER the DB write so any code
     # that polls `research_paused()` while we're in the middle of the
@@ -496,13 +521,17 @@ def set_research_paused(paused: bool) -> dict:
     try:
         if paused:
             sessions_hit = _apply_pause_to_agent_tmux()
-        else:
+        elif not errors:
+            from . import runtime_settings
+            applied = runtime_settings.apply_pending()
+            warnings.extend(applied.get("warnings", []))
             sessions_hit = _apply_resume_to_agent_tmux()
     except Exception as e:                                  # noqa: BLE001
-        print(f"[notify] set_research_paused tmux side-effect failed: {e}",
+        errors.append(f"Cannot update agent pause state: {_safe_error(e)}")
+        print(f"[notify] set_research_paused tmux side-effect failed: {_safe_error(e)}",
               flush=True)
-    return {"paused": bool(paused),
-            "sessions_interrupted": sessions_hit}
+    return {"ok": not errors, "paused": research_paused(),
+            "sessions_interrupted": sessions_hit, "errors": errors, "warnings": warnings}
 
 
 def research_halted() -> tuple[bool, str]:
@@ -517,6 +546,10 @@ def research_halted() -> tuple[bool, str]:
 
     Stored on the onboarding row as a small dict
     ``research_halted: {at: iso, reason: str}`` (truthy iff halted)."""
+    from . import research_control
+    local = research_control.read()
+    if local.get("halted"):
+        return True, str(local.get("reason") or "")
     try:
         from .db import SessionLocal
         from .models import Setting
@@ -526,6 +559,7 @@ def research_halted() -> tuple[bool, str]:
                    .filter(Setting.key == "onboarding").first())
             if not row or not isinstance(row.value, dict):
                 return False, ""
+            research_control.remember_workspace(row.value)
             v = row.value.get("research_halted")
             if not v:
                 return False, ""
@@ -536,10 +570,10 @@ def research_halted() -> tuple[bool, str]:
         finally:
             db.close()
     except Exception:                                       # noqa: BLE001
-        return False, ""
+        return True, "Research settings unavailable; launches are blocked until storage recovers."
 
 
-def set_research_halted(halted: bool, reason: str = "") -> None:
+def set_research_halted(halted: bool, reason: str = "") -> dict:
     """Set / clear the hard-halt state. Called by the strategic council
     when verdict==ESCALATION_HALT, by the PI agent when it sees an
     escalation event in the last hour, and by the dashboard's Resume
@@ -550,6 +584,23 @@ def set_research_halted(halted: bool, reason: str = "") -> None:
     Claude Code REPL drops its in-flight tool call and stops generating
     tokens. The pause and halt paths share
     :func:`_apply_pause_to_agent_tmux` for that reason."""
+    from . import research_control
+    errors: list[str] = []
+    sessions_hit: list[str] = []
+    warnings: list[str] = []
+    if not halted:
+        from . import directives
+        if directives.open_halt():
+            actual, actual_reason = research_halted()
+            return {"ok": False, "blocked": True, "halted": actual,
+                    "reason": "halt_directive", "sessions_interrupted": [],
+                    "errors": [actual_reason or "Resolve the HALT directive before resuming"],
+                    "warnings": []}
+    if halted:
+        try:
+            research_control.write(halted=True, reason=reason)
+        except Exception as exc:
+            errors.append(f"Cannot persist halt gate: {_safe_error(exc)}")
     try:
         import datetime as _dt
         import os as _os
@@ -565,6 +616,7 @@ def set_research_halted(halted: bool, reason: str = "") -> None:
                 row = Setting(key="onboarding", value={})
                 db.add(row)
             cur = dict(row.value) if isinstance(row.value, dict) else {}
+            research_control.remember_workspace(cur)
             if halted:
                 cur["research_halted"] = {
                     "at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
@@ -586,6 +638,8 @@ def set_research_halted(halted: bool, reason: str = "") -> None:
                            _dt.timezone.utc).isoformat())
             db.add(ev)
             db.commit()
+            if not halted:
+                research_control.write(halted=False, reason="")
             try:
                 _bus.publish("events", "event", ev.dict())
             except Exception:
@@ -593,18 +647,26 @@ def set_research_halted(halted: bool, reason: str = "") -> None:
         finally:
             db.close()
     except Exception as e:                                  # noqa: BLE001
-        print(f"[notify] set_research_halted failed: {e}", flush=True)
+        errors.append(f"Cannot persist research halt state: {_safe_error(e)}")
+        print(f"[notify] set_research_halted failed: {_safe_error(e)}", flush=True)
     # Also stop the running agent/author REPLs so they STOP generating
     # tokens. Halt is stricter than pause; we share the tmux side-effect
     # so both buttons have the same effect on real spend.
     try:
         if halted:
-            _apply_pause_to_agent_tmux(reason=reason or "ESCALATION_HALT")
-        else:
-            _apply_resume_to_agent_tmux()
+            sessions_hit = _apply_pause_to_agent_tmux(reason=reason or "ESCALATION_HALT")
+        elif not errors and not research_paused():
+            from . import runtime_settings
+            applied = runtime_settings.apply_pending()
+            warnings.extend(applied.get("warnings", []))
+            sessions_hit = _apply_resume_to_agent_tmux()
     except Exception as e:                                  # noqa: BLE001
-        print(f"[notify] set_research_halted tmux interrupt failed: {e}",
+        print(f"[notify] set_research_halted tmux interrupt failed: {_safe_error(e)}",
               flush=True)
+        errors.append(f"Cannot interrupt agent: {_safe_error(e)}")
+    actual, actual_reason = research_halted()
+    return {"ok": not errors, "halted": actual, "reason": actual_reason,
+            "sessions_interrupted": sessions_hit, "errors": errors, "warnings": warnings}
 
 
 def reassert_pause_on_boot() -> None:

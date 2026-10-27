@@ -786,6 +786,8 @@ def start_real(cfg: dict, resume: bool = False) -> RealAgent:
     set_expected(True, reason="research agent launch requested")
     name = (cfg.get("repo_name") or "research").strip() or "research"
     metric = (cfg.get("metric") or "val_loss").strip()
+    from .provider_config import environment_from_config
+    os.environ.update(environment_from_config(cfg))
     from .model_registry import provider_for as _provider_for
     selected_provider = _provider_for(
         cfg.get("research_agent_model", "claude-opus-5")) or "claude"
@@ -827,6 +829,11 @@ def start_real(cfg: dict, resume: bool = False) -> RealAgent:
 
     db = SessionLocal()
     proj = db.query(Project).first()
+    # A display-name/settings change must not move resumed research away
+    # from its code, logs and checkpoints.
+    resume_workspace = (proj.repo_path if resume and proj and proj.repo_path else "")
+    if resume and proj and not resume_workspace:
+        resume_workspace = str(workspace_dir(proj.name or name))
     new_purpose = cfg.get("purpose", "") or ""
     if not proj:
         db.add(Project(id="proj-" + name, name=name,
@@ -862,7 +869,7 @@ def start_real(cfg: dict, resume: bool = False) -> RealAgent:
         operator_provided_new_name = (name and name != (proj.name or ""))
         if operator_provided_new_name:
             effective_name = name
-        elif purpose_changed:
+        elif purpose_changed and not resume:
             effective_name = _derive_name_from_purpose(new_purpose)
         else:
             effective_name = proj.name or name
@@ -915,7 +922,7 @@ def start_real(cfg: dict, resume: bool = False) -> RealAgent:
     if cb:
         agent_cmd = shlex.split(cb)
 
-    workspace = str(workspace_dir(name))
+    workspace = resume_workspace or str(workspace_dir(name))
     _agent = RealAgent(
         workspace=workspace, project_name=name,
         ingest_url=f"http://127.0.0.1:{PORT}", repo_root=str(ROOT),

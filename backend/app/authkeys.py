@@ -10,9 +10,11 @@ import datetime as dt
 import os
 import subprocess
 import tempfile
+import threading
 
 _SSH_DIR = os.path.expanduser("~/.ssh")
 _AUTH = os.path.join(_SSH_DIR, "authorized_keys")
+_KEYS_LOCK = threading.RLock()
 _KEY_TYPES = (
     "ssh-ed25519", "ssh-rsa", "ssh-dss",
     "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521",
@@ -38,7 +40,7 @@ def _fingerprint(line: str) -> str:
             tmp = t.name
         out = subprocess.run(["ssh-keygen", "-l", "-f", tmp],
                              capture_output=True, text=True, timeout=10)
-        return out.stdout.strip()
+        return out.stdout.strip() if out.returncode == 0 else ""
     except Exception:                                # noqa: BLE001
         return ""
     finally:
@@ -92,15 +94,28 @@ def _write(lines: list[str]) -> None:
 
 
 def add_key(line: str) -> dict:
-    line = (line or "").strip()
+    with _KEYS_LOCK:
+        return _add_key(line)
+
+
+def _add_key(line: str) -> dict:
+    line = line.strip() if isinstance(line, str) else ""
     if not _valid(line):
         return {"ok": False,
                 "error": "not a valid SSH public key (need e.g. "
                          "'ssh-ed25519 AAAA... comment')"}
-    lines = _read_lines()
     fp_new = _fingerprint(line)
+    new_parts = fp_new.split()
+    if len(new_parts) < 2:
+        return {"ok": False, "error": "SSH public key could not be parsed; "
+                "paste the complete public key, not the private key"}
+    lines = _read_lines()
     for ln in lines:
-        if ln.strip() == line or (fp_new and _fingerprint(ln) == fp_new):
+        # ssh-keygen's display includes the comment; changing a comment must
+        # not authorize the same cryptographic key a second time.
+        existing_fp = _fingerprint(ln).split()
+        if (ln.strip() == line or
+                (len(existing_fp) >= 2 and existing_fp[1] == new_parts[1])):
             return {"ok": False, "error": "that key is already authorized"}
     lines.append(line)
     _write(lines)
@@ -234,13 +249,21 @@ def _shell_quote(s: str) -> str:
 
 
 def delete_key(fingerprint: str) -> dict:
+    with _KEYS_LOCK:
+        return _delete_key(fingerprint)
+
+
+def _delete_key(fingerprint: str) -> dict:
+    if not isinstance(fingerprint, str) or not fingerprint.strip():
+        return {"ok": False, "error": "a valid key fingerprint is required"}
     lines = _read_lines()
-    if len(lines) <= 1:
-        return {"ok": False,
-                "error": "refusing to remove the last key — that would lock "
-                         "you out of the node"}
-    keep = [ln for ln in lines if _fingerprint(ln) != fingerprint]
+    parsed = [(ln, _fingerprint(ln)) for ln in lines]
+    keep = [ln for ln, fp in parsed if fp != fingerprint]
     if len(keep) == len(lines):
         return {"ok": False, "error": "no key with that fingerprint found"}
+    if not any(fp and fp != fingerprint for _, fp in parsed):
+        return {"ok": False,
+                "error": "refusing to remove the last valid key — that would "
+                         "lock you out of the node"}
     _write(keep)
     return {"ok": True}

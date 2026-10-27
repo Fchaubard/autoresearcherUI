@@ -122,7 +122,7 @@ class Orchestrator:
         # every 5s while paused so resume is instant; this keeps the
         # idea in queue (status untouched) and the GPU slot reserved.
         from . import notify as _notify
-        while _notify.research_paused():
+        while _notify.research_paused() or _notify.research_halted()[0]:
             if not self.running:
                 return
             await asyncio.sleep(5)

@@ -281,6 +281,8 @@ class PaperCitation(Base):
     year = Column(String, default="")
     abstract_md = Column(Text, default="")
     relevance_md = Column(Text, default="")
+    same_md = Column(Text, default="")
+    diff_md = Column(Text, default="")
     cited_in_sections = Column(JSON, default=list)
     pulled_at = Column(String, default=lambda: _now().isoformat())
     user_approved_at = Column(String, default="")

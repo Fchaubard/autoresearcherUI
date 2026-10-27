@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib
 import os
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
@@ -81,6 +82,14 @@ def arui_env(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("ARUI_DATA_DIR", str(data_dir))
+    # Tests may create/kill canonical sessions such as "agent" and "author".
+    # Never inherit a developer's live tmux server, even when pytest is run
+    # without special environment variables or from inside a tmux pane.
+    # Keep the Unix socket path short even for long pytest test names.
+    tmux_dir = tmp_path.parent / ("tmux-" + uuid.uuid4().hex[:10])
+    tmux_dir.mkdir(mode=0o700)
+    monkeypatch.setenv("TMUX_TMPDIR", str(tmux_dir))
+    monkeypatch.setenv("TMUX", "")
     # Don't let the production background daemon loops (paper-runner, author
     # feed, telemetry, notify scheduler) spawn during unit tests. They are
     # `while True` daemons that outlive the test, then keep hitting whichever DB
@@ -103,7 +112,8 @@ def arui_env(tmp_path, monkeypatch):
     db.init_db()
     # Now scrub any keys council may have just loaded from keys.env so
     # unit tests never accidentally hit a real LLM.
-    for k in ("GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+    for k in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+              "OPENCODE_API_KEY", "ARUI_FLINT_API_KEY", "ARUI_FLINT_BASE_URL", "ARUI_FLINT_MODEL"):
         monkeypatch.delenv(k, raising=False)
     yield data_dir
     # Drain any short-lived worker threads a test spawned (council reviewers,
@@ -122,18 +132,14 @@ def arui_env(tmp_path, monkeypatch):
             thr.join(timeout=max(0.0, deadline - time.time()))
         except Exception:                              # noqa: BLE001
             pass
-    # A test may spawn a REAL tmux session (author_agent.start / agent start,
-    # the paper handoff). tmux sessions persist on the server and leak into the
-    # next test: a leftover "author" session makes supervisor.tick() believe
-    # paper mode has a live author and call set_phase(PAPER), which resets the
-    # remediation counter a later test just set. Kill the arui-owned sessions.
+    # Stop this test's private server so real sessions cannot leak to another
+    # test. Explicit env keeps cleanup safe even if a test changes TMUX.
     import subprocess
-    for _sess in ("author", "agent"):
-        try:
-            subprocess.run(["tmux", "kill-session", "-t", _sess],
-                           capture_output=True, timeout=5)
-        except Exception:                              # noqa: BLE001
-            pass
+    try:
+        subprocess.run(["tmux", "kill-server"], capture_output=True, timeout=5,
+                       env={**os.environ, "TMUX": "", "TMUX_TMPDIR": str(tmux_dir)})
+    except Exception:                                  # noqa: BLE001
+        pass
     _purge_backend_modules()
 
 

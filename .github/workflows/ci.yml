@@ -31,3 +31,27 @@ jobs:
           python-version: "3.11"
       - name: Run the e2e integration test
         run: bash tests/run_e2e.sh
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: tests/browser
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tests/browser/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps webkit chromium
+      - name: iPhone and desktop browser regressions
+        run: npm test
+      - name: Browser traces and screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-failures
+          path: /tmp/arui-mobile-audit/results

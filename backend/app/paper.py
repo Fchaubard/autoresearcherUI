@@ -48,7 +48,10 @@ def paper_folder(db=None) -> Path | None:
         cfg = db.query(Setting).filter(Setting.key == "onboarding").first()
         repo = ((cfg.value.get("repo_name") if cfg and isinstance(cfg.value, dict)
                  else None) or proj.name or "project").strip()
-        p = WORKSPACE_DIR / repo / sub
+        workspace = Path(proj.repo_path).expanduser() if proj.repo_path else WORKSPACE_DIR / repo
+        if not workspace.is_absolute():
+            workspace = WORKSPACE_DIR / workspace
+        p = workspace / sub
         p.mkdir(parents=True, exist_ok=True)
         return p
     finally:
@@ -241,7 +244,7 @@ def _enclosing_git_root(folder: Path) -> Path | None:
     """The git repo that already contains `folder`, or None."""
     out = subprocess.run(
         ["git", "-C", str(folder), "rev-parse", "--show-toplevel"],
-        capture_output=True, text=True)
+        capture_output=True, text=True, timeout=10)
     return Path(out.stdout.strip()) if out.returncode == 0 else None
 
 
@@ -368,9 +371,13 @@ def commit_paper_changes(folder: Path, message: str,
 
 
 def list_commits(folder: Path, limit: int = 30) -> list[dict]:
-    if not (folder / ".git").exists():
+    """History affecting this paper, including an enclosing project repo."""
+    root = _enclosing_git_root(folder)
+    if root is None:
         return []
-    raw = _run_git(folder, "log", f"-n{limit}", "--pretty=format:%H\t%an\t%at\t%s")
+    relative = folder.resolve().relative_to(root.resolve()).as_posix()
+    raw = _run_git(root, "log", f"-n{max(1, min(int(limit), 200))}",
+                   "--pretty=format:%H\t%an\t%at\t%s", "--", ":(literal)" + relative)
     out = []
     for ln in raw.splitlines():
         parts = ln.split("\t", 3)
@@ -385,7 +392,16 @@ def list_commits(folder: Path, limit: int = 30) -> list[dict]:
 
 
 def diff(folder: Path, sha_a: str, sha_b: str = "HEAD") -> str:
-    return _run_git(folder, "diff", sha_a, sha_b)
+    """Only paper files, with paths relative to the paper folder."""
+    if _enclosing_git_root(folder) is None:
+        return ""
+    # Resolve refs before diff so a malformed stored revision cannot become
+    # a git option (for example --output=...).
+    commits = [_run_git(folder, "rev-parse", "--verify", "--end-of-options",
+                        str(ref) + "^{commit}") for ref in (sha_a, sha_b)]
+    if not all(re.fullmatch(r"[0-9a-f]{40,64}", commit) for commit in commits):
+        return ""
+    return _run_git(folder, "diff", "--relative", *commits, "--", ".")
 
 
 # ── snapshot / restore ────────────────────────────────────────────────────
@@ -407,7 +423,7 @@ def take_snapshot() -> dict:
         }
         # the git SHA of the paper folder, if any
         folder = paper_folder(db)
-        if folder and (folder / ".git").exists():
+        if folder and _enclosing_git_root(folder) is not None:
             snap["latex_commit_sha"] = _run_git(folder, "rev-parse", "HEAD")
         return snap
     finally:

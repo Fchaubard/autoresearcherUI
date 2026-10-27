@@ -1,5 +1,6 @@
 /* autoresearcherUI v0.3 — single-page mission control */
 :root {
+  color-scheme:dark;
   --bg:#0B0D10; --panel:#14171C; --panel-2:#181C22; --panel-3:#1d2127;
   --border:#23272E; --border-soft:#1c2026;
   --text:#E6E8EB; --text-2:#9BA1A8; --muted:#5C636B;
@@ -8,6 +9,7 @@
   --r:10px; --r-sm:7px;
   --mono:'SF Mono','JetBrains Mono',Menlo,Consolas,monospace;
   --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Inter,sans-serif;
+  --visible-height:100dvh; --visible-top:0px;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
@@ -19,6 +21,9 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);
 ::-webkit-scrollbar-thumb:hover{background:#3a414c}
 button,input{font-family:inherit;color:inherit}
 button{cursor:pointer}
+select,textarea{font-family:inherit;max-width:100%}
+button:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.rail-mobile-head,.scope-mobile-tabs{display:none}
 
 /* ── grid shell ───────────────────────────────────────────────────────── */
 .app{display:grid;grid-template-columns:1fr 372px;
@@ -2039,3 +2044,259 @@ textarea.onb-in{resize:vertical;line-height:1.5}
 .halt-ta { width:100%; box-sizing:border-box; background:var(--panel,#12151c);
   color:var(--fg,#e6e6e6); border:1px solid var(--border,#2a2f3a);
   border-radius:6px; padding:8px; font:inherit; resize:vertical; }
+
+/* Adaptive surfaces: the visual viewport includes Safari's browser chrome
+   and keyboard. Safe-area padding keeps controls clear of the home indicator. */
+.app,.onb{height:var(--visible-height,100dvh);min-height:0}
+.app{grid-template-rows:54px minmax(0,1fr)}
+.app.has-statusbar{grid-template-rows:54px auto minmax(0,1fr)}
+.rail{grid-template-rows:auto minmax(0,1fr) auto;min-width:0;min-height:0}
+.composer input,.files-filter input,.anav2-search,.share-url{min-width:0}
+.mscrim,.arui-modal-back{position:fixed;inset:auto 0;top:var(--visible-top);height:var(--visible-height,100dvh);
+  display:flex;align-items:center;justify-content:center;padding:16px;overflow:hidden}
+.arui-modal-back{background:rgba(0,0,0,.65)}
+.modal,.arui-modal{min-width:0;max-width:100%;max-height:100%;overflow:auto;
+  overscroll-behavior:contain;overflow-wrap:anywhere}
+.arui-modal{background:var(--panel);border-radius:14px}
+.modal-hd{gap:12px}
+.modal-hd h2{min-width:0}
+.modal-hd .iconbtn,.crv-x,.approval-close{flex-shrink:0}
+.modal-approval{overflow:hidden}
+.approval-body{min-height:0}
+.scope-wrap,.drawer{top:var(--visible-top);height:var(--visible-height,100dvh);bottom:auto}
+.scope-body{grid-template-columns:minmax(190px,240px) minmax(0,1fr) minmax(240px,340px)}
+.scope-center,.scope-side,.scope-chatcol{min-width:0;overflow-wrap:anywhere}
+.scope-head .boot-brand{margin:0}
+.scope-loading{padding:24px;min-height:100%;text-align:center}
+.scope-chatbar textarea{min-width:0}
+.boot-wrap,.login-wrap{height:var(--visible-height,100dvh);min-height:0;overflow:auto}
+.boot-card,.login-card{margin:auto}
+.share-wrap{height:var(--visible-height,100dvh);overflow:auto;overflow-wrap:anywhere}
+.sidemenu{max-width:calc(100vw - 24px);overflow-y:auto;overscroll-behavior:contain}
+.tbl-scroll{overflow:auto;overscroll-behavior:contain}
+.paper-tab-body{min-width:0;flex-shrink:0}
+
+@media(max-width:1100px){
+  .scope-body{grid-template-columns:190px minmax(0,1fr) 280px}
+  .scope-scroll{padding:20px}
+  .anav2{grid-template-columns:340px minmax(0,1fr)}
+}
+@media(max-width:880px){
+  /* Fixed rows previously starved the table and clipped it completely in
+     landscape. The dashboard now scrolls as one column on a phone. */
+  .app,.app.has-statusbar{grid-template-columns:minmax(0,1fr)!important;
+    grid-template-rows:auto minmax(0,1fr)}
+  .app.has-statusbar{grid-template-rows:auto auto minmax(0,1fr)}
+  .hdr{min-height:56px;padding:calc(4px + env(safe-area-inset-top))
+    max(12px,env(safe-area-inset-right)) 4px max(8px,env(safe-area-inset-left));
+    gap:8px;overflow:visible;min-width:0}
+  .brand{flex-shrink:0;gap:6px}
+  .brand b{font-size:12px}
+  .brand-mark{width:24px;height:24px}
+  .hdr .proj{flex:1;min-width:0;font-size:12px;line-height:1.3;
+    overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+    overflow-wrap:anywhere}
+  .hdr .spacer{display:none}
+  .burger{flex:0 0 40px;min-height:44px}
+  .statusbar{padding:8px 12px;white-space:normal;overflow:auto;max-height:150px;gap:8px}
+  .statusbar .counts{flex-wrap:wrap;gap:10px}
+  .sb-preflight{gap:5px}
+  .sb-alert{min-width:0;overflow-wrap:anywhere}
+  .sb-blockers ul{max-width:100%}
+  .left{display:flex;flex-direction:column;min-height:0;overflow-y:auto;
+    padding-bottom:calc(74px + env(safe-area-inset-bottom));overscroll-behavior:contain}
+  .hero{min-height:240px;flex:0 0 260px;padding:12px}
+  .hero-top{flex-wrap:wrap;gap:6px}
+  .hero-top .sub{font-size:10px}
+  .stats{flex-shrink:0;grid-template-columns:repeat(3,minmax(0,1fr))}
+  .stat{padding:9px 10px;min-width:0}
+  .stat .v{font-size:17px;overflow-wrap:anywhere}
+  .tbl-wrap{flex:1 0 auto;overflow:visible;min-height:160px}
+  .tbl-bar{padding:10px 12px;flex-wrap:wrap}
+  .tbl-bar .seg{max-width:100%;overflow-x:auto}
+  .tbl-bar .search{width:100%;margin-left:0;min-width:0}
+  .tbl-scroll{flex:none;width:100%}
+  table.runs{min-width:680px}
+  .rail-grip{display:none}
+  .rail.show{top:var(--visible-top);height:var(--visible-height,100dvh);bottom:auto;
+    z-index:40;grid-template-rows:auto auto minmax(0,1fr) auto;border:0;
+    padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right)}
+  .rail-mobile-head{display:flex;align-items:center;justify-content:space-between;
+    padding:calc(4px + env(safe-area-inset-top)) 12px 4px;border-bottom:1px solid var(--border);
+    font-weight:600;color:var(--text-2)}
+  .rail.show~.fab{display:none}
+  .fab{bottom:calc(14px + env(safe-area-inset-bottom));right:calc(14px + env(safe-area-inset-right));
+    width:50px;height:50px}
+  .rail-tabs{gap:4px;padding:6px}
+  .rail-tab{min-width:0;font-size:11px;line-height:1.25;padding:8px 4px}
+  .composer{padding:10px 12px calc(10px + env(safe-area-inset-bottom))}
+  .composer .row{align-items:stretch}
+  .composer .row button{flex-shrink:0}
+  .qchips{flex-wrap:nowrap;overflow-x:auto;margin-bottom:8px;padding-bottom:3px}
+  .composer .qchip{flex-shrink:0;min-height:36px;padding:6px 10px;font-size:11px}
+  .viewpane{padding:16px 12px calc(24px + env(safe-area-inset-bottom));min-height:0}
+  .anav2,.files{grid-template-columns:minmax(0,1fr);height:auto;min-height:100%}
+  .anav2-side{max-height:360px;border-right:0;border-bottom:1px solid var(--border)}
+  .anav2-table{min-width:480px}
+  .anav2-main{overflow:visible}
+  .anav2-bar,.anav2-bar-l{flex-wrap:wrap;gap:8px}
+  .anav2-bar{padding:12px}
+  .anav2-grid{overflow:visible;grid-template-columns:minmax(0,1fr);padding:10px;flex:none}
+  .anav2-panel{min-height:340px}
+  .anav2-panel-hd{flex-wrap:wrap}
+  .anav2-panel-titlerow{flex-wrap:wrap}
+  .anav2-popover{max-width:calc(100vw - 24px);max-height:calc(var(--visible-height) - 32px);overflow:auto}
+  .anav2-grid-empty-actions{flex-wrap:wrap}
+  .files-side{height:280px;border-right:0;border-bottom:1px solid var(--border)}
+  .files-main{min-height:360px;height:60vh}
+  .files-edbar{flex-wrap:wrap;gap:6px;padding:8px 12px}
+  .files-edpath{flex-basis:100%;overflow-wrap:anywhere;white-space:normal}
+  .files-edempty{padding:32px 12px}
+  .files-row{min-height:44px}
+  .files-tabs{min-height:44px}
+  .files-tab-x{display:grid;place-items:center;min-width:28px;min-height:32px}
+  .lessons-wrap{padding:4px 0 24px}
+  .lesson-hd{flex-wrap:wrap}
+  .lesson-bd,.ak-key,.ak-comment{overflow-wrap:anywhere}
+  .sys-gpus,.sys-cards{grid-template-columns:repeat(auto-fit,minmax(135px,1fr))}
+  .sys-maint-help{min-width:0;flex-basis:100%}
+  .latex-soon{height:auto;min-height:100%;justify-content:flex-start;padding-top:20px}
+  .mode-flip-row,.paper-hero-bar,.plan-group-hd{flex-wrap:wrap}
+  .paper-wrap{padding:10px 0 calc(80px + env(safe-area-inset-bottom));overflow-x:hidden}
+  .paper-left{padding:0 12px}
+  .paper-viewer{height:380px}
+  .paper-tabs{overflow-x:auto;flex-shrink:0}
+  .paper-tab{flex-shrink:0;white-space:nowrap}
+  .paper-build{min-width:140px}
+  .paper-tab-body{overflow-x:auto;flex:0 0 auto;min-height:120px}
+  .cov-table,.plan-runs,.diff-matrix{display:block;max-width:100%;overflow-x:auto}
+  .td-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .td-commit{grid-template-columns:65px minmax(0,1fr)}
+  .td-commit-au{grid-column:2}
+  .td-section-h,.dq-bulk,.dec-card-hd,.dec-actions{flex-wrap:wrap}
+  .pp-hist-row{grid-template-columns:90px minmax(0,1fr);gap:8px}
+  .share-row{flex-wrap:wrap}
+  .share-url{flex-basis:100%}
+  .share-pdf iframe{height:60vh}
+  .drawer{width:100%;max-width:100%;padding:calc(16px + env(safe-area-inset-top))
+    14px calc(20px + env(safe-area-inset-bottom))}
+  /* Every dialog family shares the viewport constraint. Long forms scroll
+     inside it, including Halt, proposals, settings and token validation. */
+  .mscrim,.arui-modal-back{padding:calc(10px + env(safe-area-inset-top))
+    max(10px,env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom))
+    max(10px,env(safe-area-inset-left))}
+  .modal,.arui-modal{width:100%;min-width:0!important;max-width:100%!important;
+    max-height:100%!important;padding:16px;border-radius:12px}
+  .modal-approval{padding:0}
+  .approval-head,.approval-body,.approval-actions{padding:12px}
+  .approval-actions{flex-wrap:wrap;flex-shrink:0}
+  .approval-table{display:block;overflow:auto}
+  .arui-dlg-actions,.modal-actions,.approval-actions{flex-wrap:wrap}
+  .arui-dlg-actions>.btn,.modal-actions>.btn,.approval-actions>.btn{flex:1 1 100%;white-space:normal}
+  .arui-dlg-actions{margin-top:16px}
+  .prop-grid{grid-template-columns:minmax(0,1fr)}
+  .fm-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr);padding:8px 0;border-bottom:1px solid var(--border)}
+  .fm-where,.fm-join-sel{grid-column:1/-1}
+  .fm-del{justify-self:end;min-width:44px}
+  .vap-grid{grid-template-columns:minmax(0,1fr)}
+  .set-wd-param{grid-template-columns:minmax(0,1fr);gap:4px;margin-left:0}
+  .set-wd-row-hd{flex-wrap:wrap}
+  .set-wd-desc{padding-left:0}
+  .set-wd-host{max-height:none;overflow:visible;padding:0}
+  .set-email-bar{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+  .set-email-lbl,.set-email-hint{flex-basis:100%}
+  .tc-list{max-height:none;overflow:visible}
+  .tc-detail{overflow-wrap:anywhere}
+  .onb-wrap{padding:calc(24px + env(safe-area-inset-top)) 12px calc(30px + env(safe-area-inset-bottom))}
+  .onb-card{padding:14px 12px}
+  .boot-wrap,.login-wrap{padding:calc(16px + env(safe-area-inset-top)) 12px calc(16px + env(safe-area-inset-bottom))}
+  .boot-card,.login-card{padding:22px 16px}
+  /* Phase 0 uses three named panels on phones instead of three desktop
+     columns squeezed into a viewport narrower than either side column. */
+  .scope-head{padding:calc(10px + env(safe-area-inset-top)) 12px 10px;gap:8px;flex-wrap:wrap}
+  .scope-head .boot-brand{font-size:13px}
+  .scope-head-r{width:100%;justify-content:space-between;gap:8px}
+  .scope-phase{font-size:11px;min-width:0}
+  .scope-head-r .btn{flex-shrink:0;font-size:11px}
+  .scope-mobile-tabs{display:flex;gap:4px;padding:6px 10px;border-bottom:1px solid var(--border)}
+  .scope-mobile-tabs button{flex:1;min-width:0;background:var(--panel);border:1px solid var(--border);
+    border-radius:7px;color:var(--text-2);padding:8px 4px;font-size:12px}
+  .scope-mobile-tabs button.on{background:var(--accent);color:white;border-color:var(--accent)}
+  .scope-mobile-tabs button:disabled{opacity:.45}
+  .scope-body{display:flex;flex-direction:column;overflow:hidden}
+  .scope-body>.scope-side,.scope-body>.scope-center,.scope-body>.scope-chatcol{display:none}
+  .scope-wrap[data-mobile-panel="plan"] .scope-center,
+  .scope-wrap[data-mobile-panel="context"] .scope-side{display:block;flex:1;overflow-y:auto}
+  .scope-wrap[data-mobile-panel="chat"] .scope-chatcol{display:flex;flex:1}
+  .scope-side{border:0;padding-bottom:calc(16px + env(safe-area-inset-bottom))}
+  .scope-chatcol{border:0}
+  .scope-scroll{padding:16px 12px calc(24px + env(safe-area-inset-bottom))}
+  .scope-loading{padding:24px 16px;gap:16px;min-height:100%}
+  .scope-final{min-height:180px;padding:10px}
+  .scope-actions{flex-wrap:wrap}
+  .scope-actions .btn{width:100%}
+  .scope-chatbar{padding:10px 12px calc(10px + env(safe-area-inset-bottom))}
+  .scope-msg{overflow-wrap:anywhere}
+  .scope-idea-h{gap:10px}
+  .scope-idea-h input{min-width:22px;min-height:22px}
+  /* 16px editable text prevents Safari focus zoom; 44px buttons remain
+     tappable even in the dense toolbars and modal headers. */
+  input:not([type=checkbox]):not([type=radio]):not([type=range]),select,textarea{font-size:16px!important}
+  button,.btn,.menu-item,.files-refresh,summary{min-height:44px;touch-action:manipulation}
+  .iconbtn,.approval-close,.crv-x{min-width:44px}
+  input[type=checkbox],input[type=radio]{min-width:20px;min-height:20px}
+  .onb-check{min-height:44px}
+}
+@media(max-width:359px){
+  .brand b{display:none}
+  .hdr .proj{font-size:13px}
+  .rail-tab{font-size:10px}
+  .scope-head-r{flex-wrap:wrap}
+  .scope-head-r .btn{width:100%}
+}
+@media(max-height:500px) and (max-width:880px){
+  .statusbar{max-height:80px}
+  .scope-head{padding-top:4px;padding-bottom:4px}
+  .scope-head .boot-brand{display:none}
+  .scope-mobile-tabs{padding-top:4px;padding-bottom:4px}
+  .qchips{display:none}
+  .rail-mobile-head{padding-top:env(safe-area-inset-top);padding-bottom:0}
+}
+.halt-report{font-size:12px;color:var(--text-2);margin:12px 0;overflow-wrap:anywhere}
+.halt-report ul{padding-left:18px;margin-top:4px}
+.modal-proposal{width:1200px}.modal-filter{width:760px}.modal-wide{width:960px}.modal.submit-helper{width:780px}
+@media(max-width:880px){
+  .sidemenu{padding-top:calc(14px + env(safe-area-inset-top));padding-bottom:calc(14px + env(safe-area-inset-bottom))}
+  .fm-cell{grid-column:1/-1}
+  .ak-info{min-width:0;overflow-wrap:anywhere}
+}
+@media(max-width:880px){.approval-table th,.approval-table td{white-space:nowrap}}
+@media(max-width:880px){
+  .rw-search,.plan-bar,.plan-fig-hd,.dec-hd,.cp-legend{flex-wrap:wrap;gap:8px}
+  .rw-search input{flex-basis:100%;min-width:0;min-height:44px}
+  .versions-bar{display:flex;flex-wrap:wrap;gap:8px}
+  .versions-bar .btn{flex:1 1 auto}
+  .td-run-row,.ms-row{overflow-wrap:anywhere}
+  .plan-group-counts{flex-wrap:wrap;margin-left:0}
+  .cov-table th,.cov-table td{min-width:64px}
+  .cov-table td:nth-child(2){min-width:180px}
+  .diff-matrix td{min-width:150px}
+}
+.citation-save-row{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:12px 0}
+#citation-save-status{font-size:12px;color:var(--text-2)}
+/* Reserve a separate launcher row. No floating control may cover a table,
+   paper action, or editable field while the conversation panel is closed. */
+@media(max-width:880px){
+  .app.has-statusbar{padding-bottom:calc(64px + env(safe-area-inset-bottom))}
+  .app.has-statusbar:after{content:'';position:fixed;left:0;right:0;bottom:0;
+    height:calc(64px + env(safe-area-inset-bottom));background:#0e1115;
+    border-top:1px solid var(--border);z-index:33;pointer-events:none}
+  .fab{height:44px;width:calc(100% - 24px - env(safe-area-inset-left) - env(safe-area-inset-right));
+    right:calc(12px + env(safe-area-inset-right));bottom:calc(10px + env(safe-area-inset-bottom));
+    border-radius:9px;font-size:13px;font-weight:600;box-shadow:none}
+  .left{padding-bottom:20px}
+  .paper-wrap{padding-bottom:24px}
+}
+.anav2-save-status{font-size:11px;color:var(--muted);overflow-wrap:anywhere}
+.anav2-save-status.error{color:var(--bad)}
+.anav2-save-retry[hidden]{display:none}

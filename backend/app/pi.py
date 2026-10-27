@@ -80,9 +80,8 @@ def _iso() -> str:
 def _provider_for(model: str) -> str | None:
     known = provider_for(model)
     if known:
-        env = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY",
-               "claude": "ANTHROPIC_API_KEY"}[known]
-        return known if os.environ.get(env) else None
+        from .provider_config import provider_ready
+        return known if provider_ready(model) else None
     m = (model or "").lower()
     if m.startswith("gemini"):
         return "gemini" if os.environ.get("GEMINI_API_KEY") else None
@@ -422,11 +421,14 @@ def _call(model: str, system: str, user: str) -> str:
     """Route the call to the right adapter based on model name."""
     prov = _provider_for(model)
     if not prov:
-        raise RuntimeError(f"no API key for {model}")
+        from .provider_config import requirement_error
+        raise RuntimeError(requirement_error(model) or f"Provider unavailable for {model}")
+    if prov in {"opencode", "flint"}:
+        return council._call_additional_model(model, system, user)
     if prov == "gemini":
         key = os.environ["GEMINI_API_KEY"]
         url = ("https://generativelanguage.googleapis.com/v1beta/"
-               f"models/{model}:generateContent?key={key}")
+               f"models/{model}:generateContent")
         body = {
             "system_instruction": {"parts": [{"text": system}]},
             "contents": [{"role": "user", "parts": [{"text": user}]}],
@@ -436,7 +438,7 @@ def _call(model: str, system: str, user: str) -> str:
         effort = _settings().get("pi_agent_effort")
         if effort and efforts_for(model):
             body["generationConfig"]["thinkingConfig"] = {"thinkingLevel": effort}
-        data = council._post_json_retry(url, body, {})
+        data = council._post_json_retry(url, body, {"x-goog-api-key": key})
         return data["candidates"][0]["content"]["parts"][0]["text"]
     if prov == "openai":
         key = os.environ["OPENAI_API_KEY"]

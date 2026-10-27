@@ -57,6 +57,18 @@ def init_db() -> None:
     # so we ALTER manually here. SQLite supports ADD COLUMN with a default.
     # This is idempotent — we check pragma first.
     _migrate_run_paper_columns()
+    _migrate_citation_notes()
+
+
+def _migrate_citation_notes() -> None:
+    """Keep operator comparison notes on existing citation databases."""
+    with engine.begin() as conn:
+        columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(paper_citation)")}
+        if not columns:
+            return
+        for name in ("same_md", "diff_md"):
+            if name not in columns:
+                conn.exec_driver_sql(f"ALTER TABLE paper_citation ADD COLUMN {name} TEXT DEFAULT ''")
 
 
 def _migrate_run_paper_columns() -> None:

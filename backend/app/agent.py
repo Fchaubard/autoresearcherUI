@@ -324,6 +324,10 @@ class RealAgent:
             self._ensure_codex_login(self.openai_key)
         if self.gemini_key:
             env["GEMINI_API_KEY"] = self.gemini_key
+        if self.model.startswith("gemini-"):
+            # The workspace was explicitly selected by the operator. Current
+            # Gemini otherwise parks at a trust screen before accepting work.
+            env["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
         log = os.path.join(self.workspace, "agent.log")
 
         provider = "custom"
@@ -342,6 +346,12 @@ class RealAgent:
             from .agent_cli import command
             provider, inner = command(self.model or "claude-opus-5",
                                       self.effort, msg)
+            from .opencode_runtime import agent_environment
+            env.update(agent_environment(self.model))
+            from .provider_config import ENV_FIELDS
+            for variable in ENV_FIELDS.values():
+                if os.environ.get(variable):
+                    env.setdefault(variable, os.environ[variable])
 
         subprocess.run(["tmux", "kill-session", "-t", self.session],
                        capture_output=True)

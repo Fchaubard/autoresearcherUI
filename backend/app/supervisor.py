@@ -263,6 +263,7 @@ _AGENT_RESTART_MAX_BACKOFF_SEC = 300
 # parked agent look busy and never get un-parked.
 _AGENT_BUSY_MARKERS = (
     "esc to interrupt",
+    "esc interrupt",              # OpenCode 2 mini's live footer
     "compacting conversation",
     "press up to edit queued",   # messages queued while the agent is working
 )
@@ -489,6 +490,7 @@ def _agent_idle_prompt(pane_low: str) -> bool:
     return ("shift+tab to cycle" in pane_low       # idle footer, any mode
             or "bypass permissions on" in pane_low
             or "auto mode on" in pane_low
+            or "ask anything, / for commands" in pane_low
             or "enter to select" in pane_low
             or "\n❯ " in pane_low
             or "\n› " in pane_low

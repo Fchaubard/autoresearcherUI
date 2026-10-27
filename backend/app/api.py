@@ -14,6 +14,7 @@ import shlex
 import shutil
 import subprocess
 import threading
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -72,7 +73,7 @@ def _poke_author_to_integrate(run_id: str, metric: float | None,
         print(f"[paper] poke author tmux failed: {e}", flush=True)
 
 
-def _apply_tokens_to_env() -> None:
+def _apply_tokens_to_env(force_fields: set[str] | None = None) -> None:
     """Copy onboarding-saved API tokens into ``os.environ`` so council,
     PI, and lit-agent can find them.
 
@@ -85,29 +86,39 @@ def _apply_tokens_to_env() -> None:
 
     Call this at backend startup (lifespan), after every
     ``POST /api/onboarding``, and after every ``PUT /api/settings``. The
-    helper is idempotent and never overwrites an existing env var that
-    was set externally (e.g. via ``.env`` or systemd) — that lets the
-    user override the dashboard value when they really need to."""
+    helper preserves external defaults at startup, refreshes values previously
+    injected by the dashboard, and applies explicit edits immediately."""
     db = SessionLocal()
     try:
         row = db.query(Setting).filter(Setting.key == "onboarding").first()
         cfg = dict(row.value) if row and isinstance(row.value, dict) else {}
     finally:
         db.close()
+    from .provider_config import ENV_FIELDS
     pairs = {
         "ANTHROPIC_API_KEY": cfg.get("claude_token"),
         "OPENAI_API_KEY":    cfg.get("openai_token"),
         "GEMINI_API_KEY":    cfg.get("gemini_token"),
         "GOOGLE_API_KEY":    cfg.get("gemini_token"),  # some libs use this name
         "GITHUB_TOKEN":      cfg.get("github_token"),
+        **{env: cfg.get(field) for field, env in ENV_FIELDS.items() if field in cfg},
     }
+    forced = {ENV_FIELDS[k] for k in (force_fields or ()) if k in ENV_FIELDS}
+    if "gemini_token" in (force_fields or ()):
+        forced.add("GOOGLE_API_KEY")
+    if "github_token" in (force_fields or ()):
+        forced.add("GITHUB_TOKEN")
     set_names = []
     for env_name, val in pairs.items():
-        val = (val or "").strip()
+        val = str(val or "").strip()
         if not val:
+            if env_name in _RUNTIME_TOKEN_ENV:
+                os.environ.pop(env_name, None)
+                _RUNTIME_TOKEN_ENV.discard(env_name)
             continue
         # Don't clobber an externally-set value — env wins over Settings.
-        if os.environ.get(env_name):
+        if (os.environ.get(env_name) and env_name not in _RUNTIME_TOKEN_ENV
+                and env_name not in forced):
             continue
         os.environ[env_name] = val
         _RUNTIME_TOKEN_ENV.add(env_name)
@@ -980,6 +991,12 @@ async def track_run(request: Request):
             "hint": ("Research is HALTED — POST /api/halt/resume "
                      "(requires admin passcode) to unlock."),
         }, status_code=423)
+    from . import research_control
+    if research_control.read().get("stop_all"):
+        return JSONResponse({
+            "ok": False, "blocked": True, "reason": "research_paused",
+            "hint": "Research was interrupted. Resume research before launching any run.",
+        }, status_code=423)
     # OPEN HALT DIRECTIVE: directives.jsonl HALT directives block ALL
     # runs (including probes) until the human PI closes them. Same shape.
     halt_d = _directives.open_halt()
@@ -1623,8 +1640,13 @@ async def halt_research(request: Request):
     /halt/resume (admin-only via passcode) to lift the halt."""
     body = await _safe_json(request)
     reason = str(body.get("reason") or "no reason provided")[:500]
-    notify.set_research_halted(True, reason=reason)
-    return {"ok": True, "halted": True, "reason": reason}
+    from . import interrupt
+    gate = notify.set_research_halted(True, reason=reason)
+    stats = interrupt.kill_killable_runs()
+    stats["errors"].extend(gate.get("errors", []))
+    return {**stats, "ok": stats["ok"] and gate.get("ok", True),
+            "halted": gate.get("halted", True), "reason": reason,
+            "sessions_interrupted": gate.get("sessions_interrupted", [])}
 
 
 @router.post("/halt/resume")
@@ -1648,8 +1670,7 @@ async def halt_resume(request: Request):
     if real and submitted != real:
         return JSONResponse({"ok": False, "error": "bad_passcode"},
                              status_code=401)
-    notify.set_research_halted(False)
-    return {"ok": True, "halted": False}
+    return notify.set_research_halted(False)
 
 
 @router.get("/halt/status")
@@ -1856,8 +1877,7 @@ async def research_pause():
         prompt buffer.
     """
     res = notify.set_research_paused(True)
-    return {"ok": True, "paused": True,
-            "sessions_interrupted": res.get("sessions_interrupted", [])}
+    return res
 
 
 @router.post("/research/resume")
@@ -1869,8 +1889,7 @@ async def research_resume():
     into the agent / author tmux sessions so the agent picks up where
     it left off."""
     res = notify.set_research_paused(False)
-    return {"ok": True, "paused": False,
-            "sessions_interrupted": res.get("sessions_interrupted", [])}
+    return res
 
 
 @router.post("/research/interrupt")
@@ -2235,6 +2254,10 @@ async def agent_restart(request: Request):
     after the paper-mode rebuild. /api/paper/author/restart remains as
     a compat alias for any callers that still hit it.
     """
+    if notify.research_paused() or notify.research_halted()[0]:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"ok": False, "detail":
+            "Research is paused or halted. Resume research before restarting its agents."}, status_code=423)
     try:
         body = await request.json() if request.headers.get(
             "content-type", "").startswith("application/json") else {}
@@ -2251,6 +2274,16 @@ async def agent_restart(request: Request):
         return {"ok": False,
                 "error": f"unknown agent name '{name}'; "
                           "expected one of: research, author, both"}
+    from .research_processes import active_session_workloads
+    try:
+        for target in targets:
+            session = "agent" if target == "research" else target
+            if active_session_workloads(session):
+                return {"ok": False, "error":
+                    f"The {target} agent has experiments running inside its session. "
+                    "Wait for those experiments to finish before restarting; model settings can be saved now."}
+    except Exception:
+        return {"ok": False, "error": "Could not verify active experiments. Agent restart was deferred; retry shortly."}
     results: dict = {}
     db = SessionLocal()
     try:
@@ -2260,35 +2293,32 @@ async def agent_restart(request: Request):
     finally:
         db.close()
     if "research" in targets:
-        from .model_registry import provider_for
-        provider = provider_for(cfg.get("research_agent_model", ""))
-        token_key = {"claude": "claude_token", "openai": "openai_token",
-                     "gemini": "gemini_token"}.get(provider, "")
-        if not (token_key and cfg.get(token_key)
-                or os.environ.get("ARUI_CLAUDE_BIN")):
+        from .provider_config import provider_ready, requirement_error
+        model = cfg.get("research_agent_model", "claude-opus-5")
+        if not (provider_ready(model, cfg) or os.environ.get("ARUI_CLAUDE_BIN")):
             results["research"] = {"ok": False,
-                                    "error": "no selected-provider token configured — "
-                                             "onboarding not complete"}
+                                    "error": requirement_error(model, cfg, agent=True)}
         else:
-            subprocess.run(["tmux", "kill-session", "-t", "agent"],
-                           capture_output=True, timeout=5)
             try:
-                realrun.start_real(cfg)
+                from . import agent_watcher
+                started = agent_watcher._restart_session("agent", resume=True)
                 # Never serialize RealAgent: its attributes include provider
                 # credentials and the complete private research brief.
-                results["research"] = {"ok": True, "status": "started"}
+                results["research"] = ({"ok": True, "status": "started"} if started
+                                       else {"ok": False, "error": "Research agent did not start. Check the selected model and CLI."})
             except Exception as e:                              # noqa: BLE001
                 from .safe_errors import describe
                 results["research"] = {"ok": False,
                                        "error": describe(e)}
     if "author" in targets:
         try:
-            from . import author_agent
-            subprocess.run(["tmux", "kill-session", "-t", "author"],
-                           capture_output=True, timeout=5)
-            results["author"] = {"ok": True, "info": author_agent.start()}
+            from . import agent_watcher
+            started = agent_watcher._restart_session("author", resume=True)
+            results["author"] = ({"ok": True, "status": "started"} if started
+                                 else {"ok": False, "error": "Author agent did not start. Check the paper setup and selected model."})
         except Exception as e:                                  # noqa: BLE001
-            results["author"] = {"ok": False, "error": str(e)}
+            from .safe_errors import describe
+            results["author"] = {"ok": False, "error": describe(e)}
     ok = all(v.get("ok") for v in results.values())
     return {"ok": ok, "targets": targets, "results": results}
 
@@ -2397,7 +2427,8 @@ def model_catalog():
 # Secret / token fields are blanked in /api/settings responses so the UI
 # doesn't display the saved value. PUTting blank means "leave unchanged".
 SECRET_FIELDS = {"claude_token", "gemini_token", "openai_token",
-                 "github_token", "gmail_app_pw", "passcode"}
+                 "opencode_token", "flint_token", "github_token",
+                 "gmail_app_pw", "passcode", "smtp_pass", "resend_api_key"}
 
 
 @router.get("/settings")
@@ -2416,32 +2447,129 @@ async def put_settings(request: Request):
     """Merge updates into the onboarding config. Secret fields are only
     updated when the user provides a non-empty, non-mask value (blanks
     mean 'leave alone'). Returns the new (masked) settings."""
-    updates = await request.json()
+    from fastapi.responses import JSONResponse
+    import asyncio
+    try:
+        payload = await request.json()
+    except (ValueError, TypeError):
+        return JSONResponse({"status": "error", "detail": "Expected valid JSON"}, status_code=400)
+    if not isinstance(payload, dict):
+        return JSONResponse({"status": "error", "detail": "Expected an object"}, status_code=400)
+    try:
+        result, passcode = await asyncio.to_thread(_save_live_settings, payload)
+    except ValueError as exc:
+        return JSONResponse({"status": "error", "detail": str(exc)}, status_code=400)
+    except Exception as exc:
+        from .safe_errors import describe
+        print(f"[settings] save failed: {describe(exc)}", flush=True)
+        return JSONResponse({"status": "error", "detail":
+            "Settings could not be saved. Check database storage and retry; "
+            "your edits are still in this form."}, status_code=503)
+    response = JSONResponse(result)
+    if passcode:
+        from .auth import COOKIE_NAME
+        response.set_cookie(COOKIE_NAME, passcode, max_age=60 * 60 * 24 * 30,
+                            httponly=True, samesite="lax", path="/")
+    return response
+
+
+def _save_live_settings(payload: dict) -> tuple[dict, str]:
+    """Commit form and watchdog edits together before applying agent changes."""
+    from sqlalchemy import text
+    from . import runtime_settings
+    from .watchdog.config import DEFAULT_CONFIG, merge_config
+
+    updates = payload.get("settings", payload)
+    watchdog = payload.get("watchdog") if "settings" in payload else None
     if not isinstance(updates, dict):
-        return {"status": "error", "detail": "expected an object"}
+        raise ValueError("Settings must be an object")
+    if watchdog is not None and not isinstance(watchdog, dict):
+        raise ValueError("Watchdog settings must be an object")
+    changed = set()
+    alias = None
     db = SessionLocal()
     try:
+        db.execute(text("BEGIN IMMEDIATE"))
         row = db.query(Setting).filter(Setting.key == "onboarding").first()
-        cur = dict(row.value) if row and isinstance(row.value, dict) else {}
+        before = dict(row.value) if row and isinstance(row.value, dict) else {}
+        cur = dict(before)
         for k, v in updates.items():
             # don't clobber a saved secret with a blank or mask
             if k in SECRET_FIELDS:
                 if not v or str(v).strip() in ("", "••••••••"):
                     continue
             cur[k] = v
+            if before.get(k) != v:
+                changed.add(k)
+        runtime_settings.validate_models(before, cur)
+        wdrow = None
+        if watchdog is not None:
+            wdrow = db.query(Setting).filter(Setting.key == "watchdog.config").first()
+            existing = wdrow.value if wdrow and isinstance(wdrow.value, dict) else {}
+            merged_wd = merge_config(watchdog, merge_config(existing, DEFAULT_CONFIG))
+        project = db.query(Project).first()
+        if project:
+            # An existing experiment workspace keeps its identity when the
+            # display/repository name changes; path-based readers use an alias.
+            from .config import WORKSPACE_DIR
+            workspace = Path(project.repo_path or (WORKSPACE_DIR / project.name)).resolve()
+            if "repo_name" in changed:
+                name = str(cur.get("repo_name") or "").strip()
+                if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name):
+                    raise ValueError("Repository name must be a single name using letters, numbers, dots, dashes or underscores")
+                target = WORKSPACE_DIR / name
+                if target.exists() and target.resolve() != workspace:
+                    raise ValueError("A different workspace already uses that repository name")
+                if workspace.exists() and not target.exists() and target != workspace:
+                    target.symlink_to(workspace, target_is_directory=True)
+                    alias = target
+                project.repo_path = str(workspace)
+                project.name = name
+            if "purpose" in changed:
+                project.purpose = str(cur.get("purpose") or "")
+            if "metric" in changed:
+                metric = str(cur.get("metric") or "").strip()
+                if not metric:
+                    raise ValueError("Validation metric cannot be blank")
+                project.validation_metric = metric
+                project.metric_direction = realrun._direction(metric)
         if row:
             row.value = cur
         else:
             db.add(Setting(key="onboarding", value=cur))
+        if watchdog is not None:
+            if wdrow:
+                wdrow.value = merged_wd
+            else:
+                db.add(Setting(key="watchdog.config", value=merged_wd))
+        runtime_settings.queue_changes(db, before, cur)
         db.commit()
+    except Exception:
+        db.rollback()
+        if alias is not None:
+            alias.unlink(missing_ok=True)
+        raise
     finally:
         db.close()
     # Sync newly-saved tokens into os.environ so council/PI/lit-agent
     # pick them up immediately — no backend restart required.
-    try: _apply_tokens_to_env()
+    warnings = []
+    try:
+        from .provider_config import ENV_FIELDS
+        explicit_credentials = {field for field in ENV_FIELDS if cur.get(field)}
+        _apply_tokens_to_env(force_fields=changed | explicit_credentials)
     except Exception as e:                              # noqa: BLE001
-        print(f"[api] apply_tokens_to_env error: {e}", flush=True)
-    return {"status": "ok"}
+        warnings.append("Settings saved, but provider configuration could not be applied. Retry Save.")
+    try:
+        applied = runtime_settings.apply_pending()
+    except Exception:
+        applied = {"applied": [], "pending": [], "warnings": [
+            "Settings saved, but live agent configuration could not be applied. Retry Save."]}
+    warnings.extend(applied["warnings"])
+    return ({"status": "partial" if warnings else "ok", "saved": True,
+             "applied_agents": applied["applied"], "pending_agents": applied["pending"],
+             "pending_reasons": applied.get("pending_reasons", {}),
+             "warnings": warnings}, str(cur.get("passcode") or "") if "passcode" in changed else "")
 
 
 @router.get("/diag")
@@ -2600,19 +2728,14 @@ async def onboarding_validate_tokens(request: Request):
     (Claude) that come back as ok=False should block the launch; optional
     tokens (Gemini, OpenAI, Gmail, GitHub) can warn but proceed."""
     from . import token_check
+    import asyncio
     body = await _safe_json(request)
-    return token_check.check_all(body or {})
+    return await asyncio.to_thread(token_check.check_all, body or {})
 
 
 @router.post("/onboarding")
 async def post_onboarding(request: Request):
-    """Save the onboarding config and register the project.
-
-    This does NOT run anything and shows NO demo data. The engine that
-    actually researches the configured project — a real Claude Code agent on
-    the GPUs (RealAgent) — is not built yet, so the dashboard stays honestly
-    empty until a real agent produces real experiments.
-    """
+    """Save the project, validate model access, and start its scoping flow."""
     from fastapi.responses import JSONResponse
     from . import auth as _auth
     cfg = await request.json()
@@ -2640,13 +2763,16 @@ async def post_onboarding(request: Request):
     if not research_provider:
         return JSONResponse({"detail": "unknown research-agent model"},
                             status_code=400)
-    token_fields = {"claude": "claude_token", "openai": "openai_token",
-                    "gemini": "gemini_token"}
-    required_field = token_fields[research_provider]
-    token = (cfg.get(required_field) or "").strip()
-    if token and not os.environ.get("ARUI_CLAUDE_BIN"):
+    from .provider_config import TOKEN_FIELDS, provider_ready, requirement_error
+    required_field = TOKEN_FIELDS.get(research_provider)
+    token = str(cfg.get(required_field) or "").strip()
+    ready = provider_ready(research_model, cfg)
+    if research_provider in {"opencode", "flint"} and not ready:
+        return JSONResponse({"detail": requirement_error(research_model, cfg, agent=True)},
+                            status_code=400)
+    if (token or ready) and not os.environ.get("ARUI_CLAUDE_BIN"):
         from . import token_check
-        results = token_check.check_all(cfg)
+        results = await asyncio.to_thread(token_check.check_all, cfg)
         if (results.get(research_provider) or {}).get("ok") is False:
             return JSONResponse(
                 {"status": "invalid_tokens", "failed": [research_provider],
@@ -2658,9 +2784,6 @@ async def post_onboarding(request: Request):
         if "gemini" in optional_bad:
             cfg["council_enable_gemini"] = False
         cfg["token_validation_warnings"] = optional_bad
-        advisor = results.get("advisor") or {}
-        if advisor.get("provider"):
-            cfg["scoping_model"] = advisor["provider"]
         try:
             from .agent_cli import command
             command(research_model, cfg.get("research_agent_effort", ""),
@@ -2702,7 +2825,7 @@ async def post_onboarding(request: Request):
     # A credential for the selected coding-agent provider (or test hook)
     # launches the autonomous harness.
     token = (cfg.get(required_field) or "").strip()
-    if token or os.environ.get("ARUI_CLAUDE_BIN"):
+    if ready or token or os.environ.get("ARUI_CLAUDE_BIN"):
         # Scoping gate (Phase 0): instead of spawning the research agent
         # immediately, run a literature review + direction-confirmation pass
         # first. start_real() is deferred until scoping.confirm()/skip().
@@ -2963,11 +3086,12 @@ def files_read(path: str):
 
 @router.put("/files/write")
 async def files_write(request: Request):
-    """Write a text file from the editor. Body: {path, content}."""
+    """Write editor text; create_only atomically refuses existing paths."""
+    from fastapi.responses import JSONResponse
     body = await _safe_json(request)
     path = (body.get("path") or "").strip()
     content = body.get("content")
-    if not path or content is None:
+    if not path or not isinstance(content, str):
         return {"ok": False, "error": "path and content are required"}
     ok, p, err = _resolve_fs_path(path)
     if not ok:
@@ -2979,9 +3103,14 @@ async def files_write(request: Request):
         if d and not os.path.isdir(d):
             return {"ok": False, "error": "parent directory does not exist",
                     "path": p}
-        with open(p, "w", encoding="utf-8") as f:
+        with open(p, "x" if body.get("create_only") is True else "w",
+                  encoding="utf-8") as f:
             f.write(content)
         return {"ok": True, "path": p, "bytes": len(content.encode("utf-8"))}
+    except FileExistsError:
+        return JSONResponse(status_code=409, content={
+            "ok": False, "error": "file already exists; open it to edit",
+            "path": p})
     except PermissionError:
         return {"ok": False, "error": "permission denied", "path": path}
     except Exception as e:                                      # noqa: BLE001
@@ -3333,7 +3462,8 @@ def analysis_panels(db: Session = Depends(get_session)):
     """Persisted panel set for the Analysis tab. Falls back to a default
     set that adapts to which metric keys this project actually logs."""
     row = db.query(Setting).filter(Setting.key == "analysis_panels").first()
-    if row and isinstance(row.value, dict) and row.value.get("panels"):
+    if (row and isinstance(row.value, dict)
+            and isinstance(row.value.get("panels"), list)):
         return row.value
 
     # Project-aware default. Always emit the spec's standard 6 slots, so the
@@ -3373,13 +3503,22 @@ def analysis_panels(db: Session = Depends(get_session)):
 
 @router.put("/analysis/panels")
 async def analysis_panels_put(request: Request):
-    """Save the panel set."""
-    body = await request.json()
-    panels = body.get("panels") or []
+    """Save a panel list (including []), or reset explicitly to defaults."""
+    from fastapi.responses import JSONResponse
+    body = await _safe_json(request)
+    reset = body.get("reset") is True
+    panels = body.get("panels")
+    if not reset and (not isinstance(panels, list)
+                      or any(not isinstance(p, dict) for p in panels)):
+        return JSONResponse(status_code=400, content={
+            "status": "error", "detail": "panels must be a list of objects"})
     db = SessionLocal()
     try:
         row = db.query(Setting).filter(Setting.key == "analysis_panels").first()
-        if row:
+        if reset:
+            if row:
+                db.delete(row)
+        elif row:
             row.value = {"panels": panels}
         else:
             db.add(Setting(key="analysis_panels", value={"panels": panels}))
@@ -4483,9 +4622,22 @@ def paper_author_restart():
         pid = p.id if p else ""
     finally:
         db.close()
-    if author_agent.is_running():
-        author_agent.stop()
-    return author_agent.start(proposal_id=pid)
+    from . import agent_watcher, research_processes
+    with agent_watcher._session_restart_lock:
+        if notify.research_paused() or notify.research_halted()[0]:
+            return {"ok": False, "status": "error", "detail":
+                    "Research is paused or halted. Resume before restarting the author."}
+        try:
+            if research_processes.active_session_workloads("author"):
+                return {"ok": False, "status": "error", "detail":
+                        "The author has active experiments. Let them finish before restarting."}
+        except Exception:
+            return {"ok": False, "status": "error", "detail":
+                    "Could not verify active author experiments. Retry shortly."}
+        if author_agent.is_running():
+            author_agent.stop()
+        result = author_agent.start(proposal_id=pid)
+        return {**result, "ok": result.get("status") in {"started", "already_running"}}
 
 
 @router.get("/paper/author/terminal")
@@ -4507,69 +4659,113 @@ async def paper_author_send(request: Request):
     return {"ok": bool(ok), "sent": text[:120]}
 
 
-def _revert_paper_to_research(reason: str) -> dict:
-    """Canonical synchronous paper->research transition. Idempotent."""
-    from . import paper as _paper
-    from . import author_agent
-    if _paper.project_mode() != "paper":
-        # Reconcile a transition that committed project_mode before the
-        # process was interrupted. Idempotence must repair stale ownership,
-        # not merely report it.
-        author_agent.stop()
-        from . import lifecycle as _lifecycle
-        _lifecycle.set_phase(
-            _lifecycle.PHASE_RUNNING,
-            "autonomous research owns the loop")
-        return {"status": "already_in_research"}
-    snap = _paper.take_snapshot()
-    db = SessionLocal()
-    try:
-        db.add(ModeHistory(
-            id="mh-" + os.urandom(4).hex(),
-            from_mode="paper", to_mode="research",
-            reason_md=reason, snapshot_json=snap))
-        # Pause running paper_runs
-        for r in db.query(Run).filter(
-                Run.context == "paper",
-                Run.status.in_(("running", "queued"))).all():
-            if r.status == "running":
-                r.status = "paused"
-        meta = db.query(PaperMeta).first()
-        if meta:
-            meta.phase = "archived"
+def _paper_resume_config() -> dict:
+    """Use the existing research workspace; a display name is not its path."""
+    with SessionLocal() as db:
+        project = db.query(Project).first()
+        row = db.query(Setting).filter(Setting.key == "onboarding").first()
+        cfg = dict(row.value) if row and isinstance(row.value, dict) else {}
+        if not project:
+            raise ValueError("No research project is configured.")
+        if project.repo_path:
+            workspace = Path(project.repo_path).expanduser()
+            if not workspace.is_absolute():
+                workspace = WORKSPACE_DIR / workspace
+        else:
+            name = cfg.get("repo_name") or project.name
+            workspace = WORKSPACE_DIR / str(name or "")
+        workspace = workspace.resolve()
+        if not workspace.is_dir() or workspace == WORKSPACE_DIR.resolve():
+            raise ValueError("The existing research workspace is missing. Restore it before returning to research.")
+        # start_real(resume=True) uses this stable path even after a rename.
+        project.repo_path = str(workspace)
         db.commit()
-    finally:
-        db.close()
-    author_agent.stop()
-    _paper.set_project_mode("research")
+        cfg.setdefault("repo_name", project.name)
+        cfg.setdefault("purpose", project.purpose or "")
+        cfg.setdefault("metric", project.validation_metric or "")
+        return cfg
+
+
+def _revert_paper_to_research(reason: str) -> dict:
+    """Restore research ownership and report separately whether it resumed."""
+    from . import paper as _paper, author_agent, tmux_safe, research_processes
     from . import lifecycle as _lifecycle
-    _lifecycle.set_phase(
-        _lifecycle.PHASE_RUNNING,
-        "paper blocker returned ownership to autonomous research")
-    # Resume the autonomous research loop we paused on /paper/enter.
-    _set_setting("pi_agent_enabled", True)
+    from .safe_errors import describe
+    previous_mode = _paper.project_mode()
     try:
-        from . import orchestrator
-        from .config import ROOT
-        from pathlib import Path
-        # Pick the project's existing workspace dir if one's known.
-        db2 = SessionLocal()
+        if research_processes.active_session_workloads("author"):
+            return {"ok": False, "status": "blocked", "mode": previous_mode,
+                    "research_restarted": False,
+                    "detail": "The author has active experiments in its session. Let them finish or halt research before switching modes."}
+    except Exception:
+        return {"ok": False, "status": "error", "mode": previous_mode,
+                "research_restarted": False,
+                "detail": "Active author experiments could not be checked. Retry the mode change."}
+    paused = notify.research_paused() or notify.research_halted()[0]
+    agent_alive = tmux_safe.pane_alive("agent")
+    cfg = {}
+    if not paused and not agent_alive:
         try:
-            proj = db2.query(Project).first()
-            repo = (proj.name if proj else "project")
-        finally:
-            db2.close()
-        # Restart the research orchestrator/agent in 'agent' tmux. If a
-        # session is somehow still alive (shouldn't be), this is a no-op
-        # because orchestrator.start handles that.
-        workspace = WORKSPACE_DIR / repo
-        if workspace.exists():
-            orchestrator.start(str(workspace), name="resume", n_slots=10)
-    except Exception as e:                              # noqa: BLE001
-        print(f"[paper/revert] could not restart research agent: {e}",
-              flush=True)
-    bus.publish("paper", "mode_reverted", {"reason": reason})
-    return {"status": "reverted"}
+            cfg = _paper_resume_config()
+        except ValueError as exc:
+            return {"ok": False, "status": "error", "mode": previous_mode,
+                    "research_restarted": False, "detail": str(exc)}
+        except Exception:
+            return {"ok": False, "status": "error", "mode": previous_mode,
+                    "research_restarted": False,
+                    "detail": "Research configuration could not be loaded. Retry before switching modes."}
+    try:
+        author_agent.stop()
+        if tmux_safe.pane_alive("author"):
+            raise RuntimeError("author session remains active")
+    except Exception:
+        return {"ok": False, "status": "error", "mode": previous_mode,
+                "research_restarted": False,
+                "detail": "The author agent could not be stopped. Research mode has not changed; retry the transition."}
+    continuing = 0
+    if previous_mode == "paper":
+        snap = _paper.take_snapshot()
+        with SessionLocal() as db:
+            db.add(ModeHistory(id="mh-" + os.urandom(4).hex(),
+                               from_mode="paper", to_mode="research",
+                               reason_md=reason, snapshot_json=snap))
+            # Existing independent experiments finish naturally. The paper
+            # runner's mode gate stops further launches; marking live workers
+            # paused here would falsely claim their processes were suspended.
+            continuing = db.query(Run).filter(
+                Run.context == "paper", Run.status == "running").count()
+            meta = db.query(PaperMeta).first()
+            if meta:
+                meta.phase = "archived"
+            db.commit()
+    _paper.set_project_mode("research")
+    _lifecycle.set_phase(_lifecycle.PHASE_RUNNING,
+                         "autonomous research owns the loop" if previous_mode != "paper"
+                         else "paper blocker returned ownership to autonomous research")
+    _paper._set_onboarding_key("pi_agent_enabled", True)
+    result = {"ok": True,
+              "status": "reverted" if previous_mode == "paper" else "already_in_research",
+              "mode": "research", "research_restarted": False, "paused": bool(paused),
+              "paper_runs_continuing": continuing}
+    if paused:
+        result["detail"] = "Research mode restored. Research remains paused or halted."
+    elif agent_alive:
+        result["detail"] = "Research mode restored; the research agent is already running."
+    else:
+        try:
+            # The bundled example orchestrator is a FakeAgent loop, and cannot
+            # run from the blocker watcher thread's absent asyncio loop. Resume
+            # the real configured agent with its existing workspace/checkpoints.
+            started = realrun.start_real(cfg, resume=True)
+            if started is None:
+                raise RuntimeError("research agent did not start")
+            result["research_restarted"] = True
+        except Exception as exc:
+            result.update(ok=False, status="partial",
+                          detail="Research mode was restored, but the research agent could not restart. Check its provider settings, then retry Return to research or Restart agent.")
+            print(f"[paper/revert] research restart failed: {describe(exc)}", flush=True)
+    bus.publish("paper", "mode_reverted", {"reason": reason, **result})
+    return result
 
 
 def _delayed_blocker_revert(reason: str) -> None:
@@ -4586,7 +4782,7 @@ def _delayed_blocker_revert(reason: str) -> None:
 @router.post("/paper/revert")
 async def paper_revert(request: Request):
     """Flip back to research mode. Body: {reason}. Kills Author Agent,
-    pauses paper_runs, captures Paper Snapshot."""
+    captures a Paper Snapshot; in-flight independent runs finish naturally."""
     body = await _safe_json(request)
     reason = (body.get("reason") or "").strip()
     if not reason or len(reason) < 5:
@@ -4781,7 +4977,7 @@ async def paper_section_save(request: Request):
     if not folder:
         return {"ok": False, "detail": "no paper folder"}
     target = (folder / path).resolve()
-    if not str(target).startswith(str(folder.resolve())):
+    if not target.is_relative_to(folder.resolve()):
         return {"ok": False, "detail": "path traversal"}
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content)
@@ -4822,8 +5018,11 @@ async def paper_versions_pin(request: Request):
         ("v-" + dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M"))
     snap = _paper.take_snapshot()
     folder = _paper.paper_folder()
-    sha = (_paper._run_git(folder, "rev-parse", "HEAD") if folder
-            and (folder / ".git").exists() else "")
+    sha = _paper._run_git(folder, "rev-parse", "--verify", "HEAD") if folder else ""
+    if not re.fullmatch(r"[0-9a-f]{40,64}", sha.strip()):
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"ok": False, "detail":
+            "No committed paper version is available. Commit the paper sources before pinning."}, status_code=400)
     vid = "pv-" + os.urandom(4).hex()
     db = SessionLocal()
     try:
@@ -4840,6 +5039,15 @@ async def paper_versions_pin(request: Request):
 async def paper_reviewer_sim_run():
     """Council role-plays venue reviewers on the current paper. Returns
     immediately; results land in paper_review_sim rows asynchronously."""
+    from . import council as _c, paper as _paper
+    from fastapi.responses import JSONResponse
+    if not _c._available_reviewers(_c._settings()):
+        return JSONResponse({"ok": False, "detail":
+            "Configure and enable a council reviewer before running a reviewer simulation."}, status_code=400)
+    folder = _paper.paper_folder()
+    sources = ([folder / "main.tex"] + list(folder.glob("sections/*.tex"))) if folder else []
+    if not any(path.is_file() and path.read_text(errors="ignore").strip() for path in sources):
+        return JSONResponse({"ok": False, "detail": "Write the paper sources before running a reviewer simulation."}, status_code=400)
     threading.Thread(target=_run_reviewer_sim, daemon=True,
                      name="reviewer-sim").start()
     return {"status": "started"}
@@ -4959,6 +5167,25 @@ def paper_citation_approve(key: str):
         db.commit()
     finally:
         db.close()
+    return {"ok": True}
+
+
+@router.put("/paper/citations/{key}/update")
+async def paper_citation_update(key: str, request: Request):
+    from fastapi.responses import JSONResponse
+    body = await _safe_json(request)
+    allowed = {"same_md", "diff_md"}
+    if (not isinstance(body, dict) or not body or set(body) - allowed
+            or any(not isinstance(value, str) for value in body.values())):
+        return JSONResponse({"ok": False, "detail":
+            "Provide same_md and/or diff_md as text."}, status_code=400)
+    with SessionLocal() as db:
+        row = db.query(PaperCitation).filter(PaperCitation.key == key).first()
+        if not row:
+            return JSONResponse({"ok": False, "detail": "Citation not found"}, status_code=404)
+        for field, value in body.items():
+            setattr(row, field, value)
+        db.commit()
     return {"ok": True}
 
 
@@ -5100,29 +5327,32 @@ async def paper_submit_bundle(request: Request):
         return {"ok": False, "detail": "no PDF compiled yet"}
     sub_dir = folder / "submission"
     sub_dir.mkdir(exist_ok=True)
-    ts = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S")
+    ts = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
     zip_path = sub_dir / f"submission-{ts}.zip"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.write(pdf, arcname="main.pdf")
-        for p in [folder / "main.tex"]:
-            if p.exists():
-                zf.write(p, arcname=p.name)
-        for p in folder.glob("sections/*.tex"):
-            zf.write(p, arcname=f"sections/{p.name}")
-        for p in folder.glob("tikz/*"):
-            zf.write(p, arcname=f"tikz/{p.name}")
-        for n in ("refs.bib",):
-            if (folder / n).exists():
-                zf.write(folder / n, arcname=n)
+        allowed = {".tex", ".bib", ".bst", ".cls", ".sty", ".tikz", ".csv",
+                   ".png", ".jpg", ".jpeg", ".pdf", ".eps", ".svg", ".webp",
+                   ".txt", ".md"}
+        excluded = {".git", "build", "submission", ".venv", "node_modules", "__pycache__"}
+        for p in sorted(folder.rglob("*")):
+            relative = p.relative_to(folder)
+            if (p.is_symlink() or not p.is_file() or any(part in excluded or part.startswith(".") for part in relative.parts)
+                    or p.suffix.lower() not in allowed or relative.as_posix() == "main.pdf"
+                    or not p.resolve().is_relative_to(folder.resolve())):
+                continue
+            zf.write(p, arcname=relative.as_posix())
+    frozen_pdf = sub_dir / f"submission-{ts}.pdf"
+    shutil.copyfile(pdf, frozen_pdf)
     # Auto-pin
     db = SessionLocal()
     try:
-        sha = _paper._run_git(folder, "rev-parse", "HEAD") if (folder / ".git").exists() else ""
+        sha = _paper._run_git(folder, "rev-parse", "--verify", "HEAD")
         vid = "pv-" + os.urandom(4).hex()
         db.add(PaperVersion(
             id=vid, label=f"v-submitted-{ts}",
             latex_commit_sha=sha, snapshot_json=_paper.take_snapshot(),
-            frozen_pdf_path=str(pdf.resolve())))
+            frozen_pdf_path=str(frozen_pdf.resolve())))
         db.commit()
     finally:
         db.close()

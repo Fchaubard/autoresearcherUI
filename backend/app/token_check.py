@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import os
+import subprocess
 import smtplib
 import socket
 import ssl
@@ -37,6 +39,8 @@ DEFAULT_MODELS = {
     "claude": "claude-opus-5",
     "openai": "gpt-6-astra",
     "gemini": "gemini-3.8-flash",
+    "opencode": "opencode/nemotron-3-ultra-free",
+    "flint": "flint/local",
 }
 
 
@@ -150,9 +154,8 @@ def check_gemini(token: str, model: str | None = None) -> dict:
         return _skip()
     t0 = time.time()
     try:
-        url = ("https://generativelanguage.googleapis.com/v1beta/models"
-               f"?key={token.strip()}")
-        with urllib.request.urlopen(urllib.request.Request(url),
+        url = "https://generativelanguage.googleapis.com/v1beta/models"
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"x-goog-api-key": token.strip()}),
                                     timeout=_TIMEOUT) as r:
             if r.status != 200:
                 return _result(False, f"HTTP {r.status}", t0, model_ok=None)
@@ -170,6 +173,67 @@ def check_gemini(token: str, model: str | None = None) -> dict:
         return _http_err("gemini", e, t0)
     except (urllib.error.URLError, socket.timeout, TimeoutError) as e:
         return _result(False, f"network error: {e}", t0, model_ok=None)
+
+
+def check_opencode(token: str, model: str | None = None) -> dict:
+    """Check the installed OpenCode catalog, without claiming quota works."""
+    from .provider_config import opencode_binary
+    t0 = time.time()
+    binary = opencode_binary()
+    if not binary:
+        return _result(False, "Install OpenCode 2 CLI or set ARUI_OPENCODE_BIN", t0, model_ok=False)
+    try:
+        env = dict(os.environ)
+        if token:
+            env["OPENCODE_API_KEY"] = token.strip()
+        result = subprocess.run([binary, "models", "--standalone"],
+                                capture_output=True, text=True, timeout=_TIMEOUT, env=env)
+        if result.returncode:
+            return _result(False, "OpenCode model listing failed; OpenCode 2 is required", t0, model_ok=False)
+        ids = result.stdout.splitlines()
+        if model and model not in ids:
+            return _result(False, f"OpenCode does not list '{model}' for this connection", t0, model_ok=False)
+        return _result(True, "OpenCode model listed; inference and free quota are checked when used", t0, model_ok=True)
+    except (OSError, subprocess.TimeoutExpired):
+        return _result(False, "OpenCode model listing failed or timed out", t0, model_ok=None)
+
+
+def check_flint(cfg: dict) -> dict:
+    """Check the served model and tool-call protocol needed by coding roles."""
+    from .provider_config import flint_config
+    t0 = time.time()
+    try:
+        url, model, token = flint_config(cfg)
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        with urllib.request.urlopen(urllib.request.Request(url + "/models", headers=headers),
+                                    timeout=_TIMEOUT) as resp:
+            ids = [item.get("id") for item in json.load(resp).get("data", [])]
+        if model not in ids:
+            return _result(False, f"Flint server does not list served model '{model}'", t0, model_ok=False)
+        # A listed model can still be served without the tool parser. Verify
+        # the protocol; this sends only a synthetic ping, no research data.
+        body = {"model": model, "max_tokens": 1024,
+                "messages": [{"role": "user", "content": "Call arui_ping with ok=true."}],
+                "tools": [{"type": "function", "function": {"name": "arui_ping",
+                           "description": "Connectivity check", "parameters": {
+                               "type": "object", "properties": {"ok": {"type": "boolean"}},
+                               "required": ["ok"]}}}],
+                "tool_choice": {"type": "function", "function": {"name": "arui_ping"}}}
+        remaining = max(0.2, _TIMEOUT - (time.time() - t0))
+        req = urllib.request.Request(url + "/chat/completions", data=json.dumps(body).encode(),
+                                     headers={**headers, "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=remaining) as resp:
+            data = json.load(resp)
+        calls = data["choices"][0]["message"].get("tool_calls") or []
+        if not any(c.get("function", {}).get("name") == "arui_ping" for c in calls):
+            return _result(False, "Flint model is listed but tool calls failed; enable its tool parser", t0, model_ok=False)
+        return _result(True, "Flint model and tool-call protocol verified", t0, model_ok=True)
+    except ValueError:
+        return _result(False, "Set a valid Flint server URL and served model", t0, model_ok=False)
+    except urllib.error.HTTPError as exc:
+        return _result(False, f"Flint server returned HTTP {exc.code}; check model, token and tool parser", t0, model_ok=False)
+    except (OSError, KeyError, IndexError, TypeError):
+        return _result(False, "Flint server unavailable or response incompatible", t0, model_ok=False)
 
 
 def _generic_model_result(model, ids, t0):
@@ -266,6 +330,11 @@ def resolve_advisor(cfg: dict) -> dict:
       (claude, gemini, openai) and warn.
     Returns ``{"provider", "model", "warning"}``.
     """
+    selected = str(cfg.get("scoping_model") or "").strip()
+    if provider_for(selected) in {"opencode", "flint"}:
+        from .provider_config import requirement_error
+        return {"provider": provider_for(selected), "model": selected,
+                "warning": requirement_error(selected, cfg)}
     def has(k):
         return bool((cfg.get(k) or "").strip())
     keyed = {"claude": has("claude_token"),
@@ -317,6 +386,15 @@ def check_all(cfg: dict) -> dict:
         "gmail":  (check_gmail,
                    ((cfg.get("email") or ""), cfg.get("gmail_app_pw") or "")),
     }
+    selected_providers = {provider_for(str(cfg.get(field) or "")) for field in (
+        "research_agent_model", "author_agent_model", "scoping_model",
+        "council_gemini_model", "council_openai_model", "council_claude_model",
+        "pi_agent_model")}
+    if "opencode" in selected_providers or cfg.get("opencode_token"):
+        jobs["opencode"] = (check_opencode, (cfg.get("opencode_token") or "",
+                                               _model_for_provider(cfg, "opencode")))
+    if "flint" in selected_providers or cfg.get("flint_base_url"):
+        jobs["flint"] = (check_flint, (cfg,))
     out: dict[str, dict] = {}
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:

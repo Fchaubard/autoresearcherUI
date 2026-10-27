@@ -14,6 +14,12 @@ class AgentCLIUnavailable(RuntimeError):
 
 
 def _binary(provider: str) -> str:
+    if provider in {"opencode", "flint"}:
+        from .provider_config import opencode_binary
+        binary = opencode_binary()
+        if not binary:
+            raise AgentCLIUnavailable("OpenCode 2 CLI is required for OpenCode and local Flint agents")
+        return shlex.quote(binary)
     name = {"claude": "claude", "openai": "codex", "gemini": "gemini"}[provider]
     override = os.environ.get(f"ARUI_{name.upper()}_BIN", "").strip()
     candidates = [Path(override)] if override else []
@@ -64,6 +70,13 @@ def command(model: str, effort: str = "", prompt: str = "") -> tuple[str, str]:
         raise AgentCLIUnavailable(f"unknown model provider for {model!r}")
     binary = _binary(provider)
     qmodel = shlex.quote(model)
+    if provider in {"opencode", "flint"}:
+        # V2's full TUI no longer accepts --model; mini does and keeps
+        # scrollback available to the dashboard's terminal and supervisor.
+        cmd = f"{binary} mini --standalone --model {qmodel} --agent arui-research"
+        if prompt:
+            cmd += f" --prompt {shlex.quote(prompt)}"
+        return provider, cmd
     if provider == "claude":
         cmd = f"{binary} --dangerously-skip-permissions --model {qmodel}"
         if effort in {"low", "medium", "high", "xhigh", "max"}:

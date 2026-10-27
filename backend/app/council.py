@@ -35,6 +35,7 @@ from .config import DATA_DIR, ROOT, WORKSPACE_DIR
 from .db import SessionLocal
 from .models import ChatMessage, Event, Gpu, Idea, Project, Run, Setting
 from .model_registry import efforts_for, provider_for
+from .provider_config import provider_ready
 
 # ── env / keys ────────────────────────────────────────────────────────────
 _KEYS_PATH = ROOT / ".deploy" / "keys.env"
@@ -111,28 +112,19 @@ def _settings() -> dict:
 # ── reviewer availability ────────────────────────────────────────────────
 def _available_reviewers(cfg: dict) -> list[str]:
     rs = []
-    env_for = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY",
-               "claude": "ANTHROPIC_API_KEY"}
-    first_provider = provider_for(cfg.get("council_gemini_model") or
-                                  DEFAULTS["council_gemini_model"])
-    second_provider = provider_for(cfg.get("council_openai_model") or
-                                   DEFAULTS["council_openai_model"])
-    if (cfg.get("council_enable_gemini", True) and first_provider
-            and os.environ.get(env_for[first_provider])):
+    first_model = cfg.get("council_gemini_model") or DEFAULTS["council_gemini_model"]
+    second_model = cfg.get("council_openai_model") or DEFAULTS["council_openai_model"]
+    if cfg.get("council_enable_gemini", True) and provider_ready(first_model):
         rs.append("gemini")
-    if (cfg.get("council_enable_openai", True) and second_provider
-            and os.environ.get(env_for[second_provider])):
+    if cfg.get("council_enable_openai", True) and provider_ready(second_model):
         rs.append("openai")
     return rs
 
 
 def _claude_available(cfg: dict) -> bool:
-    provider = provider_for(cfg.get("council_claude_model") or
-                            DEFAULTS["council_claude_model"])
-    env_for = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY",
-               "claude": "ANTHROPIC_API_KEY"}
+    model = cfg.get("council_claude_model") or DEFAULTS["council_claude_model"]
     return bool(cfg.get("council_enable_claude_tiebreaker", True)
-                and provider and os.environ.get(env_for[provider]))
+                and provider_ready(model))
 
 
 def is_enabled() -> bool:
@@ -895,13 +887,62 @@ def _call_model(model: str, effort: str, system: str, user: str) -> str:
         return _call_openai_api(model, effort, system, user)
     if provider == "claude":
         return _call_claude_api(model, system, user)
+    if provider in {"opencode", "flint"}:
+        return _call_additional_model(model, system, user)
     raise RuntimeError(f"unknown model provider for {model!r}")
+
+
+def _call_additional_model(model: str, system: str, user: str) -> str:
+    if provider_for(model) == "opencode":
+        from .opencode_runtime import complete
+        return complete(model, system, user)
+    from .provider_config import flint_config
+    url, served_model, token = flint_config()
+    body = {"model": served_model,
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+            "max_tokens": 32768}
+    # Flint servers differ in structured-output support. Council/PI already
+    # parse and validate their response; do not force unsupported JSON mode.
+    data = _post_json_retry(url + "/chat/completions", body,
+                           {"Authorization": f"Bearer {token}"} if token else {})
+    text = data["choices"][0]["message"].get("content")
+    if not isinstance(text, str) or not text.strip():
+        raise RuntimeError("Flint returned no assistant text")
+    return text
+
+
+
+def _call_text_model(model: str, system: str, user: str) -> str:
+    """Free-text scoping conversations must honor each slot's real provider."""
+    provider = provider_for(model)
+    if provider in {"opencode", "flint"}:
+        return _call_additional_model(model, system, user)
+    if provider == "claude":
+        return _call_claude_api(model, system, user)
+    if provider == "gemini":
+        key = os.environ["GEMINI_API_KEY"]
+        data = _post_json_retry(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            {"system_instruction": {"parts": [{"text": system}]},
+             "contents": [{"role": "user", "parts": [{"text": user}]}]},
+            {"x-goog-api-key": key})
+        return "".join(part.get("text", "") for part in data["candidates"][0]["content"]["parts"]
+                       if not part.get("thought"))
+    if provider == "openai":
+        data = _post_json_retry(
+            "https://api.openai.com/v1/chat/completions",
+            {"model": model, "messages": [{"role": "system", "content": system},
+                                            {"role": "user", "content": user}]},
+            {"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"})
+        return data["choices"][0]["message"]["content"]
+    raise RuntimeError(f"Unknown provider for {model}")
 
 
 def _call_gemini_api(model: str, effort: str, system: str, user: str) -> str:
     key = os.environ["GEMINI_API_KEY"]
     url = ("https://generativelanguage.googleapis.com/v1beta/"
-           f"models/{model}:generateContent?key={key}")
+           f"models/{model}:generateContent")
     body = {
         "system_instruction": {"parts": [{"text": system}]},
         "contents": [{"role": "user", "parts": [{"text": user}]}],
@@ -910,7 +951,7 @@ def _call_gemini_api(model: str, effort: str, system: str, user: str) -> str:
     }
     if effort and efforts_for(model):
         body["generationConfig"]["thinkingConfig"] = {"thinkingLevel": effort}
-    data = _post_json_retry(url, body, {})
+    data = _post_json_retry(url, body, {"x-goog-api-key": key})
     return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
@@ -3533,6 +3574,8 @@ def _scoping_order(cfg: dict) -> list[str]:
     Only includes providers whose keys are present."""
     selected = (cfg.get("scoping_model") or "gemini-3.8-flash").strip().lower()
     pref = provider_for(selected) or selected
+    if pref in ("opencode", "flint"):
+        pref = "gemini"  # first logical council slot carries these providers
     if pref not in ("gemini", "openai", "claude"):
         pref = "gemini"
     avail = list(_available_reviewers(cfg))        # gemini / openai (with keys)
@@ -3548,9 +3591,17 @@ def _with_scoping_model(cfg: dict) -> dict:
     provider = provider_for(model)
     field = {"gemini": "council_gemini_model",
              "openai": "council_openai_model",
-             "claude": "council_claude_model"}.get(provider)
+             "claude": "council_claude_model",
+             "opencode": "council_gemini_model",
+             "flint": "council_gemini_model"}.get(provider)
     if field:
         out[field] = model
+        # Scoping is independent of whether post-run council reviews are
+        # enabled. Selecting an advisor must not silently skip that model.
+        toggle = {"council_gemini_model": "council_enable_gemini",
+                  "council_openai_model": "council_enable_openai",
+                  "council_claude_model": "council_enable_claude_tiebreaker"}[field]
+        out[toggle] = True
     return out
 
 
@@ -3649,45 +3700,15 @@ def scope_chat(history: list[dict], synthesis: dict, papers: list[dict],
                         for m in history)
     user = ctx + "\n\n# Conversation so far\n" + convo + "\n\nASSISTANT:"
 
-    # FREE-TEXT (no JSON forcing) per-provider callers, tried in the user's
-    # chosen scoping-model order.
-    def _claude_text():
-        key = os.environ["ANTHROPIC_API_KEY"]
-        model = cfg.get("council_claude_model") or DEFAULTS["council_claude_model"]
-        data = _post_json_retry(
-            "https://api.anthropic.com/v1/messages",
-            {"model": model, "max_tokens": 1200, "system": sys,
-             "messages": [{"role": "user", "content": user}]},
-            {"x-api-key": key, "anthropic-version": "2023-06-01"})
-        return data["content"][0]["text"]
-
-    def _gemini_text():
-        key = os.environ["GEMINI_API_KEY"]
-        model = cfg.get("council_gemini_model") or DEFAULTS["council_gemini_model"]
-        data = _post_json_retry(
-            ("https://generativelanguage.googleapis.com/v1beta/"
-             f"models/{model}:generateContent?key={key}"),
-            {"system_instruction": {"parts": [{"text": sys}]},
-             "contents": [{"role": "user", "parts": [{"text": user}]}],
-             "generationConfig": {"temperature": 0.7}}, {})
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-
-    def _openai_text():
-        key = os.environ["OPENAI_API_KEY"]
-        model = cfg.get("council_openai_model") or DEFAULTS["council_openai_model"]
-        data = _post_json_retry(
-            "https://api.openai.com/v1/chat/completions",
-            {"model": model, "messages": [
-                {"role": "system", "content": sys},
-                {"role": "user", "content": user}]},
-            {"Authorization": f"Bearer {key}"})
-        return data["choices"][0]["message"]["content"]
-
-    _fns = {"claude": _claude_text, "gemini": _gemini_text, "openai": _openai_text}
+    # Slots are logical reviewers: dispatch by their selected model, including
+    # when the first slot contains OpenCode or the local Flint server.
     for reviewer in _scoping_order(cfg):
+        model = cfg.get(f"council_{reviewer}_model") or DEFAULTS[f"council_{reviewer}_model"]
         try:
-            return _fns[reviewer]()
-        except Exception as e:                              # noqa: BLE001
-            print(f"[scope] {reviewer} chat failed: {e}", flush=True)
+            return _call_text_model(model, sys, user)
+        except Exception as exc:
+            from .safe_errors import describe
+            print(f"[scope] {reviewer} chat failed: {describe(exc)}", flush=True)
+
     return ("(The advisor model is unavailable right now — check that an "
-            "Anthropic, Gemini, or OpenAI key is configured.)")
+            "provider credentials or local server are configured.)")

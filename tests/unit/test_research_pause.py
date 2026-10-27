@@ -244,6 +244,19 @@ def test_orchestrator_aborts_if_stopped_while_paused(arui_env, monkeypatch,
     assert launched == []
 
 
+def test_orchestrator_aborts_if_stopped_while_hard_halted(arui_env, monkeypatch, tmp_path):
+    import asyncio
+    from backend.app import orchestrator, notify
+    project = tmp_path / "halted-project"
+    project.mkdir()
+    orch = orchestrator.Orchestrator(str(project), n_slots=1)
+    orch.running = False
+    monkeypatch.setattr(notify, "research_paused", lambda: False)
+    monkeypatch.setattr(notify, "research_halted", lambda: (True, "operator halt"))
+    # No DB idea exists: getting beyond the halt gate would fail this test.
+    asyncio.run(orch._execute("must-not-launch", 0))
+
+
 # ─────────────────────────── PI agent gate ────────────────────────────
 
 

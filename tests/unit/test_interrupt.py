@@ -14,7 +14,7 @@ def _mk_run(db, rid, status, session=None):
 
 
 def test_kill_killable_runs_kills_running_discards_queued(arui_env, monkeypatch):
-    from backend.app import interrupt, tmux_safe
+    from backend.app import interrupt, tmux_safe, research_processes
     from backend.app.db import SessionLocal
     from backend.app.models import Run
     db = SessionLocal()
@@ -24,6 +24,13 @@ def test_kill_killable_runs_kills_running_discards_queued(arui_env, monkeypatch)
     killed = []
     monkeypatch.setattr(tmux_safe, "kill_session",
                         lambda name, **k: (killed.append(name) or (True, "ok")))
+    monkeypatch.setattr(research_processes, "stop_project", lambda root, registered: {
+        "killed": ["run-a"], "workers_stopped": ["run-a"],
+        "queues_stopped": [], "remaining": [], "errors": []})
+    from backend.app.models import Setting
+    db = SessionLocal()
+    db.add(Setting(key="onboarding", value={"repo_name": "proj"}))
+    db.commit(); db.close()
     out = interrupt.kill_killable_runs()
     assert out["killed"] == ["run-a"]
     assert out["discarded"] == 1

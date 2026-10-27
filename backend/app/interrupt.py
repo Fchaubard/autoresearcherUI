@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import datetime as dt
 
+from .safe_errors import describe as _safe_error
+
 INTERRUPT_DIRECTIVE_ID = "d-interrupt-focus"
 
 
@@ -105,28 +107,77 @@ def set_interrupt_focus_directive(purpose: str, seeds: str,
 
 
 def kill_killable_runs() -> dict:
-    """Kill every RUNNING run's tmux session (never a protected core session)
-    and mark QUEUED work discarded. Returns {killed:[...], discarded:int}."""
+    """Stop scoped OS workloads even if Run tracking is empty or unavailable.
+
+    Queue launchers are stopped before workers. Metadata only changes after
+    verification; failed stops remain running and are returned to the caller.
+    """
     from .db import SessionLocal
     from .models import Run
-    from . import tmux_safe
-    killed, discarded = [], 0
-    db = SessionLocal()
+    from . import tmux_safe, research_control, research_processes, orchestrator
+    errors: list[str] = []
+    cfg = {}
     try:
-        for r in db.query(Run).filter(Run.status == "running").all():
-            sess = r.tmux_session or r.id
-            ok, _msg = tmux_safe.kill_session(sess)   # refuses agent/author/…
-            if ok:
-                killed.append(sess)
-            r.status = "crashed"
-            r.ended_at = _iso()
-        for r in db.query(Run).filter(Run.status == "queued").all():
-            r.status = "discarded"
-            discarded += 1
-        db.commit()
-    finally:
-        db.close()
-    return {"killed": killed, "discarded": discarded}
+        cfg = _onboarding()
+        research_control.remember_workspace(cfg)
+    except Exception as exc:
+        errors.append(f"Cannot read project settings: {_safe_error(exc)}")
+    try:
+        root = research_control.workspace(cfg)
+    except ValueError as exc:
+        root = None
+        errors.append(str(exc))
+    runs = []
+    try:
+        db = SessionLocal()
+        try:
+            runs = [(r.id, r.tmux_session or r.id, r.status)
+                    for r in db.query(Run).filter(Run.status.in_(["running", "queued"])).all()]
+        finally:
+            db.close()
+    except Exception as exc:
+        errors.append(f"Cannot read tracked runs: {_safe_error(exc)}")
+    registered = {session for _, session, status in runs if status == "running"}
+    if registered and root is None:
+        errors.append("Cannot verify run ownership: project workspace is not configured")
+    # Cancel the in-process scheduler too; otherwise it could restart a
+    # discarded queued task as soon as pause is lifted.
+    try:
+        orchestrator.stop()
+    except Exception as exc:
+        errors.append(f"Cannot stop research scheduler: {_safe_error(exc)}")
+    stats = research_processes.stop_project(root, registered)
+    errors.extend(stats["errors"])
+    discarded = 0
+    try:
+        db = SessionLocal()
+        try:
+            for rid, session, status in runs:
+                row = db.query(Run).filter(Run.id == rid).first()
+                if not row:
+                    continue
+                if status == "queued":
+                    row.status = "discarded"
+                    discarded += 1
+                elif session in stats["killed"] or (
+                        root is not None and not tmux_safe.is_protected(session)
+                        and not tmux_safe.is_alive(session) and not stats["remaining"]
+                        and not stats["errors"]):
+                    row.status = "crashed"
+                    row.ended_at = _iso()
+                else:
+                    if session not in stats["remaining"]:
+                        stats["remaining"].append(session)
+            db.commit()
+        finally:
+            db.close()
+    except Exception as exc:
+        discarded = 0  # no committed metadata update is counted as success
+        errors.append(f"Processes stopped, but run metadata could not be updated: {_safe_error(exc)}")
+    stats.update(discarded=discarded, errors=list(dict.fromkeys(errors)), warnings=[])
+    stats["ok"] = not stats["errors"] and not stats["remaining"]
+    _publish("runs", "runs_changed", {})
+    return stats
 
 
 def _publish(topic: str, event: str, payload: dict | None = None) -> None:
@@ -138,25 +189,31 @@ def _publish(topic: str, event: str, payload: dict | None = None) -> None:
 
 
 def hard_interrupt(feedback: str = "") -> dict:
-    """The YES action: stop the world. Pause the loop, kill killable runs,
-    discard queued work, append the feedback to lessons.md, and raise the
-    focus directive. The main agent session is preserved (paused, not killed)
-    so the resume path can pick it back up."""
-    from . import notify
+    """Pause, stop project queues/workers, and report verified outcomes."""
+    from . import notify, research_control
+    gate_errors = []
+    try:
+        research_control.write(paused=True, stop_all=True)
+    except Exception as exc:
+        gate_errors.append(f"Cannot persist interrupt gate: {_safe_error(exc)}")
     paused = notify.set_research_paused(True)
     stats = kill_killable_runs()
-    cfg = _onboarding()
+    cfg = {}
+    try:
+        cfg = _onboarding()
+    except Exception as exc:
+        gate_errors.append(f"Cannot read research focus: {_safe_error(exc)}")
     if feedback:
         lessons_append(feedback)
     set_interrupt_focus_directive(cfg.get("purpose", ""),
                                   cfg.get("seed_ideas", ""), feedback)
-    _publish("events", "research_interrupted",
-             {"killed": stats["killed"], "discarded": stats["discarded"]})
-    return {"ok": True, "paused": True,
-            "sessions_interrupted": paused.get("sessions_interrupted", []),
-            "killed": stats["killed"], "discarded": stats["discarded"],
-            "purpose": cfg.get("purpose", ""),
-            "seed_ideas": cfg.get("seed_ideas", "")}
+    stats["errors"].extend(gate_errors + paused.get("errors", []))
+    stats["ok"] = stats["ok"] and not stats["errors"]
+    stats.update(paused=paused.get("paused", notify.research_paused()),
+                 sessions_interrupted=paused.get("sessions_interrupted", []),
+                 purpose=cfg.get("purpose", ""), seed_ideas=cfg.get("seed_ideas", ""))
+    _publish("events", "research_interrupted", stats)
+    return stats
 
 
 def restart_with_feedback(purpose: str, seed_ideas: str,
@@ -182,7 +239,9 @@ def restart_with_feedback(purpose: str, seed_ideas: str,
             fn()
         except Exception:                                  # noqa: BLE001
             pass
-    kill_killable_runs()
+    stats = hard_interrupt(feedback)
+    if not stats["ok"]:
+        return {**stats, "reset": False, "status": "stop_incomplete"}
     tmux_safe.kill_session("agent", allow_protected=True)
     tmux_safe.kill_session("author", allow_protected=True)
 
@@ -241,7 +300,9 @@ def resume_from_interrupt() -> dict:
         return {"ok": False, "blocked": True, "reason": "halt_directive",
                 "detail": f"resolve open HALT directive {halt_d.get('id')}"}
 
-    notify.set_research_paused(False)
+    result = notify.set_research_paused(False)
+    if result.get("ok") is False or result.get("paused"):
+        return {**result, "ok": False, "resumed": False}
     restarted = False
     if not tmux_safe.pane_alive("agent"):
         # The agent session vanished (crash / server move) - relaunch it.
@@ -249,8 +310,9 @@ def resume_from_interrupt() -> dict:
             from . import realrun
             realrun.start_real(_onboarding())
             restarted = True
-        except Exception:                                  # noqa: BLE001
-            restarted = False
+        except Exception as exc:                           # noqa: BLE001
+            notify.set_research_paused(True)
+            return {"ok": False, "resumed": False, "error": f"Agent restart failed: {_safe_error(exc)}"}
     else:
         # Session alive - nudge it to pick up from its checkpoints.
         msg = ("RESUME: the operator lifted the interrupt. Re-read lessons.md "
@@ -262,4 +324,5 @@ def resume_from_interrupt() -> dict:
         except Exception:                                  # noqa: BLE001
             pass
     _publish("events", "research_resumed", {"agent_restarted": restarted})
-    return {"ok": True, "resumed": True, "agent_restarted": restarted}
+    return {"ok": True, "resumed": True, "agent_restarted": restarted,
+            "warnings": result.get("warnings", [])}

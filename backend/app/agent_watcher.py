@@ -238,12 +238,16 @@ def _restart_session(session: str, resume: bool = False,
                                 capture_output=True, timeout=4)
                 if alive.returncode == 0:
                     return True
+            from . import notify, research_processes
+            if (notify.research_paused() or notify.research_halted()[0]
+                    or research_processes.active_session_workloads(session)):
+                return False
             if session == "author":
                 from . import author_agent
                 _sp.run(["tmux", "kill-session", "-t", "author"],
                         capture_output=True, timeout=5)
-                author_agent.start()
-                return True
+                result = author_agent.start()
+                return isinstance(result, dict) and result.get("status") in {"started", "already_running"}
             elif session == "agent":
                 from . import realrun
                 from .db import SessionLocal as _SL
@@ -254,16 +258,15 @@ def _restart_session(session: str, resume: bool = False,
                     cfg = dict(row.value) if row and isinstance(row.value, dict) else {}
                 finally:
                     db.close()
-                from .model_registry import provider_for
-                provider = provider_for(cfg.get("research_agent_model", ""))
-                token_key = {"claude": "claude_token", "openai": "openai_token",
-                             "gemini": "gemini_token"}.get(provider, "")
-                if (not token_key or not cfg.get(token_key)) and not _stat_env_var():
+                from .provider_config import requirement_error
+                import os
+                if (requirement_error(cfg.get("research_agent_model") or "claude-opus-5",
+                                      cfg, agent=True)
+                        and not os.environ.get("ARUI_CLAUDE_BIN")):
                     return False
                 _sp.run(["tmux", "kill-session", "-t", "agent"],
                         capture_output=True, timeout=5)
-                realrun.start_real(cfg, resume=resume)
-                return True
+                return realrun.start_real(cfg, resume=resume) is not None
     except Exception as e:                              # noqa: BLE001
         from .safe_errors import describe
         print(f"[agent_watcher] restart {session} failed: {describe(e)}",
@@ -427,6 +430,21 @@ def _check_broken_runtime(session: str) -> None:
               "but automatic restart failed; retry remains enabled.")
 
 
+def _check_pending_settings() -> dict:
+    """Retry deferred model changes at the watcher's normal polling cadence."""
+    from . import runtime_settings
+    try:
+        result = runtime_settings.apply_pending()
+        if result["applied"]:
+            _emit("settings_applied", "info",
+                  "Applied saved model settings to: " + ", ".join(result["applied"]) + ".")
+        return result
+    except Exception as exc:
+        from .safe_errors import describe
+        print(f"[agent_watcher] pending settings retry failed: {describe(exc)}", flush=True)
+        return {"applied": [], "pending": [], "warnings": ["Saved settings could not be applied yet."]}
+
+
 def start(sessions: Iterable[str] = ("agent", "author")) -> None:
     """Spawn the background watcher. Idempotent; safe to call from
     main.py lifespan. Sessions default to the two agent tmux names."""
@@ -441,6 +459,7 @@ def start(sessions: Iterable[str] = ("agent", "author")) -> None:
     def _loop() -> None:
         while True:
             try:
+                _check_pending_settings()
                 for s in sess_list:
                     _scan_session(s)
                     _check_boot_prompt(s)

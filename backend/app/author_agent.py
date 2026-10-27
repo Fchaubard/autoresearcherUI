@@ -527,7 +527,7 @@ _AUTHOR_BRIEF = (
 # Provider-neutral markers that only occur while a coding REPL is working.
 # Do not match token arrows or old spinner verbs: both remain in scrollback
 # after a turn and made an idle prompt look busy forever.
-_BUSY_MARKERS = ("esc to interrupt", "tab to queue message",
+_BUSY_MARKERS = ("esc to interrupt", "esc interrupt", "tab to queue message",
                  "press up to edit queued", "compacting conversation")
 
 
@@ -612,7 +612,8 @@ def _feed_brief_inner(session: str = None, brief: str = None,
         # Claude, Codex, and Gemini render different prompt glyphs/copy.
         if ("❯" in txt or "›" in txt or 'try "' in low or "/help" in low
                 or "ask codex to do anything" in low
-                or "ask claude" in low or "type your message" in low):
+                or "ask claude" in low or "type your message" in low
+                or "ask anything, / for commands" in low):
             ready = True
             break
         time.sleep(2)
@@ -761,6 +762,8 @@ def start(proposal_id: str = "") -> dict:
             try:
                 row = db.query(_S).filter(_S.key == "onboarding").first()
                 if row and isinstance(row.value, dict):
+                    from .provider_config import environment_from_config
+                    os.environ.update(environment_from_config(row.value))
                     _claude_key = (row.value.get("claude_token")
                                     or "").strip()
                     _author_model = (row.value.get("author_agent_model")
@@ -790,6 +793,12 @@ def start(proposal_id: str = "") -> dict:
         launch_env["OPENAI_API_KEY"] = _openai_key
     if _gemini_key:
         launch_env["GEMINI_API_KEY"] = _gemini_key
+    if _author_model.startswith("gemini-"):
+        launch_env["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
+    from .provider_config import ENV_FIELDS
+    for variable in ENV_FIELDS.values():
+        if os.environ.get(variable):
+            launch_env.setdefault(variable, os.environ[variable])
     provider = "custom"
     if cmd_override:
         inner = cmd_override
@@ -807,6 +816,8 @@ def start(proposal_id: str = "") -> dict:
         # is the single delivery path for every provider.
         provider, inner = command(_author_model or "claude-opus-5",
                                   _author_effort, "")
+        from .opencode_runtime import agent_environment
+        launch_env.update(agent_environment(_author_model))
         # Make sure Claude uses the API key (set in env) instead of
         # falling into its OAuth flow. See agent.RealAgent._ensure_claude_settings
         # for the full explanation.
@@ -855,7 +866,8 @@ def start(proposal_id: str = "") -> dict:
             threading.Thread(target=feed_brief, daemon=True,
                              name="author-feed").start()
     except Exception as e:
-        return {"status": "error", "detail": str(e)}
+        from .safe_errors import describe
+        return {"status": "error", "detail": describe(e)}
     bus.publish("paper", "author_started", {})
     return {"status": "started", "tmux": SESSION}
 

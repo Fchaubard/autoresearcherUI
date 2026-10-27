@@ -238,8 +238,7 @@ def test_agent_restart_never_serializes_agent_secrets(
         setup_prompt = "private research prompt"
 
     monkeypatch.setattr(api.realrun, "start_real",
-                        lambda cfg: AgentWithSecrets())
-    monkeypatch.setattr(api.subprocess, "run", lambda *args, **kwargs: None)
+                        lambda cfg, *, resume: AgentWithSecrets() if resume else None)
     response = client.post("/api/agent/restart", json={"name": "research"})
     assert response.status_code == 200
     assert response.json()["results"]["research"] == {
