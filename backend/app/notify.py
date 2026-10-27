@@ -315,7 +315,9 @@ def emails_paused() -> bool:
         cfg = _cfg() or {}
         return bool(cfg.get("emails_paused"))
     except Exception:                                       # noqa: BLE001
-        return False
+        # A broken settings store must never turn a user's pause into an
+        # opt-in. In particular, do not send while SQLite is unavailable.
+        return True
 
 
 def research_paused() -> bool:
@@ -1831,50 +1833,79 @@ _lock = threading.Lock()
 
 
 _TUNNEL_URL_KEY = "tunnel_url_state"
+_TUNNEL_EMAIL_COOLDOWN_SEC = 3600
+_TUNNEL_EMAIL_RETRY_SEC = 900
+
+
+def _claim_tunnel_notice(cur: str, paused: bool) -> tuple[str, dict] | None:
+    """Persist a reservation BEFORE delivery, serializing competing workers.
+
+    A reserved URL counts as handled even if the process dies during SMTP or
+    the later status update fails. SMTP has no exactly-once guarantee: an
+    ambiguous delivery must not be retried every scheduler tick. Only a
+    recorded delivery failure is eligible for a bounded retry.
+    """
+    from sqlalchemy import text
+
+    now = dt.datetime.now(dt.timezone.utc)
+    db = SessionLocal()
+    try:
+        db.execute(text("BEGIN IMMEDIATE"))
+        row = db.query(Setting).filter(Setting.key == _TUNNEL_URL_KEY).first()
+        state = dict(row.value) if row and isinstance(row.value, dict) else {}
+        prev = state.get("url", "")
+        if prev == cur and state.get("status") != "failed":
+            return None
+        last_attempt = _parse_iso(state.get("attempted_at") or state.get("at"))
+        if paused:
+            claimed = {**state, "url": cur, "status": "paused"}
+        else:
+            interval = (_TUNNEL_EMAIL_RETRY_SEC if state.get("status") == "failed"
+                        else _TUNNEL_EMAIL_COOLDOWN_SEC)
+            if last_attempt and (now - last_attempt).total_seconds() < interval:
+                return None
+            claimed = {"url": cur, "at": now.isoformat(),
+                       "attempted_at": now.isoformat(), "status": "reserved"}
+        if row:
+            row.value = claimed
+        else:
+            db.add(Setting(key=_TUNNEL_URL_KEY, value=claimed))
+        db.commit()  # If this fails, the caller MUST NOT send anything.
+        return None if paused else (prev, claimed)
+    finally:
+        db.close()
+
+
+def _finish_tunnel_notice(claimed: dict, ok: bool) -> None:
+    from sqlalchemy import text
+
+    db = SessionLocal()
+    try:
+        db.execute(text("BEGIN IMMEDIATE"))
+        row = db.query(Setting).filter(Setting.key == _TUNNEL_URL_KEY).first()
+        if row and row.value == claimed:
+            row.value = {**claimed, "status": "sent" if ok else "failed"}
+            db.commit()
+    finally:
+        db.close()
 
 
 def maybe_email_tunnel_change() -> bool:
-    """Email the operator whenever the public dashboard URL changes.
+    """Notify about URL changes, with durable deduplication and rate limits.
 
-    The cloudflare quick-tunnel rotates its hostname on every reconnect, so a
-    bookmarked link keeps dying. Rather than chase an (impossible, sign-up-free)
-    stable URL, we simply WATCH the live URL and email the new one the moment it
-    changes — so the current link is always one click away in the inbox. Polled
-    from the 60s digest loop. Returns True iff an email was sent. Never raises.
+    Polled every minute. Coalesce rotations to the latest URL, at most once
+    per hour; retry recorded failures after 15 minutes. If durable state is
+    unavailable, send nothing. Returns True iff an email was sent.
     """
     try:
-        cur = _live_tunnel_url()
+        cur = _dashboard_url(_cfg())
         if not cur:
             return False
-        db = SessionLocal()
-        try:
-            row = (db.query(Setting)
-                   .filter(Setting.key == _TUNNEL_URL_KEY).first())
-            prev = ((row.value or {}).get("url")
-                    if row and isinstance(row.value, dict) else "")
-        finally:
-            db.close()
-        if prev == cur:
+        claim = _claim_tunnel_notice(cur, emails_paused())
+        if claim is None:
             return False
+        prev, claimed = claim
         first = not prev
-
-        def _commit_baseline():
-            d2 = SessionLocal()
-            try:
-                r2 = (d2.query(Setting)
-                      .filter(Setting.key == _TUNNEL_URL_KEY).first())
-                if r2:
-                    r2.value = {"url": cur, "at": _dt_now_iso()}
-                else:
-                    d2.add(Setting(key=_TUNNEL_URL_KEY,
-                                   value={"url": cur, "at": _dt_now_iso()}))
-                d2.commit()
-            finally:
-                d2.close()
-
-        if emails_paused():
-            _commit_baseline()      # track silently; don't email while paused
-            return False
         subject = ("[autoresearcherUI] dashboard URL"
                    if first else
                    "[autoresearcherUI] dashboard URL changed")
@@ -1883,17 +1914,18 @@ def maybe_email_tunnel_change() -> bool:
                     "Heads up: the dashboard's public URL just changed.")
         bullets = [f"New URL: {cur}"]
         if not first:
-            bullets.append("The previous link stopped working — cloudflare's "
-                           "quick-tunnel rotated its hostname on reconnect.")
-        bullets.append("Bookmark this one; I'll email again if it ever rotates.")
+            bullets.append("The public dashboard address has changed. "
+                           "Use the current link below.")
+        bullets.append("URL updates are limited to one per hour while "
+                       "notifications are enabled.")
         ok = send_alert(subject, headline, bullets=bullets,
                         action_text="Open the dashboard with the button "
                                     "below.", severity="info")
-        # Only commit the new baseline once the email actually went out — a
-        # failed send (SMTP hiccup) then retries on the next tick instead of
-        # silently swallowing the notification.
-        if ok:
-            _commit_baseline()
+        try:
+            _finish_tunnel_notice(claimed, ok)
+        except Exception as e:                              # noqa: BLE001
+            # The durable reservation still prevents duplicate delivery.
+            print(f"[notify] tunnel notice status update failed: {e}", flush=True)
         return ok
     except Exception as e:                                  # noqa: BLE001
         print(f"[notify] tunnel-change check failed: {e}", flush=True)
