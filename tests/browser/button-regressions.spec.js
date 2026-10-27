@@ -149,3 +149,11 @@ test('pin version reports a missing commit and allows retry', async ({page})=>{
   await expect.poll(()=>mock.requests.filter(r=>r.path==='/paper/versions/pin').length).toBe(2);
   await expect(page.locator('.arui-dlg-bd')).toHaveCount(0);expect(mock.errors).toEqual([]);
 });
+
+test('GPU activity reflects telemetry even when experiments are untracked',async({page})=>{
+  await installMocks(page,{overrides:{'/runs':[], '/gpus':[{index:0,util_pct:99,vram_used_mb:1000},{index:1,util_pct:0,vram_used_mb:32}]}});
+  await page.goto('/dashboard');
+  const card=page.locator('.stat').filter({has:page.locator('.k',{hasText:'GPUs active'})});
+  await expect(card.locator('.v')).toHaveText('1');
+  await expect(card.locator('.d')).toHaveText('0 tracked runs');
+});

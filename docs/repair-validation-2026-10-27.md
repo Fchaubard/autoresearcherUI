@@ -35,8 +35,9 @@ clipboard/share errors, and SSH key validation.
 - Full Python unit/integration suite with `ARUI_TEST_OPENCODE=1`: **1,100 passed**,
   zero skips, zero failures. One subsequent missing-CLI settings regression
   passed independently: **1,101 distinct backend tests**.
-- Full WebKit + Chromium browser suite: **132 passed**. Four subsequent targeted
-  pin/diff checks passed, including two new cases: **134 distinct browser tests**.
+- Full WebKit + Chromium browser suite: **132 passed**. Eight subsequent targeted
+  pin/diff, telemetry, and navigation checks passed, including four new cases:
+  **136 distinct browser tests**.
 - `bash tests/run_e2e.sh`: **34/34 checks**, across the CPU research orchestrator,
   mock autonomous agent using real tmux/API/tracking, and supervisor recovery.
 - Real temporary worker/queue processes verified halt ordering, detached jobs,
@@ -52,6 +53,15 @@ Tests use private data directories and tmux servers. The browser harness mocks
 API side effects and blocks external requests; it does not send email or touch
 production training. Production process discovery was checked read-only and
 identified the untracked queues/workers that the original halt missed.
+
+Live deployment checks passed for all seven routes in a 390px WebKit viewport,
+with no horizontal page overflow or JavaScript errors and an unobstructed Send
+button. An authenticated unchanged-settings save succeeded. Database integrity
+passed; the same research agent and ten GPU processes survived the backend
+restart. Email remained paused, with no deliveries or storage errors logged.
+The dashboard's GPU card now reads hardware telemetry separately from tracked
+run counts, so experiments using local tracking do not falsely show idle GPUs.
+This does not reconstruct missing historical Run rows from local experiment files.
 
 ## Model verification limits
 

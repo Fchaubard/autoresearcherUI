@@ -2203,6 +2203,7 @@ function paintStats() {
   const fail = runs.filter(r => isCrashed(r.status)).length;
   const best = p.best_metric, base = p.baseline_metric;
   const delta = (best != null && base != null) ? base - best : null;
+  const activeGpus = (S.gpus || []).filter(g => (g.util_pct || 0) > 5 || (g.vram_used_mb || 0) > 600).length;
   const cards = [
     ['baseline', base == null ? '—' : fmt(base, 3), '', ''],
     ['incumbent', best == null ? '—' : fmt(best, 3), 'up',
@@ -2213,7 +2214,8 @@ function paintStats() {
     ['experiments', String(done.length + fail), '', `of ${S.ideas.length} ideas`],
     ['failures', String(fail), fail ? 'down' : '',
       done.length + fail ? Math.round(fail / (done.length + fail) * 100) + '% rate' : ''],
-    ['running', String(runs.filter(r => r.status === 'running').length), '', 'GPUs active'],
+    ['GPUs active', S.gpus?.length ? String(activeGpus) : '—', '',
+      `${runs.filter(r => r.status === 'running').length} tracked runs`],
   ];
   const st = document.getElementById('stats'); st.innerHTML = '';
   cards.forEach(([k, v, d, sub]) => {
@@ -3629,7 +3631,10 @@ function paintGpus() {
 
 function pollGpus() {
   const tick = async () => {
-    try { S.gpus = await api('/gpus'); paintGpus(); } catch (e) { /* keep */ }
+    try {
+      S.gpus = await api('/gpus'); paintGpus();
+      if (document.getElementById('stats')) paintStats();
+    } catch (e) { /* keep */ }
   };
   tick();
   addTimer(setInterval(tick, 4000));
