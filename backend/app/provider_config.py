@@ -16,6 +16,8 @@ ENV_FIELDS = {
     "flint_base_url": "ARUI_FLINT_BASE_URL",
     "flint_model": "ARUI_FLINT_MODEL",
     "flint_token": "ARUI_FLINT_API_KEY",
+    "flint_context_tokens": "ARUI_FLINT_CONTEXT_TOKENS",
+    "flint_max_output_tokens": "ARUI_FLINT_MAX_OUTPUT_TOKENS",
 }
 TOKEN_FIELDS = {"claude": "claude_token", "openai": "openai_token",
                 "gemini": "gemini_token", "opencode": "opencode_token",
@@ -55,6 +57,18 @@ def flint_config(cfg: dict | None = None) -> tuple[str, str, str]:
     return url, model, config_value("flint_token", cfg)
 
 
+def flint_limits(cfg: dict | None = None) -> tuple[int, int]:
+    """Client budgets must fit the local server, not the model's theoretical max."""
+    try:
+        context = int(config_value("flint_context_tokens", cfg) or "16384")
+        output = int(config_value("flint_max_output_tokens", cfg) or "8192")
+    except ValueError:
+        raise ValueError("Flint context and output token limits must be whole numbers") from None
+    if context < 1024 or output < 1 or output >= context:
+        raise ValueError("Flint needs context >= 1024 tokens and an output budget smaller than its context")
+    return context, output
+
+
 def requirement_error(model: str, cfg: dict | None = None, *, agent: bool = False) -> str:
     provider = provider_for(model)
     if not provider:
@@ -65,6 +79,7 @@ def requirement_error(model: str, cfg: dict | None = None, *, agent: bool = Fals
     if provider == "flint":
         try:
             flint_config(cfg)
+            flint_limits(cfg)
         except ValueError as exc:
             return str(exc)
         return ""

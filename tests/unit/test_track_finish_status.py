@@ -22,6 +22,11 @@ def client(arui_env, fake_subprocess):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from backend.app.api import router
+    from backend.app import council
+    # These tests exercise run outcome classification, after a completed
+    # code review. Missing test credentials no longer imply approval.
+    council._bless_state_set({"status": "approved", "verdicts": {
+        "gemini": {"approved": True}, "openai": {"approved": True}}})
     app = FastAPI()
     app.include_router(router)
     with TestClient(app) as c:

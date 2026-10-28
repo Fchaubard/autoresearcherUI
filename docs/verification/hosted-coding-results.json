@@ -1,0 +1,753 @@
+{
+  "generated_at": "2026-10-28T22:40:27.818249+00:00",
+  "results": [
+    {
+      "model": "claude-fable-5",
+      "role": "research",
+      "provider": "claude",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "claude-fable-5",
+      "effective_models": [
+        "claude-fable-5"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:28:24.790496+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 16.42
+    },
+    {
+      "model": "claude-fable-5",
+      "role": "author",
+      "provider": "claude",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "claude-fable-5",
+      "effective_models": [
+        "claude-fable-5"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:28:24.790092+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 18.46
+    },
+    {
+      "model": "claude-fable-5-1",
+      "role": "research",
+      "provider": "claude",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "claude-fable-5-1",
+      "effective_models": [
+        "claude-fable-5-1"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:28:41.225852+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 13.88
+    },
+    {
+      "model": "claude-fable-5-1",
+      "role": "author",
+      "provider": "claude",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "claude-fable-5-1",
+      "effective_models": [
+        "claude-fable-5-1"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:28:43.262024+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 18.42
+    },
+    {
+      "model": "claude-haiku-4-5-20251001",
+      "role": "research",
+      "provider": "claude",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "claude-haiku-4-5-20251001",
+      "effective_models": [
+        "claude-haiku-4-5-20251001"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:28:55.119507+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 14.4
+    },
+    {
+      "model": "claude-haiku-4-5-20251001",
+      "role": "author",
+      "provider": "claude",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "claude-haiku-4-5-20251001",
+      "effective_models": [
+        "claude-haiku-4-5-20251001"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:29:01.693133+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 19.97
+    },
+    {
+      "model": "claude-opus-4-8",
+      "role": "research",
+      "provider": "claude",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "claude-opus-4-8",
+      "effective_models": [
+        "claude-opus-4-8"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:29:09.533289+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 15.38
+    },
+    {
+      "model": "claude-opus-4-8",
+      "role": "author",
+      "provider": "claude",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "claude-opus-4-8",
+      "effective_models": [
+        "claude-opus-4-8"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:29:21.664901+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 17.38
+    },
+    {
+      "model": "claude-opus-5",
+      "role": "research",
+      "provider": "claude",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "claude-opus-5",
+      "effective_models": [
+        "claude-opus-5"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:29:24.929310+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 15.37
+    },
+    {
+      "model": "claude-sonnet-5",
+      "role": "research",
+      "provider": "claude",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "claude-sonnet-5",
+      "effective_models": [
+        "claude-sonnet-5"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:29:40.317706+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 13.34
+    },
+    {
+      "model": "claude-opus-5",
+      "role": "author",
+      "provider": "claude",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "claude-opus-5",
+      "effective_models": [
+        "claude-opus-5"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:29:39.058940+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 21.45
+    },
+    {
+      "model": "claude-sonnet-5",
+      "role": "author",
+      "provider": "claude",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "claude-sonnet-5",
+      "effective_models": [
+        "claude-sonnet-5"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:29:53.665303+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 15.39
+    },
+    {
+      "model": "gemini-2.5-flash",
+      "role": "research",
+      "provider": "gemini",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gemini-2.5-flash",
+      "effective_models": [
+        "gemini-2.5-flash"
+      ],
+      "initial_prompt_delivery": "command_argument",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:30:00.519851+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 13.02
+    },
+    {
+      "model": "gemini-2.5-flash",
+      "role": "author",
+      "provider": "gemini",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gemini-2.5-flash",
+      "effective_models": [
+        "gemini-2.5-flash"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:30:09.069522+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 18.4
+    },
+    {
+      "model": "gemini-2.5-pro",
+      "role": "research",
+      "provider": "gemini",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gemini-2.5-pro",
+      "effective_models": [
+        "gemini-2.5-pro"
+      ],
+      "initial_prompt_delivery": "command_argument",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:30:13.548814+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 19.61
+    },
+    {
+      "model": "gemini-3.1-flash-lite",
+      "role": "research",
+      "provider": "gemini",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gemini-3.1-flash-lite",
+      "effective_models": [
+        "gemini-3.1-flash-lite"
+      ],
+      "initial_prompt_delivery": "command_argument",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:30:33.173031+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 10.49
+    },
+    {
+      "model": "gemini-2.5-pro",
+      "role": "author",
+      "provider": "gemini",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gemini-2.5-pro",
+      "effective_models": [
+        "gemini-2.5-pro"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:30:27.486643+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 23.5
+    },
+    {
+      "model": "gemini-3.1-flash-lite",
+      "role": "author",
+      "provider": "gemini",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gemini-3.1-flash-lite",
+      "effective_models": [
+        "gemini-3.1-flash-lite"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:30:43.680696+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 12.85
+    },
+    {
+      "model": "gemini-3.1-pro-preview",
+      "role": "research",
+      "provider": "gemini",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gemini-3.1-pro-preview",
+      "effective_models": [
+        "gemini-3.1-pro-preview"
+      ],
+      "initial_prompt_delivery": "command_argument",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:30:51.000745+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 22.19
+    },
+    {
+      "model": "gemini-3.1-pro-preview",
+      "role": "author",
+      "provider": "gemini",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gemini-3.1-pro-preview",
+      "effective_models": [
+        "gemini-3.1-pro-preview"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:30:56.542418+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 28.1
+    },
+    {
+      "model": "gemini-3.5-flash",
+      "role": "research",
+      "provider": "gemini",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gemini-3.5-flash",
+      "effective_models": [
+        "gemini-3.5-flash"
+      ],
+      "initial_prompt_delivery": "command_argument",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:31:13.202412+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 43.04
+    },
+    {
+      "model": "gemini-3.5-flash-lite",
+      "role": "research",
+      "provider": "gemini",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gemini-3.5-flash-lite",
+      "effective_models": [
+        "gemini-3.5-flash-lite"
+      ],
+      "initial_prompt_delivery": "command_argument",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:31:56.252699+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 10.99
+    },
+    {
+      "model": "gemini-3.5-flash",
+      "role": "author",
+      "provider": "gemini",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gemini-3.5-flash",
+      "effective_models": [
+        "gemini-3.5-flash"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:31:24.659794+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 43.82
+    },
+    {
+      "model": "gemini-3.5-flash-lite",
+      "role": "author",
+      "provider": "gemini",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gemini-3.5-flash-lite",
+      "effective_models": [
+        "gemini-3.5-flash-lite"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:32:07.258867+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 11.82
+    },
+    {
+      "model": "gemini-3.6-flash",
+      "role": "research",
+      "provider": "gemini",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gemini-3.6-flash",
+      "effective_models": [
+        "gemini-3.6-flash"
+      ],
+      "initial_prompt_delivery": "command_argument",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:32:08.492712+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 12.0
+    },
+    {
+      "model": "gemini-3.6-flash",
+      "role": "author",
+      "provider": "gemini",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gemini-3.6-flash",
+      "effective_models": [
+        "gemini-3.6-flash"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:32:19.090670+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 16.88
+    },
+    {
+      "model": "gemini-3.7-flash",
+      "role": "research",
+      "provider": "gemini",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gemini-3.7-flash",
+      "effective_models": [
+        "gemini-3.7-flash"
+      ],
+      "initial_prompt_delivery": "command_argument",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:32:20.520884+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 20.12
+    },
+    {
+      "model": "gemini-3.7-flash",
+      "role": "author",
+      "provider": "gemini",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gemini-3.7-flash",
+      "effective_models": [
+        "gemini-3.7-flash"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:32:35.984074+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 34.66
+    },
+    {
+      "model": "gemini-3.8-flash",
+      "role": "research",
+      "provider": "gemini",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gemini-3.8-flash",
+      "effective_models": [
+        "gemini-3.8-flash"
+      ],
+      "initial_prompt_delivery": "command_argument",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:32:40.653012+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 30.29
+    },
+    {
+      "model": "gemini-3.8-flash",
+      "role": "author",
+      "provider": "gemini",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gemini-3.8-flash",
+      "effective_models": [
+        "gemini-3.8-flash"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:33:10.659527+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 38.2
+    },
+    {
+      "model": "gemini-4-argon",
+      "role": "research",
+      "provider": "gemini",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gemini-4-argon",
+      "effective_models": [
+        "gemini-4-argon"
+      ],
+      "initial_prompt_delivery": "command_argument",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:33:10.960185+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 38.41
+    },
+    {
+      "model": "gemini-4-argon",
+      "role": "author",
+      "provider": "gemini",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gemini-4-argon",
+      "effective_models": [
+        "gemini-4-argon"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:33:48.872961+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 19.42
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "role": "research",
+      "provider": "openai",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gpt-5.6-sol",
+      "effective_models": [
+        "gpt-5.6-sol"
+      ],
+      "initial_prompt_delivery": "command_argument",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:38:52.551126+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 13.86
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "role": "author",
+      "provider": "openai",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gpt-5.6-sol",
+      "effective_models": [
+        "gpt-5.6-sol"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:38:52.551502+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 15.19
+    },
+    {
+      "model": "gpt-5.2",
+      "role": "research",
+      "provider": "openai",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gpt-5.2",
+      "effective_models": [
+        "gpt-5.2"
+      ],
+      "initial_prompt_delivery": "command_argument",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:39:06.423895+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 14.35
+    },
+    {
+      "model": "gpt-5.2",
+      "role": "author",
+      "provider": "openai",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gpt-5.2",
+      "effective_models": [
+        "gpt-5.2"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:39:07.757474+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 15.68
+    },
+    {
+      "model": "gpt-5.5",
+      "role": "research",
+      "provider": "openai",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gpt-5.5",
+      "effective_models": [
+        "gpt-5.5"
+      ],
+      "initial_prompt_delivery": "command_argument",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:39:20.786481+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 12.31
+    },
+    {
+      "model": "gpt-5.5",
+      "role": "author",
+      "provider": "openai",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gpt-5.5",
+      "effective_models": [
+        "gpt-5.5"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:39:23.454898+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 17.2
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "role": "research",
+      "provider": "openai",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gpt-5.6-luna",
+      "effective_models": [
+        "gpt-5.6-luna"
+      ],
+      "initial_prompt_delivery": "command_argument",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:39:33.121247+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 12.31
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "role": "author",
+      "provider": "openai",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gpt-5.6-luna",
+      "effective_models": [
+        "gpt-5.6-luna"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:39:40.663303+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 15.17
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "role": "research",
+      "provider": "openai",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gpt-5.6-terra",
+      "effective_models": [
+        "gpt-5.6-terra"
+      ],
+      "initial_prompt_delivery": "command_argument",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:39:45.442041+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 11.3
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "role": "author",
+      "provider": "openai",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gpt-5.6-terra",
+      "effective_models": [
+        "gpt-5.6-terra"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:39:55.848867+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 14.18
+    },
+    {
+      "model": "gpt-6-astra",
+      "role": "research",
+      "provider": "openai",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gpt-6-astra",
+      "effective_models": [
+        "gpt-6-astra"
+      ],
+      "initial_prompt_delivery": "command_argument",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:39:56.755069+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 13.34
+    },
+    {
+      "model": "gpt-6-astra",
+      "role": "author",
+      "provider": "openai",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "selected_model_arg": "gpt-6-astra",
+      "effective_models": [
+        "gpt-6-astra"
+      ],
+      "initial_prompt_delivery": "interactive_feed",
+      "strict_model_config": true,
+      "started_at": "2026-10-28T22:40:10.049989+00:00",
+      "transport": "production agent_cli.command + private tmux",
+      "duration_seconds": 17.74
+    }
+  ]
+}

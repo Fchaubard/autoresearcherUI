@@ -1,0 +1,676 @@
+{
+  "results": [
+    {
+      "model": "gpt-6-astra",
+      "effort": "medium",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:27.304353+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.554
+    },
+    {
+      "model": "gpt-6-astra",
+      "effort": "low",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:27.301869+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.944
+    },
+    {
+      "model": "gpt-6-astra",
+      "effort": "xhigh",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:29.246057+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.811
+    },
+    {
+      "model": "gpt-6-astra",
+      "effort": "max",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:26.043225+00:00",
+      "status": "passed",
+      "elapsed_seconds": 2.73,
+      "previous_attempts": [
+        {
+          "model": "gpt-6-astra",
+          "effort": "max",
+          "inference": "real",
+          "tested_at": "2026-10-28T22:24:31.057077+00:00",
+          "status": "provider_error",
+          "error_type": "HTTPError",
+          "http_status": 400,
+          "provider_code": "unsupported_value",
+          "provider_type": "invalid_request_error",
+          "provider_param": "reasoning_effort",
+          "error_category": "unsupported_parameter_or_model",
+          "elapsed_seconds": 0.146
+        }
+      ]
+    },
+    {
+      "model": "gpt-6-astra",
+      "effort": "high",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:28.858535+00:00",
+      "status": "passed",
+      "elapsed_seconds": 2.86
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "effort": "none",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:31.203616+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.198
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "effort": "low",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:31.718487+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.639
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "effort": "medium",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:32.402080+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.222
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:33.357116+00:00",
+      "status": "passed",
+      "elapsed_seconds": 0.98
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "effort": "max",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:26.044875+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.202,
+      "previous_attempts": [
+        {
+          "model": "gpt-5.6-sol",
+          "effort": "max",
+          "inference": "real",
+          "tested_at": "2026-10-28T22:24:34.337313+00:00",
+          "status": "provider_error",
+          "error_type": "HTTPError",
+          "http_status": 400,
+          "provider_code": "unsupported_value",
+          "provider_type": "invalid_request_error",
+          "provider_param": "reasoning_effort",
+          "error_category": "unsupported_parameter_or_model",
+          "elapsed_seconds": 0.132
+        }
+      ]
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "effort": "xhigh",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:33.624258+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.082
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "effort": "none",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:34.469695+00:00",
+      "status": "passed",
+      "elapsed_seconds": 0.91
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "effort": "low",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:34.706720+00:00",
+      "status": "passed",
+      "elapsed_seconds": 0.9
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "effort": "medium",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:35.379741+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.202
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "effort": "high",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:35.606734+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.421
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "effort": "max",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:27.246733+00:00",
+      "status": "passed",
+      "elapsed_seconds": 3.169,
+      "previous_attempts": [
+        {
+          "model": "gpt-5.6-terra",
+          "effort": "max",
+          "inference": "real",
+          "tested_at": "2026-10-28T22:24:37.028168+00:00",
+          "status": "provider_error",
+          "error_type": "HTTPError",
+          "http_status": 400,
+          "provider_code": "unsupported_value",
+          "provider_type": "invalid_request_error",
+          "provider_param": "reasoning_effort",
+          "error_category": "unsupported_parameter_or_model",
+          "elapsed_seconds": 0.138
+        }
+      ]
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "effort": "none",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:37.166278+00:00",
+      "status": "passed",
+      "elapsed_seconds": 0.813
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "effort": "xhigh",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:36.582103+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.517
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "effort": "low",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:37.979302+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.052
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "effort": "medium",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:38.099478+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.048
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "effort": "high",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:39.031264+00:00",
+      "status": "passed",
+      "elapsed_seconds": 0.864
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "effort": "max",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:28.772883+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.058,
+      "previous_attempts": [
+        {
+          "model": "gpt-5.6-luna",
+          "effort": "max",
+          "inference": "real",
+          "tested_at": "2026-10-28T22:24:39.895271+00:00",
+          "status": "provider_error",
+          "error_type": "HTTPError",
+          "http_status": 400,
+          "provider_code": "unsupported_value",
+          "provider_type": "invalid_request_error",
+          "provider_param": "reasoning_effort",
+          "error_category": "unsupported_parameter_or_model",
+          "elapsed_seconds": 0.16
+        }
+      ]
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "effort": "xhigh",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:39.147673+00:00",
+      "status": "passed",
+      "elapsed_seconds": 0.951
+    },
+    {
+      "model": "gpt-5.5",
+      "effort": "low",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:40.055512+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.193
+    },
+    {
+      "model": "gpt-5.5",
+      "effort": "medium",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:40.099088+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.458
+    },
+    {
+      "model": "gpt-5.5",
+      "effort": "high",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:41.248868+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.472
+    },
+    {
+      "model": "gpt-5.5",
+      "effort": "xhigh",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:41.556715+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.646
+    },
+    {
+      "model": "gpt-5.2",
+      "effort": "low",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:42.721297+00:00",
+      "status": "passed",
+      "elapsed_seconds": 0.783
+    },
+    {
+      "model": "gpt-5.2",
+      "effort": "medium",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:43.203269+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.054
+    },
+    {
+      "model": "gpt-5.2",
+      "effort": "high",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:43.504597+00:00",
+      "status": "passed",
+      "elapsed_seconds": 0.828
+    },
+    {
+      "model": "gpt-5.1",
+      "effort": "low",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:44.333084+00:00",
+      "status": "passed",
+      "elapsed_seconds": 0.888
+    },
+    {
+      "model": "gpt-5.2",
+      "effort": "xhigh",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:44.257001+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.13
+    },
+    {
+      "model": "gpt-5.1",
+      "effort": "medium",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:45.220862+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.08
+    },
+    {
+      "model": "gpt-5.1",
+      "effort": "high",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:45.386691+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.432
+    },
+    {
+      "model": "gpt-5",
+      "effort": "minimal",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:46.300911+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.006
+    },
+    {
+      "model": "gpt-5",
+      "effort": "low",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:46.818896+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.326
+    },
+    {
+      "model": "gpt-5",
+      "effort": "medium",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:47.307446+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.923
+    },
+    {
+      "model": "gpt-5-mini",
+      "effort": "minimal",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:49.230919+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.033
+    },
+    {
+      "model": "gpt-5-mini",
+      "effort": "low",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:50.263548+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.982
+    },
+    {
+      "model": "gpt-5",
+      "effort": "high",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:48.144484+00:00",
+      "status": "passed",
+      "elapsed_seconds": 4.398
+    },
+    {
+      "model": "gpt-5-mini",
+      "effort": "medium",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:52.246119+00:00",
+      "status": "passed",
+      "elapsed_seconds": 2.204
+    },
+    {
+      "model": "gpt-5-nano",
+      "effort": "minimal",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:54.450603+00:00",
+      "status": "passed",
+      "elapsed_seconds": 0.659
+    },
+    {
+      "model": "gpt-5-mini",
+      "effort": "high",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:52.542346+00:00",
+      "status": "passed",
+      "elapsed_seconds": 3.006
+    },
+    {
+      "model": "gpt-5-nano",
+      "effort": "low",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:55.110062+00:00",
+      "status": "passed",
+      "elapsed_seconds": 0.962
+    },
+    {
+      "model": "gpt-5-nano",
+      "effort": "medium",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:55.548484+00:00",
+      "status": "passed",
+      "elapsed_seconds": 2.976
+    },
+    {
+      "model": "gpt-5-nano",
+      "effort": "high",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:56.072566+00:00",
+      "status": "passed",
+      "elapsed_seconds": 2.464
+    },
+    {
+      "model": "o3",
+      "effort": "low",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:58.524157+00:00",
+      "status": "passed",
+      "elapsed_seconds": 0.929
+    },
+    {
+      "model": "o3",
+      "effort": "medium",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:58.536799+00:00",
+      "status": "passed",
+      "elapsed_seconds": 0.986
+    },
+    {
+      "model": "o3",
+      "effort": "high",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:59.453315+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.11
+    },
+    {
+      "model": "o3-pro",
+      "effort": "low",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:24:59.522752+00:00",
+      "status": "passed",
+      "elapsed_seconds": 5.129
+    },
+    {
+      "model": "o3-pro",
+      "effort": "medium",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:00.563234+00:00",
+      "status": "passed",
+      "elapsed_seconds": 5.949
+    },
+    {
+      "model": "gemini-4-argon",
+      "effort": "low",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:06.512050+00:00",
+      "status": "passed",
+      "elapsed_seconds": 3.248
+    },
+    {
+      "model": "o3-pro",
+      "effort": "high",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:04.652036+00:00",
+      "status": "passed",
+      "elapsed_seconds": 6.208
+    },
+    {
+      "model": "gemini-4-argon",
+      "effort": "medium",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:09.760349+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.693
+    },
+    {
+      "model": "gemini-3.1-flash-lite",
+      "effort": "low",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:11.453435+00:00",
+      "status": "passed",
+      "elapsed_seconds": 0.997
+    },
+    {
+      "model": "gemini-3.1-flash-lite",
+      "effort": "medium",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:12.450141+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.29
+    },
+    {
+      "model": "gemini-4-argon",
+      "effort": "high",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:10.859969+00:00",
+      "status": "passed",
+      "elapsed_seconds": 4.012
+    },
+    {
+      "model": "gemini-3.1-flash-lite",
+      "effort": "high",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:13.740694+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.39
+    },
+    {
+      "model": "gemini-3.8-flash",
+      "effort": "low",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:14.872325+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.479
+    },
+    {
+      "model": "gemini-3.8-flash",
+      "effort": "medium",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:15.130929+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.781
+    },
+    {
+      "model": "gemini-3.7-flash",
+      "effort": "low",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:16.911691+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.605
+    },
+    {
+      "model": "gemini-3.8-flash",
+      "effort": "high",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:16.351396+00:00",
+      "status": "passed",
+      "elapsed_seconds": 3.146
+    },
+    {
+      "model": "gemini-3.7-flash",
+      "effort": "medium",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:18.516531+00:00",
+      "status": "passed",
+      "elapsed_seconds": 2.186
+    },
+    {
+      "model": "gemini-3.6-flash",
+      "effort": "low",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:20.702802+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.053
+    },
+    {
+      "model": "gemini-3.7-flash",
+      "effort": "high",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:19.497797+00:00",
+      "status": "passed",
+      "elapsed_seconds": 2.58
+    },
+    {
+      "model": "gemini-3.6-flash",
+      "effort": "medium",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:21.756234+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.584
+    },
+    {
+      "model": "gemini-3.5-flash",
+      "effort": "low",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:23.340791+00:00",
+      "status": "passed",
+      "elapsed_seconds": 0.957
+    },
+    {
+      "model": "gemini-3.6-flash",
+      "effort": "high",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:22.077456+00:00",
+      "status": "passed",
+      "elapsed_seconds": 2.613
+    },
+    {
+      "model": "gemini-3.5-flash",
+      "effort": "high",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:24.690352+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.615
+    },
+    {
+      "model": "gemini-3.5-flash",
+      "effort": "medium",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:24.297662+00:00",
+      "status": "passed",
+      "elapsed_seconds": 2.075
+    },
+    {
+      "model": "gemini-3.5-flash-lite",
+      "effort": "low",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:26.305149+00:00",
+      "status": "passed",
+      "elapsed_seconds": 0.536
+    },
+    {
+      "model": "gemini-3.5-flash-lite",
+      "effort": "medium",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:26.372786+00:00",
+      "status": "passed",
+      "elapsed_seconds": 0.64
+    },
+    {
+      "model": "gemini-3.5-flash-lite",
+      "effort": "high",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:26.841274+00:00",
+      "status": "passed",
+      "elapsed_seconds": 1.26
+    },
+    {
+      "model": "gemini-3.1-pro-preview",
+      "effort": "low",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:27.013169+00:00",
+      "status": "passed",
+      "elapsed_seconds": 2.381
+    },
+    {
+      "model": "gemini-3.1-pro-preview",
+      "effort": "medium",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:28.101714+00:00",
+      "status": "passed",
+      "elapsed_seconds": 4.244
+    },
+    {
+      "model": "gemini-3.1-pro-preview",
+      "effort": "high",
+      "inference": "real",
+      "tested_at": "2026-10-28T22:25:29.394470+00:00",
+      "status": "passed",
+      "elapsed_seconds": 3.417
+    }
+  ]
+}

@@ -1045,7 +1045,7 @@ async function pollBlessStatus() {
     if (!s) return;
     // dedupe: only repaint when state actually changes
     const pf = s.preflight || {};
-    const sig = (s.status || '') + '|' + ((s.blockers || []).length)
+    const sig = (s.status || '') + '|' + (s.summary || '') + '|' + ((s.blockers || []).length)
       + '|' + (pf.static_overfit_passed ? '1' : '0')
       + '|' + (pf.uniform_init_passed ? '1' : '0')
       + '|' + (pf.blessed ? '1' : '0');
@@ -1100,6 +1100,10 @@ function renderBlessBanner(s) {
     rejected:             { cls: 'sb-bad', icon: '✗',
       title: 'Council rejected the codebase — agent must fix before any '
         + 'run launches' },
+    error:                { cls: 'sb-bad', icon: '⚠',
+      title: s.error || s.summary || 'Required code review failed' },
+    skipped:              { cls: 'sb-warn', icon: '·',
+      title: s.summary || 'Code review is disabled; no review was performed' },
     blocked_on_preflight: { cls: 'sb-bad', icon: '⚠',
       title: 'Bless blocked — pre-flight steps 1+2 must pass before council '
         + 'review can start' },
@@ -1190,6 +1194,7 @@ async function _paintCouncilReviewModal() {
   }
   const statusLabel = ({
     pending: 'In progress', approved: 'Approved', rejected: 'Changes requested',
+    error: 'Review incomplete', skipped: 'Disabled',
     blocked_on_preflight: 'Blocked on pre-flight', not_requested: 'Not requested',
   })[s.status] || s.status;
   const doneCount = reviewers.filter(r => verdicts[r]).length;
@@ -1222,7 +1227,8 @@ async function _paintCouncilReviewModal() {
     (s.summary ? `<div class="crv-summary">${esc(s.summary)}</div>` : '') +
     `<div class="crv-revs">` +
       (reviewers.length ? reviewers.map(revRow).join('')
-        : '<div class="crv-wait">Waiting for the review to start…</div>') +
+        : (s.status === 'pending' || s.status === 'not_requested'
+          ? '<div class="crv-wait">Waiting for the review to start…</div>' : '')) +
     '</div>' +
     (rv.system_prompt
       ? `<details class="crv-prompt"><summary>Review criteria (system prompt ` +
@@ -1598,6 +1604,12 @@ function _watchPaperProposal(pid) {
   const poll = async () => {
     try {
       const p = await api('/paper/proposal/' + pid);
+      if (p && p.status === 'error') {
+        sc.remove();
+        await aruiAlert((p.council_responses || {})._error || 'A selected model failed. The assessment is incomplete; retry after fixing its access.');
+        try { _renderPaperProposalsHistory(); } catch (e) {}
+        return;
+      }
       if (p && p.status === 'ready') {
         sc.remove();
         _showPaperProposalResults(p);
@@ -1611,6 +1623,10 @@ function _watchPaperProposal(pid) {
 }
 
 function _showPaperProposalResults(p) {
+  if (p.status === 'error') {
+    aruiAlert((p.council_responses || {})._error || 'A selected model failed. The assessment is incomplete; retry after fixing its access.');
+    return;
+  }
   const sc = el('div', 'mscrim');
   const m = el('div', 'modal modal-proposal');
   const responses = p.council_responses || {};
@@ -4986,11 +5002,24 @@ function showScopingModal() {
     if (ScopeUI.finalizing) { ScopeUI.finalizePending = true; return; }
     ScopeUI.finalizing = true;
     const sync = document.getElementById('scope-sync');
-    if (sync) sync.style.display = '';
+    if (sync) {
+      sync.style.display = '';
+      sync.textContent = 'Updating plan…';
+      sync.removeAttribute('role');
+    }
     let d;
-    try { d = await post('/scope/finalize', {}); } catch (e) { d = null; }
+    try { d = await post('/scope/finalize', {}); } catch (e) { d = { error: e.message }; }
     ScopeUI.finalizing = false;
-    if (sync) sync.style.display = 'none';
+    if (d && d.error) {
+      if (sync) {
+        sync.style.display = '';
+        sync.textContent = 'Plan update failed: ' + d.error + ' Your previous plan is preserved.';
+        sync.setAttribute('role', 'alert');
+      }
+      ScopeUI.finalizePending = false;
+      return;
+    }
+    if (sync) { sync.style.display = 'none'; sync.removeAttribute('role'); }
     if (d && d.synthesis) applyPlanUpdate(d);
     if (ScopeUI.finalizePending) { ScopeUI.finalizePending = false; autoFinalize(); }
   }
@@ -5021,7 +5050,8 @@ function showScopingModal() {
     inp.disabled = false; inp.focus();
     if (d && d.messages) {
       renderChat(d.messages);
-      autoFinalize();        // re-sync the plan in the background, no blocking
+      if (d.error) inp.value = text;
+      else autoFinalize();  // only re-synthesize after a successful model turn
     }
   }
   function keptIdx(kind, n) {

@@ -78,9 +78,11 @@ def _skip() -> dict:
 
 
 def _model_visible(model: str, available: list[str]) -> bool:
-    """Lenient visibility check: exact id, or the configured model is a prefix
-    of / contained in an available id (handles date-suffixed variants and the
-    ``models/<name>`` Gemini prefixing)."""
+    """Match the selected ID, allowing Gemini's resource-name prefix only.
+
+    A sibling such as gpt-5-mini must never certify access to gpt-5.
+    Provider-managed aliases are handled explicitly by their own validator.
+    """
     m = (model or "").strip().lower()
     if not m:
         return True
@@ -88,7 +90,7 @@ def _model_visible(model: str, available: list[str]) -> bool:
         a = (a or "").strip().lower()
         if not a:
             continue
-        if m == a or m in a or a.endswith(m) or a.endswith("/" + m):
+        if m.removeprefix("models/") == a.removeprefix("models/"):
             return True
     return False
 
@@ -320,49 +322,15 @@ def _http_err(provider: str, e, t0) -> dict:
 # ─────────────────────────── advisor resolution ───────────────────────────
 
 def resolve_advisor(cfg: dict) -> dict:
-    """Choose the EFFECTIVE scoping advisor provider from the keys present.
+    """Describe the selected advisor; missing access never changes its model."""
+    from .provider_config import requirement_error
 
-    - If the configured/default provider (``scoping_model``) has a key, use it.
-    - Else if exactly one advisor-capable key is configured, use that one
-      (in particular the "only Claude key pasted" path resolves to Claude, not
-      a Gemini default with a fallback warning).
-    - Else if several keys but not the configured one, pick a stable order
-      (claude, gemini, openai) and warn.
-    Returns ``{"provider", "model", "warning"}``.
-    """
-    selected = str(cfg.get("scoping_model") or "").strip()
-    if provider_for(selected) in {"opencode", "flint"}:
-        from .provider_config import requirement_error
-        return {"provider": provider_for(selected), "model": selected,
-                "warning": requirement_error(selected, cfg)}
-    def has(k):
-        return bool((cfg.get(k) or "").strip())
-    keyed = {"claude": has("claude_token"),
-             "gemini": has("gemini_token"),
-             "openai": has("openai_token")}
-    configured_model = (cfg.get("scoping_model") or "gemini-3.8-flash").strip().lower()
-    configured = provider_for(configured_model) or configured_model
-    if configured not in keyed:
-        configured = "gemini"
-    present = [p for p, y in keyed.items() if y]
-    models = {p: _model_for_provider(cfg, p)
-              for p in ("claude", "gemini", "openai")}
-
-    if keyed.get(configured):
-        return {"provider": configured, "model": models[configured],
-                "warning": ""}
-    if len(present) == 1:
-        p = present[0]
-        return {"provider": p, "model": models[p],
-                "warning": (f"configured advisor '{configured}' has no key; "
-                            f"using the only configured provider '{p}'")}
-    for p in ("claude", "gemini", "openai"):
-        if keyed.get(p):
-            return {"provider": p, "model": models[p],
-                    "warning": (f"configured advisor '{configured}' has no key; "
-                                f"falling back to '{p}'")}
-    return {"provider": configured, "model": models[configured],
-            "warning": "no advisor key configured"}
+    selected = str(cfg.get("scoping_model") or DEFAULT_MODELS["gemini"]).strip()
+    # Historical configurations stored a provider name instead of a model.
+    # Resolving that explicit alias is independent of available credentials.
+    selected = DEFAULT_MODELS.get(selected, selected)
+    return {"provider": provider_for(selected), "model": selected,
+            "warning": requirement_error(selected, cfg)}
 
 
 # ─────────────────────────────── orchestrator ─────────────────────────────

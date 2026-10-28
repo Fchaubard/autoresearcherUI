@@ -107,13 +107,15 @@ def test_cycle_skips_when_disabled(arui_env, setting_setter, monkeypatch):
     assert out is None
 
 
-def test_cycle_skips_when_no_key(arui_env, setting_setter, monkeypatch):
+def test_cycle_reports_selected_model_error_when_no_key(arui_env, setting_setter, monkeypatch):
     from backend.app import pi
     setting_setter("onboarding", {"pi_agent_enabled": True,
                                     "pi_agent_model": "gemini-2.5-pro"})
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     out = pi.cycle()
-    assert out is None
+    assert out["status"] == "error"
+    assert out["model"] == "gemini-2.5-pro"
+    assert "gemini-2.5-pro" in out["error"]
 
 
 def test_cycle_dispatches_to_paper_when_in_paper_mode(arui_env, monkeypatch):
@@ -132,7 +134,7 @@ def test_cycle_dispatches_to_paper_when_in_paper_mode(arui_env, monkeypatch):
     assert out["mode"] == "paper"
 
 
-def test_cycle_paper_skips_when_no_key(arui_env, setting_setter,
+def test_cycle_paper_reports_selected_model_error_when_no_key(arui_env, setting_setter,
                                           monkeypatch):
     from backend.app import pi, paper
     paper.set_project_mode("paper")
@@ -142,7 +144,10 @@ def test_cycle_paper_skips_when_no_key(arui_env, setting_setter,
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    assert pi.cycle_paper() is None
+    out = pi.cycle_paper()
+    assert out["status"] == "error"
+    assert out["model"] == "gemini-2.5-pro"
+    assert out["mode"] == "paper"
 
 
 def test_cycle_paper_happy_path(arui_env, setting_setter, db_session,

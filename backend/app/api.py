@@ -17,7 +17,7 @@ import threading
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Request, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -2779,10 +2779,8 @@ async def post_onboarding(request: Request):
                  "tokens": results}, status_code=400)
         optional_bad = [name for name in ("openai", "gemini", "github", "gmail")
                         if (results.get(name) or {}).get("ok") is False]
-        if "openai" in optional_bad:
-            cfg["council_enable_openai"] = False
-        if "gemini" in optional_bad:
-            cfg["council_enable_gemini"] = False
+        # Preserve every selected role and enable flag. A failed provider
+        # check must not silently remove a reviewer from the council.
         cfg["token_validation_warnings"] = optional_bad
         try:
             from .agent_cli import command
@@ -3801,6 +3799,13 @@ async def paper_proposal_start():
     """Create a paper_proposal row, kick off council assessments
     asynchronously. Returns immediately with the proposal id."""
     from . import paper as _paper, council as _c
+    cfg = _c._settings()
+    reviewers = _c.configured_reviewers(cfg)
+    if cfg.get("council_enable_claude_tiebreaker", True):
+        reviewers.append("claude")
+    error = _paper_reviewer_error(cfg, reviewers)
+    if error:
+        return JSONResponse({"ok": False, "detail": error}, status_code=400)
     pid = "pp-" + os.urandom(5).hex()
     db = SessionLocal()
     try:
@@ -3818,21 +3823,61 @@ async def paper_proposal_start():
     return {"proposal_id": pid, "status": "in_progress"}
 
 
+def _paper_reviewer_error(cfg: dict, reviewers: list[str]) -> str:
+    """Missing selected reviewers block a task instead of changing its models."""
+    from . import council
+    from .provider_config import requirement_error
+    if not reviewers:
+        return "Configure and enable a council reviewer before starting this task."
+    for reviewer in reviewers:
+        model = cfg.get(f"council_{reviewer}_model") or council.DEFAULTS[f"council_{reviewer}_model"]
+        error = requirement_error(model)
+        if error:
+            return f"Selected reviewer {model}: {error}. No other model was used."
+    return ""
+
+
+def _valid_paper_assessment(out) -> bool:
+    if not isinstance(out, dict):
+        return False
+    return (
+        out.get("recommendation") in ("proceed_to_paper", "keep_researching", "pivot")
+        and out.get("novelty") in ("high", "medium", "low", "unclear")
+        and all(isinstance(out.get(k), str) and out[k].strip()
+                for k in ("novelty_rationale", "rationale_md"))
+        and isinstance(out.get("red_flags"), list)
+        and all(isinstance(x, str) for x in out["red_flags"])
+        and isinstance(out.get("claims"), list)
+        and all(isinstance(c, dict)
+                and all(isinstance(c.get(k), str) and c[k].strip() for k in ("title", "summary"))
+                and c.get("evidence_strength") in ("strong", "suggestive", "anecdotal")
+                for c in out["claims"]))
+
+
+def _valid_rebuttal_concerns(out) -> bool:
+    return (isinstance(out, dict) and isinstance(out.get("concerns"), list)
+            and all(isinstance(c, dict)
+                    and all(isinstance(c.get(k), str) and c[k].strip()
+                            for k in ("title", "why", "suggested_action"))
+                    and c.get("category") in ("experiment", "rewrite", "cite", "clarify")
+                    for c in out["concerns"]))
+
+
 def _run_paper_proposal_council(proposal_id: str) -> None:
     from . import council as _c, paper as _paper
     cfg = _c._settings()
-    available = _c._available_reviewers(cfg)
-    if _c._claude_available(cfg) and "claude" not in available:
+    available = _c.configured_reviewers(cfg)
+    if cfg.get("council_enable_claude_tiebreaker", True):
         available.append("claude")
-    if not available:
+    error = _paper_reviewer_error(cfg, available)
+    if error:
         db = SessionLocal()
         try:
             p = db.query(PaperProposal).filter(
                 PaperProposal.id == proposal_id).first()
             if p:
-                p.status = "ready"
-                p.council_responses = {"_no_reviewers":
-                    "No council reviewers configured. Add API keys in Settings."}
+                p.status = "error"
+                p.council_responses = {"_error": error}
                 db.commit()
         finally:
             db.close()
@@ -3886,30 +3931,38 @@ def _run_paper_proposal_council(proposal_id: str) -> None:
     results: dict[str, dict] = {}
     threads = []
     def _one(rev):
-        out = _c._call_reviewer(
-            rev,
-            "You are a senior reviewer for an ML conference (NeurIPS-tier). "
-            "Assess whether the project below is ready to write up as a paper.",
-            user, cfg)
-        if out is not None:
-            results[rev] = out
+        try:
+            out = _c._call_reviewer(
+                rev,
+                "You are a senior reviewer for an ML conference (NeurIPS-tier). "
+                "Assess whether the project below is ready to write up as a paper.",
+                user, cfg)
+            if _valid_paper_assessment(out):
+                results[rev] = out
+        except Exception:
+            pass  # Missing results below make this an explicit failed proposal.
     for rev in available:
         t = threading.Thread(target=_one, args=(rev,), daemon=True)
         t.start(); threads.append(t)
     for t in threads:
         t.join(timeout=300)
+    responses = dict(results)
+    missing = [rev for rev in available if rev not in responses]
+    if missing:
+        failed_models = [cfg.get(f"council_{rev}_model") or _c.DEFAULTS[f"council_{rev}_model"] for rev in missing]
+        responses["_error"] = "Selected reviewers failed: " + ", ".join(failed_models) + ". Assessment incomplete; no substitute models were used."
     db = SessionLocal()
     try:
         p = db.query(PaperProposal).filter(
             PaperProposal.id == proposal_id).first()
         if p:
-            p.status = "ready"
-            p.council_responses = results
+            p.status = "error" if missing else "ready"
+            p.council_responses = responses
             db.commit()
     finally:
         db.close()
     try:
-        bus.publish("paper", "proposal_ready", {"id": proposal_id})
+        bus.publish("paper", "proposal_failed" if missing else "proposal_ready", {"id": proposal_id})
     except Exception:
         pass
 
@@ -4017,6 +4070,11 @@ async def paper_enter(request: Request):
     body = await _safe_json(request)
     meta = body.get("meta") or {}
     proposal_id = body.get("proposal_id") or ""
+    if proposal_id:
+        with SessionLocal() as db:
+            proposal = db.get(PaperProposal, proposal_id)
+            if proposal and proposal.status in {"error", "in_progress"}:
+                return JSONResponse({"ok": False, "detail": "The selected proposal has not completed its model assessments. Retry the assessment before accepting it."}, status_code=409)
     return _paper.enter_paper_mode(
         meta=meta, proposal_id=proposal_id,
         reason="user accepted paper proposal")
@@ -5041,9 +5099,10 @@ async def paper_reviewer_sim_run():
     immediately; results land in paper_review_sim rows asynchronously."""
     from . import council as _c, paper as _paper
     from fastapi.responses import JSONResponse
-    if not _c._available_reviewers(_c._settings()):
-        return JSONResponse({"ok": False, "detail":
-            "Configure and enable a council reviewer before running a reviewer simulation."}, status_code=400)
+    cfg = _c._settings()
+    error = _paper_reviewer_error(cfg, _c.configured_reviewers(cfg))
+    if error:
+        return JSONResponse({"ok": False, "detail": error}, status_code=400)
     folder = _paper.paper_folder()
     sources = ([folder / "main.tex"] + list(folder.glob("sections/*.tex"))) if folder else []
     if not any(path.is_file() and path.read_text(errors="ignore").strip() for path in sources):
@@ -5058,7 +5117,7 @@ def _run_reviewer_sim():
     review with suggested defensive ablations as decisions."""
     from . import council as _c, paper as _paper, paper_compile
     cfg = _c._settings()
-    available = _c._available_reviewers(cfg)
+    available = _c.configured_reviewers(cfg)
     if not available:
         return
     folder = _paper.paper_folder()
@@ -5088,12 +5147,18 @@ def _run_reviewer_sim():
             "You are a strict NeurIPS reviewer. Be honest, not polite.",
             prompt, cfg)
         if not out:
+            model = cfg.get(f"council_{rev}_model") or _c.DEFAULTS[f"council_{rev}_model"]
+            with SessionLocal() as db:
+                db.add(PaperReviewSim(id="rs-" + os.urandom(4).hex(), model=model,
+                    content_md=f"Selected model {model} failed to return a valid review. No substitute model was used.",
+                    suggested_decisions_json=[]))
+                db.commit()
             continue
         sid = "rs-" + os.urandom(4).hex()
         db = SessionLocal()
         try:
             db.add(PaperReviewSim(
-                id=sid, model=rev,
+                id=sid, model=cfg.get(f"council_{rev}_model") or _c.DEFAULTS[f"council_{rev}_model"],
                 content_md=json.dumps(out, indent=2),
                 suggested_decisions_json=out.get("suggested_ablations", [])))
             db.commit()
@@ -5518,9 +5583,10 @@ async def paper_rebuttal_parse(request: Request):
         return {"ok": False, "detail": "reviews must be a non-empty list"}
     filed = 0
     cfg = _c._settings()
-    available = _c._available_reviewers(cfg)
-    if not available:
-        return {"ok": False, "detail": "no council reviewers configured"}
+    available = _c.configured_reviewers(cfg)
+    error = _paper_reviewer_error(cfg, available[:1])
+    if error:
+        return JSONResponse({"ok": False, "detail": error}, status_code=400)
     for i, rv in enumerate(reviews):
         text = (str(rv).strip())[:8000]
         if not text:
@@ -5538,8 +5604,10 @@ async def paper_rebuttal_parse(request: Request):
         out = _c._call_reviewer(
             rev, "Extract concerns from the review. Be honest, not polite.",
             prompt, cfg)
-        if not out:
-            continue
+        if not _valid_rebuttal_concerns(out):
+            model = cfg.get(f"council_{rev}_model") or _c.DEFAULTS[f"council_{rev}_model"]
+            return JSONResponse({"ok": False, "filed": filed, "detail":
+                f"Selected model {model} failed to return valid concerns on review {i + 1}. No substitute model was used."}, status_code=502)
         for cn in (out.get("concerns") or [])[:6]:
             cat = (cn.get("category") or "").lower()
             kind = ("add_ablation" if cat == "experiment"

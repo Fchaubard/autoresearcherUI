@@ -1,0 +1,85 @@
+{
+  "results": [
+    {
+      "model": "claude-haiku-4-5-20251001",
+      "role": "research",
+      "transport": "RealAgent.start",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "effective_models": [
+        "claude-haiku-4-5-20251001"
+      ],
+      "started_at": "2026-10-28T22:40:33.649426+00:00",
+      "duration_seconds": 24.77
+    },
+    {
+      "model": "claude-haiku-4-5-20251001",
+      "role": "author",
+      "transport": "author_agent.start + feed_brief",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "effective_models": [
+        "claude-haiku-4-5-20251001"
+      ],
+      "started_at": "2026-10-28T22:40:33.594931+00:00",
+      "feeder_observed_work": true,
+      "duration_seconds": 24.95
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "role": "author",
+      "transport": "author_agent.start + feed_brief",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "effective_models": [
+        "gpt-5.6-sol"
+      ],
+      "started_at": "2026-10-28T22:41:00.910835+00:00",
+      "feeder_observed_work": true,
+      "duration_seconds": 21.26
+    },
+    {
+      "model": "gemini-3.1-flash-lite",
+      "role": "research",
+      "transport": "RealAgent.start",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "effective_models": [
+        "gemini-3.1-flash-lite"
+      ],
+      "started_at": "2026-10-28T22:41:25.072283+00:00",
+      "duration_seconds": 14.1
+    },
+    {
+      "model": "gemini-3.1-flash-lite",
+      "role": "author",
+      "transport": "author_agent.start + feed_brief",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "effective_models": [
+        "gemini-3.1-flash-lite"
+      ],
+      "started_at": "2026-10-28T22:41:41.985539+00:00",
+      "feeder_observed_work": true,
+      "duration_seconds": 16.28
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "role": "research",
+      "transport": "RealAgent.start",
+      "status": "passed",
+      "first_turn": true,
+      "second_turn": true,
+      "effective_models": [
+        "gpt-5.6-sol"
+      ],
+      "started_at": "2026-10-28T22:43:31.366662+00:00",
+      "duration_seconds": 20.13
+    }
+  ]
+}

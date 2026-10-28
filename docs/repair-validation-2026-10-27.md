@@ -1,5 +1,9 @@
 # Research controls, model providers, and mobile repair
 
+This is the October 27 validation record. Subsequent model selection fixes
+and real inference coverage are recorded in the
+[October 28 role matrix](model-role-matrix-2026-10-28.md).
+
 This change addresses the October 27 email storm, ineffective research halt,
 live settings failures, blocked iPhone Send button, and post-submit mobile
 research review. The subsequent button audit also repaired file creation/save

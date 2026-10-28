@@ -1,0 +1,1407 @@
+{
+  "generated_at": "2026-10-28T22:36:57.487660+00:00",
+  "results": [
+    {
+      "model": "opencode/nemotron-3-ultra-free",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:25:39.997910+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "requests": [
+        {
+          "requested_model": "opencode/nemotron-3-ultra-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "model_unavailable"
+        }
+      ],
+      "dispatched_models": [
+        "opencode/nemotron-3-ultra-free"
+      ],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "model_unavailable",
+      "elapsed_seconds": 2.825,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/nemotron-3-ultra-free",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:25:43.093206+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "schema_errors": [
+        "no_parsed_object"
+      ],
+      "dispatched_models": [
+        "opencode/nemotron-3-ultra-free"
+      ],
+      "requests": [
+        {
+          "requested_model": "opencode/nemotron-3-ultra-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "model_unavailable"
+        }
+      ],
+      "output_characters": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_fields": [],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "model_unavailable",
+      "elapsed_seconds": 2.648,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/nemotron-3-ultra-free",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:25:45.957350+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "schema_errors": [
+        "no_parsed_object"
+      ],
+      "dispatched_models": [
+        "opencode/nemotron-3-ultra-free"
+      ],
+      "requests": [
+        {
+          "requested_model": "opencode/nemotron-3-ultra-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "model_unavailable"
+        }
+      ],
+      "output_characters": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_fields": [],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "model_unavailable",
+      "elapsed_seconds": 2.732,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/nemotron-3-ultra-free",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:25:48.958050+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "schema_errors": [
+        "no_parsed_object"
+      ],
+      "dispatched_models": [
+        "opencode/nemotron-3-ultra-free"
+      ],
+      "requests": [
+        {
+          "requested_model": "opencode/nemotron-3-ultra-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "model_unavailable"
+        }
+      ],
+      "output_characters": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_fields": [],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "model_unavailable",
+      "elapsed_seconds": 3.235,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_repeated_after_quota"
+    },
+    {
+      "model": "opencode/nemotron-3-ultra-free",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:25:52.458710+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "requests": [
+        {
+          "requested_model": "opencode/nemotron-3-ultra-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "model_unavailable",
+          "http_status": 400
+        }
+      ],
+      "dispatched_models": [
+        "opencode/nemotron-3-ultra-free"
+      ],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "model_unavailable",
+      "http_status": 400,
+      "elapsed_seconds": 2.895,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/nemotron-3.5-lightning-free",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:25:55.573571+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "opencode/nemotron-3.5-lightning-free"
+      ],
+      "requests": [],
+      "output_characters": 4387,
+      "output_sha256": "b30e58050cf9eff533542f81c77ac7eb57b5c6416c5e78cdf445d96f69f48e94",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 36.479,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/nemotron-3.5-lightning-free",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:26:32.349727+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "opencode/nemotron-3.5-lightning-free"
+      ],
+      "requests": [],
+      "output_characters": 474,
+      "output_sha256": "0b6085d05aa81abb550bc4174d81952d30ef523d9a28a634c36530b3a8dca7a3",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 48.899,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/nemotron-3.5-lightning-free",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:27:21.455900+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "opencode/nemotron-3.5-lightning-free"
+      ],
+      "requests": [],
+      "output_characters": 624,
+      "output_sha256": "2c7df25d0ea96a16e01feccdaf0005fecbb17884a195625267f8ce62e77b15d7",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 84.539,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/nemotron-3.5-lightning-free",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:28:46.394502+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "schema_errors": [
+        "no_parsed_object"
+      ],
+      "dispatched_models": [
+        "opencode/nemotron-3.5-lightning-free"
+      ],
+      "requests": [
+        {
+          "requested_model": "opencode/nemotron-3.5-lightning-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "quota_exhausted",
+          "http_status": 429
+        }
+      ],
+      "output_characters": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_fields": [],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "quota_exhausted",
+      "http_status": 429,
+      "elapsed_seconds": 5.43,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_repeated_after_quota"
+    },
+    {
+      "model": "opencode/nemotron-3.5-lightning-free",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:28:52.274968+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "opencode/nemotron-3.5-lightning-free"
+      ],
+      "requests": [],
+      "output_characters": 41,
+      "output_sha256": "db91b91956850fe790be08398941e3d0fdf1f647a945a9688bfa0a8a5996fd8d",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 9.273,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/nemotron-3.5-super-vl-free",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:29:01.937651+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "opencode/nemotron-3.5-super-vl-free"
+      ],
+      "requests": [],
+      "output_characters": 2520,
+      "output_sha256": "53315b6774859694d6539ef325bd6a37b68c33a3eb04246be071b8a63ed33801",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 60.722,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/nemotron-3.5-super-vl-free",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:30:03.055684+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "opencode/nemotron-3.5-super-vl-free"
+      ],
+      "requests": [],
+      "output_characters": 1109,
+      "output_sha256": "ad16264721727ee87fc2cd840ba169d04bca0e11f10a127634926da75f7bc12e",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 53.403,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/nemotron-3.5-super-vl-free",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:30:56.889031+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "opencode/nemotron-3.5-super-vl-free"
+      ],
+      "requests": [],
+      "output_characters": 1029,
+      "output_sha256": "011d113c9825d0e682ee46591ea291f3e6810b90f1aecc8e0b82bd7fb605c613",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 33.84,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/nemotron-3.5-super-vl-free",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:31:31.156134+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "schema_errors": [
+        "no_parsed_object"
+      ],
+      "dispatched_models": [
+        "opencode/nemotron-3.5-super-vl-free"
+      ],
+      "requests": [
+        {
+          "requested_model": "opencode/nemotron-3.5-super-vl-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "quota_exhausted",
+          "http_status": 429
+        }
+      ],
+      "output_characters": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_fields": [],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "quota_exhausted",
+      "http_status": 429,
+      "elapsed_seconds": 5.493,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_repeated_after_quota"
+    },
+    {
+      "model": "opencode/nemotron-3.5-super-vl-free",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:31:37.029390+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "opencode/nemotron-3.5-super-vl-free"
+      ],
+      "requests": [],
+      "output_characters": 41,
+      "output_sha256": "db91b91956850fe790be08398941e3d0fdf1f647a945a9688bfa0a8a5996fd8d",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 58.284,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/big-pickle",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:32:35.681693+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "opencode/big-pickle"
+      ],
+      "requests": [],
+      "output_characters": 5245,
+      "output_sha256": "82afe84cf630a64feb8ad30868f31e4ceb2de154a90fb67c849d05d90cff50e6",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 22.023,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/big-pickle",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:32:58.194890+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "opencode/big-pickle"
+      ],
+      "requests": [],
+      "output_characters": 1352,
+      "output_sha256": "6f80324140e9b95cebbad2ac3ccf4dbf36defaa663dc09d8b328e40272424143",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 32.839,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/big-pickle",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:33:31.356009+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "opencode/big-pickle"
+      ],
+      "requests": [],
+      "output_characters": 1871,
+      "output_sha256": "156770a35688a943b83465792226f76fb4b9a8bff80ca6e0d1419ba75b13003e",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 14.711,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/big-pickle",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:33:46.468453+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "schema_errors": [
+        "no_parsed_object"
+      ],
+      "dispatched_models": [
+        "opencode/big-pickle"
+      ],
+      "requests": [
+        {
+          "requested_model": "opencode/big-pickle",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "quota_exhausted",
+          "http_status": 429
+        }
+      ],
+      "output_characters": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_fields": [],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "quota_exhausted",
+      "http_status": 429,
+      "elapsed_seconds": 5.37,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_repeated_after_quota"
+    },
+    {
+      "model": "opencode/big-pickle",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:33:52.170993+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "opencode/big-pickle"
+      ],
+      "requests": [],
+      "output_characters": 292,
+      "output_sha256": "39c3f19dd459c092844052a934e513e6c9bc4bd7d940b7ba8058c4d530ca67bc",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 6.876,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/glm-5.3-flash-free",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:33:59.398946+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "opencode/glm-5.3-flash-free"
+      ],
+      "requests": [],
+      "output_characters": 3551,
+      "output_sha256": "de04ccf6f5c665c18490744a5a9749b3ac5a0cdfb91dc04c949c5040bc722178",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 16.016,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/glm-5.3-flash-free",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:34:15.877586+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "opencode/glm-5.3-flash-free"
+      ],
+      "requests": [],
+      "output_characters": 1560,
+      "output_sha256": "91aeabe9723ca91071266f0c0814a84262d9904c9ba21196409fd2f68a263b3e",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 10.227,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/glm-5.3-flash-free",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:34:26.440990+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "opencode/glm-5.3-flash-free"
+      ],
+      "requests": [],
+      "output_characters": 1198,
+      "output_sha256": "52dd845354b97dbf6dffe34045f76de697bea70e0d3656dfabf88486efdff3ae",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 10.415,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/glm-5.3-flash-free",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:34:37.262586+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "schema_errors": [
+        "no_parsed_object"
+      ],
+      "dispatched_models": [
+        "opencode/glm-5.3-flash-free"
+      ],
+      "requests": [
+        {
+          "requested_model": "opencode/glm-5.3-flash-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "quota_exhausted",
+          "http_status": 429
+        }
+      ],
+      "output_characters": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_fields": [],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "quota_exhausted",
+      "http_status": 429,
+      "elapsed_seconds": 5.709,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_repeated_after_quota"
+    },
+    {
+      "model": "opencode/glm-5.3-flash-free",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:34:43.375338+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "opencode/glm-5.3-flash-free"
+      ],
+      "requests": [],
+      "output_characters": 268,
+      "output_sha256": "30c635d7fe7c6bc515912d2c129cb158c6945530b49385b62365654b2111e69f",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 7.083,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/deepseek-v4.1-flash-free",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:34:50.869614+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "opencode/deepseek-v4.1-flash-free"
+      ],
+      "requests": [],
+      "output_characters": 4970,
+      "output_sha256": "287bccc2cb614e2ed3960e84111844a719e7100755090cff892310bc8073910c",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 17.092,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/deepseek-v4.1-flash-free",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:35:08.259952+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "opencode/deepseek-v4.1-flash-free"
+      ],
+      "requests": [],
+      "output_characters": 2363,
+      "output_sha256": "ec68b8bf1564c7bf25d4657eef4b72d394becbf0526fea191f6f29df553d0fdd",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 12.701,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/deepseek-v4.1-flash-free",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:35:21.257492+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "opencode/deepseek-v4.1-flash-free"
+      ],
+      "requests": [],
+      "output_characters": 2354,
+      "output_sha256": "3526d7359dc633640a55b2be4014abfa8afeee0d4f36d5ee196e160e7862de2e",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 14.69,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/deepseek-v4.1-flash-free",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:35:36.427850+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "schema_errors": [
+        "no_parsed_object"
+      ],
+      "dispatched_models": [
+        "opencode/deepseek-v4.1-flash-free"
+      ],
+      "requests": [
+        {
+          "requested_model": "opencode/deepseek-v4.1-flash-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "quota_exhausted",
+          "http_status": 429
+        }
+      ],
+      "output_characters": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_fields": [],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "quota_exhausted",
+      "http_status": 429,
+      "elapsed_seconds": 4.438,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_repeated_after_quota"
+    },
+    {
+      "model": "opencode/deepseek-v4.1-flash-free",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:35:41.290938+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "requests": [
+        {
+          "requested_model": "opencode/deepseek-v4.1-flash-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "quota_exhausted",
+          "http_status": 429
+        }
+      ],
+      "dispatched_models": [
+        "opencode/deepseek-v4.1-flash-free"
+      ],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "quota_exhausted",
+      "http_status": 429,
+      "elapsed_seconds": 4.407,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/beam-free",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:35:46.094545+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "requests": [
+        {
+          "requested_model": "opencode/beam-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "quota_exhausted",
+          "http_status": 429
+        }
+      ],
+      "dispatched_models": [
+        "opencode/beam-free"
+      ],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "quota_exhausted",
+      "http_status": 429,
+      "elapsed_seconds": 4.149,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/beam-free",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:35:50.675929+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "schema_errors": [
+        "no_parsed_object"
+      ],
+      "dispatched_models": [
+        "opencode/beam-free"
+      ],
+      "requests": [
+        {
+          "requested_model": "opencode/beam-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "quota_exhausted",
+          "http_status": 429
+        }
+      ],
+      "output_characters": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_fields": [],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "quota_exhausted",
+      "http_status": 429,
+      "elapsed_seconds": 4.695,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/beam-free",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:35:55.756371+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "schema_errors": [
+        "no_parsed_object"
+      ],
+      "dispatched_models": [
+        "opencode/beam-free"
+      ],
+      "requests": [
+        {
+          "requested_model": "opencode/beam-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "quota_exhausted",
+          "http_status": 429
+        }
+      ],
+      "output_characters": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_fields": [],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "quota_exhausted",
+      "http_status": 429,
+      "elapsed_seconds": 4.677,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/beam-free",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:36:00.860972+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "schema_errors": [
+        "no_parsed_object"
+      ],
+      "dispatched_models": [
+        "opencode/beam-free"
+      ],
+      "requests": [
+        {
+          "requested_model": "opencode/beam-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "quota_exhausted",
+          "http_status": 429
+        }
+      ],
+      "output_characters": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_fields": [],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "quota_exhausted",
+      "http_status": 429,
+      "elapsed_seconds": 4.596,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_repeated_after_quota"
+    },
+    {
+      "model": "opencode/beam-free",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:36:05.859429+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "requests": [
+        {
+          "requested_model": "opencode/beam-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "quota_exhausted",
+          "http_status": 429
+        }
+      ],
+      "dispatched_models": [
+        "opencode/beam-free"
+      ],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "quota_exhausted",
+      "http_status": 429,
+      "elapsed_seconds": 4.365,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/flint-40b-free",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:36:10.624630+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "requests": [
+        {
+          "requested_model": "opencode/flint-40b-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "quota_exhausted",
+          "http_status": 429
+        }
+      ],
+      "dispatched_models": [
+        "opencode/flint-40b-free"
+      ],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "quota_exhausted",
+      "http_status": 429,
+      "elapsed_seconds": 4.361,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/flint-40b-free",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:36:15.455423+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "schema_errors": [
+        "no_parsed_object"
+      ],
+      "dispatched_models": [
+        "opencode/flint-40b-free"
+      ],
+      "requests": [
+        {
+          "requested_model": "opencode/flint-40b-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "quota_exhausted",
+          "http_status": 429
+        }
+      ],
+      "output_characters": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_fields": [],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "quota_exhausted",
+      "http_status": 429,
+      "elapsed_seconds": 4.367,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/flint-40b-free",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:36:20.135389+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "schema_errors": [
+        "no_parsed_object"
+      ],
+      "dispatched_models": [
+        "opencode/flint-40b-free"
+      ],
+      "requests": [
+        {
+          "requested_model": "opencode/flint-40b-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "quota_exhausted",
+          "http_status": 429
+        }
+      ],
+      "output_characters": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_fields": [],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "quota_exhausted",
+      "http_status": 429,
+      "elapsed_seconds": 3.422,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/flint-40b-free",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:36:23.930476+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "schema_errors": [
+        "no_parsed_object"
+      ],
+      "dispatched_models": [
+        "opencode/flint-40b-free"
+      ],
+      "requests": [
+        {
+          "requested_model": "opencode/flint-40b-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "quota_exhausted",
+          "http_status": 429
+        }
+      ],
+      "output_characters": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_fields": [],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "quota_exhausted",
+      "http_status": 429,
+      "elapsed_seconds": 4.243,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_repeated_after_quota"
+    },
+    {
+      "model": "opencode/flint-40b-free",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:36:28.547249+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "requests": [
+        {
+          "requested_model": "opencode/flint-40b-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "quota_exhausted",
+          "http_status": 429
+        }
+      ],
+      "dispatched_models": [
+        "opencode/flint-40b-free"
+      ],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "quota_exhausted",
+      "http_status": 429,
+      "elapsed_seconds": 3.812,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/mimo-v2.6-flash-free",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:36:32.725414+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "requests": [
+        {
+          "requested_model": "opencode/mimo-v2.6-flash-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "quota_exhausted",
+          "http_status": 429
+        }
+      ],
+      "dispatched_models": [
+        "opencode/mimo-v2.6-flash-free"
+      ],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "quota_exhausted",
+      "http_status": 429,
+      "elapsed_seconds": 4.21,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/mimo-v2.6-flash-free",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:36:37.293752+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "schema_errors": [
+        "no_parsed_object"
+      ],
+      "dispatched_models": [
+        "opencode/mimo-v2.6-flash-free"
+      ],
+      "requests": [
+        {
+          "requested_model": "opencode/mimo-v2.6-flash-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "quota_exhausted",
+          "http_status": 429
+        }
+      ],
+      "output_characters": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_fields": [],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "quota_exhausted",
+      "http_status": 429,
+      "elapsed_seconds": 4.261,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/mimo-v2.6-flash-free",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:36:41.942677+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "schema_errors": [
+        "no_parsed_object"
+      ],
+      "dispatched_models": [
+        "opencode/mimo-v2.6-flash-free"
+      ],
+      "requests": [
+        {
+          "requested_model": "opencode/mimo-v2.6-flash-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "quota_exhausted",
+          "http_status": 429
+        }
+      ],
+      "output_characters": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_fields": [],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "quota_exhausted",
+      "http_status": 429,
+      "elapsed_seconds": 4.657,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    },
+    {
+      "model": "opencode/mimo-v2.6-flash-free",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:36:47.062150+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "schema_errors": [
+        "no_parsed_object"
+      ],
+      "dispatched_models": [
+        "opencode/mimo-v2.6-flash-free"
+      ],
+      "requests": [
+        {
+          "requested_model": "opencode/mimo-v2.6-flash-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "quota_exhausted",
+          "http_status": 429
+        }
+      ],
+      "output_characters": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_fields": [],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "quota_exhausted",
+      "http_status": 429,
+      "elapsed_seconds": 4.761,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_repeated_after_quota"
+    },
+    {
+      "model": "opencode/mimo-v2.6-flash-free",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:36:52.322808+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "provider_error",
+      "requests": [
+        {
+          "requested_model": "opencode/mimo-v2.6-flash-free",
+          "error_type": "OpenCodeRequestError",
+          "error_category": "quota_exhausted",
+          "http_status": 429
+        }
+      ],
+      "dispatched_models": [
+        "opencode/mimo-v2.6-flash-free"
+      ],
+      "error_type": "OpenCodeRequestError",
+      "error_category": "quota_exhausted",
+      "http_status": 429,
+      "elapsed_seconds": 5.01,
+      "configuration_revision": "Readonly private context-file advisor with selected-model dispatch; matrix preceded final config-directory/DB and payload isolation.",
+      "strict_revalidation": "not_repeated_after_quota",
+      "same_model_prompt_revalidation": "not_required"
+    }
+  ],
+  "final_source_sha256": {
+    "backend/app/opencode_runtime.py": "bac872558f23ee421d569c711ca5d8270145f5be9687b207e583afcfb036f112",
+    "backend/app/provider_config.py": "3fd5a6d2afa4a18afd1e29d3ef94150e04e72472c0c13be53318fdf49a3691bc",
+    "backend/app/council.py": "15ba9c6b7ffcdd0d554e384042cfd8e47d68018a7f10bcab05a6ef6a99321fd4",
+    "backend/app/pi.py": "d368ab12ca6a3c080f1d1f4dd17eaa876169d215be04cc501df7048033e73856",
+    "backend/app/agent_cli.py": "a756eaf9d1e41af0bdf0b8920e49d735d7c29790aced446c373d24e2342ba5fa"
+  },
+  "strict_configuration": "App-owned config and private DB; exact provider/endpoint/package/API model and request body; all allowed agent models pinned; unpinned delegates denied.",
+  "quota_note": "After earlier successful free inference, HTTP429 free usage limit responses also blocked simple coding. Redundant retries were stopped. Captured CLI error responses exposed body only, with no Retry-After headers or reset time metadata recorded.",
+  "synthetic_validation": "35 focused tests including real installed CLI against synthetic local protocol, hostile global/project model/body/baseURL settings, readonly context permissions and rejection of unpinned custom delegates."
+}

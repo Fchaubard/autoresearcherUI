@@ -86,28 +86,27 @@ def test_scoping_order_prefers_configured_model(arui_env, monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "g")
     monkeypatch.setenv("OPENAI_API_KEY", "o")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "a")
-    assert council._scoping_order({"scoping_model": "gemini"})[0] == "gemini"
-    assert council._scoping_order({"scoping_model": "claude"})[0] == "claude"
-    assert council._scoping_order({"scoping_model": "openai"})[0] == "openai"
-    # every available reviewer is present, just reordered
-    assert set(council._scoping_order({"scoping_model": "claude"})) == {
-        "gemini", "openai", "claude"}
+    assert council._scoping_order({"scoping_model": "gemini-4-argon"}) == ["gemini"]
+    assert council._scoping_order({"scoping_model": "claude-opus-5"}) == ["claude"]
+    assert council._scoping_order({"scoping_model": "gpt-6-astra"}) == ["openai"]
 
 
-def test_scoping_order_default_and_unknown_fall_back_to_gemini(arui_env, monkeypatch):
+def test_scoping_order_default_and_unknown_is_error(arui_env, monkeypatch):
     from backend.app import council
     monkeypatch.setenv("GEMINI_API_KEY", "g")
     monkeypatch.setenv("OPENAI_API_KEY", "o")
     assert council._scoping_order({})[0] == "gemini"
-    assert council._scoping_order({"scoping_model": "bogus"})[0] == "gemini"
+    import pytest
+    with pytest.raises(RuntimeError, match="bogus"):
+        council._scoping_order({"scoping_model": "bogus"})
 
 
-def test_scoping_order_only_includes_available(arui_env, monkeypatch):
+def test_scoping_order_keeps_selected_model_even_without_key(arui_env, monkeypatch):
     from backend.app import council
     monkeypatch.setenv("GEMINI_API_KEY", "g")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    assert council._scoping_order({"scoping_model": "claude"}) == ["gemini"]
+    assert council._scoping_order({"scoping_model": "claude-opus-5"}) == ["claude"]
 
 
 def test_validate_scope_keys_drops_hallucinated_citations(arui_env):

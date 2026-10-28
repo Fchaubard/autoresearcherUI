@@ -91,7 +91,7 @@ def test_bundle_preserves_assets_and_freezes_submitted_pdf(client, paper_repo, t
 
 def test_reviewer_sim_missing_models_never_claims_started(client, monkeypatch):
     from backend.app import council
-    monkeypatch.setattr(council, "_available_reviewers", lambda cfg: [])
+    monkeypatch.setattr(council, "configured_reviewers", lambda cfg: [])
     response = client.post("/api/paper/reviewer_sim/run", json={})
     assert response.status_code == 400
     assert "reviewer" in response.json()["detail"]
@@ -99,7 +99,8 @@ def test_reviewer_sim_missing_models_never_claims_started(client, monkeypatch):
 
 def test_reviewer_sim_missing_paper_never_claims_started(client, monkeypatch):
     from backend.app import council, paper
-    monkeypatch.setattr(council, "_available_reviewers", lambda cfg: ["gemini"])
+    monkeypatch.setattr(council, "configured_reviewers", lambda cfg: ["gemini"])
+    monkeypatch.setenv("GEMINI_API_KEY", "synthetic")
     monkeypatch.setattr(paper, "paper_folder", lambda: None)
     response = client.post("/api/paper/reviewer_sim/run", json={})
     assert response.status_code == 400
@@ -110,9 +111,102 @@ def test_reviewer_sim_valid_request_starts_worker(client, paper_repo, monkeypatc
     from backend.app import council, api
     import threading
     import time
-    monkeypatch.setattr(council, "_available_reviewers", lambda cfg: ["gemini"])
+    monkeypatch.setattr(council, "configured_reviewers", lambda cfg: ["gemini"])
+    monkeypatch.setenv("GEMINI_API_KEY", "synthetic")
     called = threading.Event()
     monkeypatch.setattr(api, "_run_reviewer_sim", called.set)
     response = client.post("/api/paper/reviewer_sim/run", json={})
     assert response.json()["status"] == "started"
     assert called.wait(2)
+
+
+def test_reviewer_sim_missing_selected_key_does_not_use_other_model(client, paper_repo, monkeypatch):
+    from backend.app import api
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic")
+    monkeypatch.setattr(api, "_run_reviewer_sim", lambda: pytest.fail("must not substitute reviewer B"))
+    response = client.post("/api/paper/reviewer_sim/run", json={})
+    assert response.status_code == 400
+    assert "gemini-3.8-flash" in response.json()["detail"]
+
+
+def test_rebuttal_failure_does_not_switch_models(client, monkeypatch):
+    from backend.app import council
+    monkeypatch.setenv("GEMINI_API_KEY", "synthetic")
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic")
+    seen = []
+    monkeypatch.setattr(council, "_call_reviewer", lambda reviewer, *args: seen.append(reviewer))
+    response = client.post("/api/paper/rebuttal/parse", json={"reviews": ["Please explain the baseline."]})
+    assert response.status_code == 502
+    assert seen == ["gemini"]
+    assert "No substitute model" in response.json()["detail"]
+
+
+def test_incomplete_model_assessment_cannot_enter_paper_mode(client, monkeypatch):
+    from backend.app import paper
+    from backend.app.db import SessionLocal
+    from backend.app.models import PaperProposal
+    with SessionLocal() as db:
+        db.add(PaperProposal(id="failed", status="error", council_responses={"_error": "Selected model unavailable"}))
+        db.commit()
+    monkeypatch.setattr(paper, "enter_paper_mode", lambda **kwargs: pytest.fail("incomplete assessment cannot be accepted"))
+    response = client.post("/api/paper/enter", json={"proposal_id": "failed"})
+    assert response.status_code == 409
+
+
+def test_proposal_missing_review_marks_assessment_failed(client, monkeypatch, make_project):
+    from backend.app import api, council
+    from backend.app.db import SessionLocal
+    from backend.app.models import PaperProposal
+    make_project()
+    monkeypatch.setenv("GEMINI_API_KEY", "synthetic")
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic")
+    monkeypatch.setattr(council, "_settings", lambda: {**council.DEFAULTS, "council_enable_claude_tiebreaker": False})
+    calls = []
+    def review(reviewer, *args):
+        calls.append(reviewer)
+        return {"recommendation": "proceed_to_paper", "novelty": "high", "claims": [],
+                "novelty_rationale": "Synthetic evidence", "rationale_md": "Complete", "red_flags": []} if reviewer == "gemini" else None
+    monkeypatch.setattr(council, "_call_reviewer", review)
+    with SessionLocal() as db:
+        db.add(PaperProposal(id="partial", status="in_progress", council_responses={}))
+        db.commit()
+    api._run_paper_proposal_council("partial")
+    with SessionLocal() as db:
+        proposal = db.get(PaperProposal, "partial")
+        assert proposal.status == "error"
+        assert "gpt-6-astra" in proposal.council_responses["_error"]
+    assert sorted(calls) == ["gemini", "openai"]
+
+
+@pytest.mark.parametrize("output", [{"unexpected": "answer"}, {"concerns": "not a list"}, {"concerns": [{"title": "missing required details"}]}])
+def test_rebuttal_invalid_schema_cannot_claim_success(client, monkeypatch, output):
+    from backend.app import council, paper
+    monkeypatch.setenv("GEMINI_API_KEY", "synthetic")
+    monkeypatch.setattr(council, "_call_reviewer", lambda *args: output)
+    monkeypatch.setattr(paper, "file_decision", lambda **kwargs: pytest.fail("invalid model output must not file a decision"))
+    response = client.post("/api/paper/rebuttal/parse", json={"reviews": ["Explain the baseline."]})
+    assert response.status_code == 502
+    assert response.json()["filed"] == 0
+
+
+@pytest.mark.parametrize("valid", [False, True])
+def test_proposal_requires_actual_assessment_schema(client, monkeypatch, make_project, valid):
+    from backend.app import api, council
+    from backend.app.db import SessionLocal
+    from backend.app.models import PaperProposal
+    make_project()
+    monkeypatch.setenv("GEMINI_API_KEY", "synthetic")
+    monkeypatch.setattr(council, "_settings", lambda: {**council.DEFAULTS,
+        "council_enable_openai": False, "council_enable_claude_tiebreaker": False})
+    result = {"recommendation": "proceed_to_paper"}
+    if valid:
+        result.update(novelty="high", claims=[], novelty_rationale="Synthetic evidence",
+                      rationale_md="Ready", red_flags=[])
+    monkeypatch.setattr(council, "_call_reviewer", lambda *args: result)
+    with SessionLocal() as db:
+        db.add(PaperProposal(id="schema", status="in_progress", council_responses={}))
+        db.commit()
+    api._run_paper_proposal_council("schema")
+    with SessionLocal() as db:
+        proposal = db.get(PaperProposal, "schema")
+        assert proposal.status == ("ready" if valid else "error")

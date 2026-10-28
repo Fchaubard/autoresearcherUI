@@ -176,9 +176,7 @@ def test_bless_rejected_when_only_one_preflight_passed(client, monkeypatch):
 
 def test_bless_allowed_when_all_three_passed(client, monkeypatch, tmp_path):
     """When steps 1 + 2 are recorded, /api/council/bless proceeds
-    normally. Since there are no reviewer API keys in this unit-test
-    environment, _bless_worker takes the 'no reviewers' branch and
-    auto-approves — which is the contract for Claude-only setups."""
+    normally, then requires successful reviews from every enabled slot."""
     from backend.app import council as _c
     # Make the worker synchronous so the test can assert on the result
     # without timing flakes.
@@ -196,10 +194,10 @@ def test_bless_allowed_when_all_three_passed(client, monkeypatch, tmp_path):
     monkeypatch.setattr(_t, "Thread", _SyncThread)
     monkeypatch.setattr(_c.threading, "Thread", _SyncThread)
 
-    # Make sure there are no reviewer keys — _bless_worker takes its
-    # auto-approve branch.
-    for k in ("GEMINI_API_KEY", "OPENAI_API_KEY"):
-        monkeypatch.delenv(k, raising=False)
+    # Preflight alone does not authorize skipping required reviewers.
+    (tmp_path / "train.py").write_text("value = 1\n")
+    monkeypatch.setattr(_c, "_call_reviewer", lambda *args: {
+        "approved": True, "blockers": [], "suggestions": [], "summary": "Reviewed"})
 
     # Record both preflight steps.
     r1 = client.post("/api/preflight/static_overfit",

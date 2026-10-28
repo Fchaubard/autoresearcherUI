@@ -184,9 +184,9 @@ def test_completion_worker_rejected_collects_missing_evidence(
     assert all(m.startswith("[") for m in missing)
 
 
-def test_completion_worker_auto_approves_when_no_reviewers(
+def test_completion_worker_is_incomplete_when_selected_reviewers_missing(
         arui_env, db_session, make_project, make_run, monkeypatch):
-    """No reviewers configured → auto-approved + recorded honestly."""
+    """Missing credentials never substitute an automatic approval."""
     from backend.app import council as _c
     make_project()
     monkeypatch.setattr(_c, "_available_reviewers", lambda cfg: [])
@@ -198,8 +198,10 @@ def test_completion_worker_auto_approves_when_no_reviewers(
     _c._completion_review_worker([], "x", "YES_CONCLUSIVELY",
                                    "WRITE_PAPER")
     cs = _c.conclusion_state()
-    assert cs["status"] == "approved"
-    assert cs["council_verdict"]["auto"] is True
+    assert cs["status"] == "error"
+    assert cs["incomplete"] is True
+    assert cs["council_verdict"]["verdict"] == "INCOMPLETE"
+    assert cs["council_verdict"]["missing_reviewers"] == ["gemini", "openai"]
 
 
 # ──────────────────────── GET + clear endpoints ───────────────────────

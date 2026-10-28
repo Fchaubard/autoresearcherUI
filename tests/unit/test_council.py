@@ -124,11 +124,11 @@ def test_reviewer_slot_can_route_to_any_provider(arui_env, monkeypatch):
     assert seen == [("gpt-5.6-sol", "medium", "system", "user")]
 
 
-def test_is_enabled_false_without_keys(arui_env, monkeypatch):
+def test_is_enabled_preserves_configured_reviewers_without_keys(arui_env, monkeypatch):
     from backend.app.council import is_enabled
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    assert is_enabled() is False
+    assert is_enabled() is True
 
 
 def test_claude_available(arui_env, monkeypatch):
@@ -138,7 +138,7 @@ def test_claude_available(arui_env, monkeypatch):
 
 
 def test_review_async_no_reviewers(arui_env, monkeypatch):
-    """If no reviewer keys, review_async returns False without launching."""
+    """Disabled per-run review stays off independent of credential availability."""
     from backend.app import council
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)

@@ -1,0 +1,5449 @@
+{
+  "generated_at": "2026-10-28T22:28:55.827216+00:00",
+  "results": [
+    {
+      "model": "gpt-6-astra",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:15:51.499965+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-6-astra"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-6-astra",
+          "http_status": 200,
+          "response_model": "gpt-6-astra"
+        }
+      ],
+      "output_characters": 1203,
+      "output_sha256": "785b1fd974c99fec55a535ae68c55ae387127d3a85f34991e5309c23a68558b4",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 11.46
+    },
+    {
+      "model": "gpt-6-astra",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:15:51.492370+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-6-astra"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-6-astra",
+          "http_status": 200,
+          "response_model": "gpt-6-astra"
+        }
+      ],
+      "output_characters": 2684,
+      "output_sha256": "4e74c9036ce8680b9b0ac618179acd5d9af27608022012d3bd4c4bce548b9b06",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 16.914
+    },
+    {
+      "model": "gpt-6-astra",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:16:03.380621+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-6-astra"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-6-astra",
+          "http_status": 200,
+          "response_model": "gpt-6-astra"
+        }
+      ],
+      "output_characters": 1152,
+      "output_sha256": "4310ac32c6f76deac240141023aa44d2cafc26d1254a75ce048278901b4bcd7a",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 7.657
+    },
+    {
+      "model": "gpt-6-astra",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:36:06.599115+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-6-astra"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-6-astra",
+          "http_status": 200,
+          "response_model": "gpt-6-astra"
+        }
+      ],
+      "output_characters": 640,
+      "output_sha256": "8340de7bea0b1557a30472f66eaae56b5797e489e9dc0d1b005840649e7d44c7",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 6.374,
+      "previous_attempts": [
+        {
+          "model": "gpt-6-astra",
+          "role": "tiebreaker",
+          "tested_at": "2026-10-28T22:33:02.186256+00:00",
+          "timeout_seconds": 90,
+          "max_output_tokens": 4096,
+          "inference": "real",
+          "fallback_allowed": false,
+          "provider": "openai",
+          "status": "passed",
+          "schema_errors": [],
+          "dispatched_models": [
+            "gpt-6-astra"
+          ],
+          "requests": [
+            {
+              "endpoint": "/v1/chat/completions",
+              "requested_model": "gpt-6-astra",
+              "http_status": 200,
+              "response_model": "gpt-6-astra"
+            }
+          ],
+          "output_characters": 896,
+          "output_sha256": "c644064c6bc76c32650dd7e7af3a2f379ca0ca874dd71c68e8957d0f05790b6a",
+          "output_fields": [
+            "learning",
+            "new_ideas",
+            "rerank_pending",
+            "verdict",
+            "veto"
+          ],
+          "elapsed_seconds": 7.209,
+          "previous_attempts": [
+            {
+              "model": "gpt-6-astra",
+              "role": "tiebreaker",
+              "tested_at": "2026-10-28T22:16:08.870961+00:00",
+              "timeout_seconds": 90,
+              "max_output_tokens": 4096,
+              "inference": "real",
+              "fallback_allowed": false,
+              "provider": "openai",
+              "status": "passed",
+              "schema_errors": [],
+              "dispatched_models": [
+                "gpt-6-astra"
+              ],
+              "requests": [
+                {
+                  "endpoint": "/v1/chat/completions",
+                  "requested_model": "gpt-6-astra",
+                  "http_status": 200,
+                  "response_model": "gpt-6-astra"
+                }
+              ],
+              "output_characters": 960,
+              "output_sha256": "e5dd3af69b29e7acab9d1261364c417a2007541d3764a259493d728d2c44851b",
+              "output_fields": [
+                "learning",
+                "new_ideas",
+                "rerank_pending",
+                "verdict",
+                "veto"
+              ],
+              "elapsed_seconds": 7.052
+            }
+          ],
+          "revision_note": "Explicit JSON tiebreaker schema; exact selected model retained"
+        }
+      ],
+      "revision_note": "Concise uncertainty-aware tiebreaker with explicit JSON and learning markers; exact model retained"
+    },
+    {
+      "model": "gpt-6-astra",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:16:11.494623+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-6-astra"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-6-astra",
+          "http_status": 200,
+          "response_model": "gpt-6-astra"
+        }
+      ],
+      "output_characters": 166,
+      "output_sha256": "b2a374e0c931bdcda253a9d7d0b9cf1f18144c3f5871d424a53ca8c3576702cd",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 5.397
+    },
+    {
+      "model": "gemini-4-argon",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:16:16.372909+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-4-argon"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-4-argon:generateContent",
+          "requested_model": "gemini-4-argon",
+          "http_status": 200,
+          "response_model": "gemini-4-argon"
+        }
+      ],
+      "output_characters": 2730,
+      "output_sha256": "f7ac8cb5009fea17ef181f879ee539fef2be887c19e3773b1401aeb6d8c72a54",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 13.886
+    },
+    {
+      "model": "gemini-4-argon",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:16:17.240120+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-4-argon"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-4-argon:generateContent",
+          "requested_model": "gemini-4-argon",
+          "http_status": 200,
+          "response_model": "gemini-4-argon"
+        }
+      ],
+      "output_characters": 1274,
+      "output_sha256": "32685c97143856963dc6040497811d3046ce22f0642b69d1d1c6a7cf10720ac4",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 20.623
+    },
+    {
+      "model": "gemini-4-argon",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:16:30.695954+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-4-argon"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-4-argon:generateContent",
+          "requested_model": "gemini-4-argon",
+          "http_status": 200,
+          "response_model": "gemini-4-argon"
+        }
+      ],
+      "output_characters": 1344,
+      "output_sha256": "8ff7bd12c6f072835963dfb843a93d8bf6109eabc4db889dac1f303f22606908",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 9.376
+    },
+    {
+      "model": "gemini-4-argon",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:16:40.463625+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-4-argon"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-4-argon:generateContent",
+          "requested_model": "gemini-4-argon",
+          "http_status": 200,
+          "response_model": "gemini-4-argon"
+        }
+      ],
+      "output_characters": 35,
+      "output_sha256": "059d182582fde7f84acc9b93052c9486a8afe5e25f196908540a730ca081bd61",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 4.657
+    },
+    {
+      "model": "gemini-4-argon",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:36:11.780010+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-4-argon"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-4-argon:generateContent",
+          "requested_model": "gemini-4-argon",
+          "http_status": 200,
+          "response_model": "gemini-4-argon"
+        }
+      ],
+      "output_characters": 794,
+      "output_sha256": "20619b344c3d8d7abda2acac219ee36914f04001c2d33fd7676b5ebd427cc8f3",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 7.264,
+      "previous_attempts": [
+        {
+          "model": "gemini-4-argon",
+          "role": "tiebreaker",
+          "tested_at": "2026-10-28T22:33:09.795151+00:00",
+          "timeout_seconds": 90,
+          "max_output_tokens": 4096,
+          "inference": "real",
+          "fallback_allowed": false,
+          "provider": "gemini",
+          "status": "passed",
+          "schema_errors": [],
+          "dispatched_models": [
+            "gemini-4-argon"
+          ],
+          "requests": [
+            {
+              "endpoint": "/v1beta/models/gemini-4-argon:generateContent",
+              "requested_model": "gemini-4-argon",
+              "http_status": 200,
+              "response_model": "gemini-4-argon"
+            }
+          ],
+          "output_characters": 1241,
+          "output_sha256": "16883277da53ae414496e393c716941245902aabbd51a48d4cb7cf0a64f9ed14",
+          "output_fields": [
+            "learning",
+            "new_ideas",
+            "rerank_pending",
+            "verdict",
+            "veto"
+          ],
+          "elapsed_seconds": 8.501,
+          "previous_attempts": [
+            {
+              "model": "gemini-4-argon",
+              "role": "tiebreaker",
+              "tested_at": "2026-10-28T22:16:38.288624+00:00",
+              "timeout_seconds": 90,
+              "max_output_tokens": 4096,
+              "inference": "real",
+              "fallback_allowed": false,
+              "provider": "gemini",
+              "status": "passed",
+              "schema_errors": [],
+              "dispatched_models": [
+                "gemini-4-argon"
+              ],
+              "requests": [
+                {
+                  "endpoint": "/v1beta/models/gemini-4-argon:generateContent",
+                  "requested_model": "gemini-4-argon",
+                  "http_status": 200,
+                  "response_model": "gemini-4-argon"
+                }
+              ],
+              "output_characters": 1191,
+              "output_sha256": "3f5f1bc23beffe711277e3eca7947496275fc5109e915f27aba3fac60be103d8",
+              "output_fields": [
+                "learning",
+                "new_ideas",
+                "rerank_pending",
+                "verdict",
+                "veto"
+              ],
+              "elapsed_seconds": 9.15
+            }
+          ],
+          "revision_note": "Explicit JSON tiebreaker schema; exact selected model retained"
+        }
+      ],
+      "revision_note": "Concise uncertainty-aware tiebreaker with explicit JSON and learning markers; exact model retained"
+    },
+    {
+      "model": "claude-opus-5",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:16:47.860582+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-5",
+          "http_status": 200,
+          "response_model": "claude-opus-5"
+        }
+      ],
+      "output_characters": 1766,
+      "output_sha256": "87cf375249f1a158f0a2fba9beddb8d0753d6bd32d2da67156f870be34d75815",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 16.592
+    },
+    {
+      "model": "claude-opus-5",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:16:45.587429+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-5",
+          "http_status": 200,
+          "response_model": "claude-opus-5"
+        }
+      ],
+      "output_characters": 4032,
+      "output_sha256": "0503fac0ca700d67f1557c987f4ecc06fd41b479e119793645fa88ef25e84b96",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 25.528
+    },
+    {
+      "model": "claude-opus-5",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:17:04.920403+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-5",
+          "http_status": 200,
+          "response_model": "claude-opus-5"
+        }
+      ],
+      "output_characters": 1709,
+      "output_sha256": "6b4a29cf8f7906b0190b898d3a8e4352771a27daf7b9cd2b015715dcef929775",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 14.96
+    },
+    {
+      "model": "claude-opus-5",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:17:20.350934+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-5",
+          "http_status": 200,
+          "response_model": "claude-opus-5"
+        }
+      ],
+      "output_characters": 274,
+      "output_sha256": "b9e29372ec52babc75a078da4c76569d0e83a96789b60885ee1ee78aba8af3e9",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 5.019
+    },
+    {
+      "model": "claude-opus-5",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:17:11.569856+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-5",
+          "http_status": 200,
+          "response_model": "claude-opus-5"
+        }
+      ],
+      "output_characters": 2078,
+      "output_sha256": "c07ead15323619b6f46ced38bfd6c54f383fbc2799fcfbf70ae5c0261f0dbfe0",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 19.315
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:17:34.373989+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.6-sol"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.6-sol",
+          "http_status": 200,
+          "response_model": "gpt-5.6-sol"
+        }
+      ],
+      "output_characters": 1132,
+      "output_sha256": "3dfc8724f1d35b85c28bc516d8f15f7ea438c1bce642cc3bb10ddb0f7d12a900",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 8.255
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:17:34.384534+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.6-sol"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.6-sol",
+          "http_status": 200,
+          "response_model": "gpt-5.6-sol"
+        }
+      ],
+      "output_characters": 2249,
+      "output_sha256": "cd062c26efdbe62f737c3f10d74cd26988ac90b30810546fb2084f2ef5bc0781",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 11.822
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:17:42.994591+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.6-sol"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.6-sol",
+          "http_status": 200,
+          "response_model": "gpt-5.6-sol"
+        }
+      ],
+      "output_characters": 805,
+      "output_sha256": "44e042a3afba00a8e585b7e7f43ef48d8179dceb535e7dc85be9eac094b56389",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 7.216
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:17:50.596588+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.6-sol"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.6-sol",
+          "http_status": 200,
+          "response_model": "gpt-5.6-sol"
+        }
+      ],
+      "output_characters": 139,
+      "output_sha256": "c9e380d80a5fac9c16b2ed2fc42f5a6044f6b8ab41f220502e655aaece82719c",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 4.035
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:17:46.565026+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.6-sol"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.6-sol",
+          "http_status": 200,
+          "response_model": "gpt-5.6-sol"
+        }
+      ],
+      "output_characters": 815,
+      "output_sha256": "055f0bbb906c88bcad5450942df16a6f0cc7fe53946cb9f16633e3b01547a27d",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 9.578
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:17:56.591322+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.6-terra"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.6-terra",
+          "http_status": 200,
+          "response_model": "gpt-5.6-terra"
+        }
+      ],
+      "output_characters": 1145,
+      "output_sha256": "5cc9761985cbe04736dc043970c7634077c552926850a545236edc3a86ffb2ca",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 6.419
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:17:55.055775+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.6-terra"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.6-terra",
+          "http_status": 200,
+          "response_model": "gpt-5.6-terra"
+        }
+      ],
+      "output_characters": 3175,
+      "output_sha256": "92b752abecf71000b9b94a07b3f6697756937b76f66a1eece49b8495b11fdeb1",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 11.587
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:18:03.363028+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.6-terra"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.6-terra",
+          "http_status": 200,
+          "response_model": "gpt-5.6-terra"
+        }
+      ],
+      "output_characters": 1215,
+      "output_sha256": "f0b005642343f6a299a1aa410a431baad199def71b124bcc74805f2fbfd9b2d6",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 6.851
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:18:07.072647+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.6-terra"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.6-terra",
+          "http_status": 200,
+          "response_model": "gpt-5.6-terra"
+        }
+      ],
+      "output_characters": 926,
+      "output_sha256": "bbb1280c082cfb1e1d19f23cc62dc75ac8e0124acc9551d35fdc47cc4529b474",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 5.374
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:18:10.625877+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.6-terra"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.6-terra",
+          "http_status": 200,
+          "response_model": "gpt-5.6-terra"
+        }
+      ],
+      "output_characters": 32,
+      "output_sha256": "8507d781490613cf4def5c24c45ef3bd82aca10e75277adda27e89e471fef0e0",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 3.761
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:18:14.788926+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.6-luna"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.6-luna",
+          "http_status": 200,
+          "response_model": "gpt-5.6-luna"
+        }
+      ],
+      "output_characters": 1151,
+      "output_sha256": "292aa67967521fac08a0f5db598b2762ed80d9514013bfd6b510a3887d9850b9",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 5.989
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:18:12.859945+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.6-luna"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.6-luna",
+          "http_status": 200,
+          "response_model": "gpt-5.6-luna"
+        }
+      ],
+      "output_characters": 2991,
+      "output_sha256": "d20f6e77762b327056e04e1b05fc2d0e91f1fcb7e4690fa7c69b5fa19d24c674",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 9.73
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:18:21.178378+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.6-luna"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.6-luna",
+          "http_status": 200,
+          "response_model": "gpt-5.6-luna"
+        }
+      ],
+      "output_characters": 1193,
+      "output_sha256": "33999a93bbae5f4c9a8bfdd738349a0d2f0e10054220e3e8877132db4336beb7",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 6.762
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:18:23.036891+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.6-luna"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.6-luna",
+          "http_status": 200,
+          "response_model": "gpt-5.6-luna"
+        }
+      ],
+      "output_characters": 829,
+      "output_sha256": "6c6d16bcf988c404a3083dce0c404bf8204ca25c771798950b7df6a2409fea8b",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 6.363
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:18:28.383547+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.6-luna"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.6-luna",
+          "http_status": 200,
+          "response_model": "gpt-5.6-luna"
+        }
+      ],
+      "output_characters": 32,
+      "output_sha256": "8507d781490613cf4def5c24c45ef3bd82aca10e75277adda27e89e471fef0e0",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 3.322
+    },
+    {
+      "model": "gpt-5.5",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:18:32.131141+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.5",
+          "http_status": 200,
+          "response_model": "gpt-5.5-2026-04-23"
+        }
+      ],
+      "output_characters": 1244,
+      "output_sha256": "8ecbfa80c03d64f768d79954455574a1139a73e821ee7d95c9f0a513164278e3",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 9.92
+    },
+    {
+      "model": "gpt-5.5",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:18:29.846682+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.5",
+          "http_status": 200,
+          "response_model": "gpt-5.5-2026-04-23"
+        }
+      ],
+      "output_characters": 2967,
+      "output_sha256": "539852d9d015e9569cbded55bd3de442d1f3dc985223dcf1d8d7b6bffc73a9d9",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 13.841
+    },
+    {
+      "model": "gpt-5.5",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:18:42.529007+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.5",
+          "http_status": 200,
+          "response_model": "gpt-5.5-2026-04-23"
+        }
+      ],
+      "output_characters": 1233,
+      "output_sha256": "624e44ae128e3e29b232ea21a563d4255a578227de2f9e03f6fc3c016abc4656",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 9.555
+    },
+    {
+      "model": "gpt-5.5",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:18:44.174436+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.5",
+          "http_status": 200,
+          "response_model": "gpt-5.5-2026-04-23"
+        }
+      ],
+      "output_characters": 883,
+      "output_sha256": "bcc81d3e461be634ba856e265c31c3dedf792b7f6ea1689f85fe45e92decca78",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 8.231
+    },
+    {
+      "model": "gpt-5.5",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:18:52.461811+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.5",
+          "http_status": 200,
+          "response_model": "gpt-5.5-2026-04-23"
+        }
+      ],
+      "output_characters": 182,
+      "output_sha256": "8283f74092ea5a9b36ab9ee3b3313f15427865fd55536d49f794a7b1a98ba78c",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 4.524
+    },
+    {
+      "model": "gpt-5.2",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:18:57.386051+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.2"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.2",
+          "http_status": 200,
+          "response_model": "gpt-5.2-2025-12-11"
+        }
+      ],
+      "output_characters": 1568,
+      "output_sha256": "926603a570005d34f23814139a46cb489b380be96ca720694ebe43714f1c7d61",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 11.175
+    },
+    {
+      "model": "gpt-5.2",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:18:52.895810+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.2"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.2",
+          "http_status": 200,
+          "response_model": "gpt-5.2-2025-12-11"
+        }
+      ],
+      "output_characters": 3368,
+      "output_sha256": "30361b70fce6848e05d3d1fae9d57ff3b460ef9abceb9d67f0a142abcdd6fba1",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 17.264
+    },
+    {
+      "model": "gpt-5.2",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:19:10.578407+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.2"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.2",
+          "http_status": 200,
+          "response_model": "gpt-5.2-2025-12-11"
+        }
+      ],
+      "output_characters": 1054,
+      "output_sha256": "4e81f186c7415b0ca2d1ab997dc094da2a13ee3f9a53761bd445e4f17099a604",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 8.723
+    },
+    {
+      "model": "gpt-5.2",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:19:08.995315+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.2"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.2",
+          "http_status": 200,
+          "response_model": "gpt-5.2-2025-12-11"
+        }
+      ],
+      "output_characters": 1138,
+      "output_sha256": "41ff3f2e9ce7a37ece1c291d11c597d6bc5cc6b2deaf94454bffa1e71a11d5f5",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 10.639
+    },
+    {
+      "model": "gpt-5.2",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:19:19.795466+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.2"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.2",
+          "http_status": 200,
+          "response_model": "gpt-5.2-2025-12-11"
+        }
+      ],
+      "output_characters": 145,
+      "output_sha256": "e7d74b6fcef38d0a0c11df6d7b4052df40c5c2b9a03de722ed6ce8dfe7843a60",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 4.064
+    },
+    {
+      "model": "gpt-5.1",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:19:24.241917+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.1"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.1",
+          "http_status": 200,
+          "response_model": "gpt-5.1-2025-11-13"
+        }
+      ],
+      "output_characters": 1351,
+      "output_sha256": "c516d2842b4dc6f3bdb76ac243583cdfe0431665e6638c6e4674446f9ee89d74",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 11.704
+    },
+    {
+      "model": "gpt-5.1",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:19:20.095734+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.1"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.1",
+          "http_status": 200,
+          "response_model": "gpt-5.1-2025-11-13"
+        }
+      ],
+      "output_characters": 4453,
+      "output_sha256": "b145ce68c565798c9bdde3065700c1c4f2979e9651e6f32911884238151aacfd",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 20.34
+    },
+    {
+      "model": "gpt-5.1",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:19:40.843310+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.1"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.1",
+          "http_status": 200,
+          "response_model": "gpt-5.1-2025-11-13"
+        }
+      ],
+      "output_characters": 922,
+      "output_sha256": "ca078ff2341888cd847f10215a292c98f9ab408028bd67789f0ec4b39e4bc24b",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 7.411
+    },
+    {
+      "model": "gpt-5.1",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:19:36.332491+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.1"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.1",
+          "http_status": 200,
+          "response_model": "gpt-5.1-2025-11-13"
+        }
+      ],
+      "output_characters": 1356,
+      "output_sha256": "f30c516dc3e109aa38809531281c7be2eb25706abec97934a3f745763fb949bc",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 12.111
+    },
+    {
+      "model": "gpt-5.1",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:19:48.645952+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.1"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.1",
+          "http_status": 200,
+          "response_model": "gpt-5.1-2025-11-13"
+        }
+      ],
+      "output_characters": 41,
+      "output_sha256": "db91b91956850fe790be08398941e3d0fdf1f647a945a9688bfa0a8a5996fd8d",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 3.067
+    },
+    {
+      "model": "gpt-5",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:19:48.873227+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5",
+          "http_status": 200,
+          "response_model": "gpt-5-2025-08-07"
+        }
+      ],
+      "output_characters": 2963,
+      "output_sha256": "d8fb13dff15a8f9173ae40b899ebd73e0a6358ec3187ccae6eb2876753fdd252",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 27.187
+    },
+    {
+      "model": "gpt-5",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:19:52.088799+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5",
+          "http_status": 200,
+          "response_model": "gpt-5-2025-08-07"
+        }
+      ],
+      "output_characters": 1522,
+      "output_sha256": "25f15f87c9135a9be681e6bb502aa1913c71e2d997d8758acde9a060f4909e9b",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 35.783
+    },
+    {
+      "model": "gpt-5",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:20:28.333185+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5",
+          "http_status": 200,
+          "response_model": "gpt-5-2025-08-07"
+        }
+      ],
+      "output_characters": 1074,
+      "output_sha256": "3ce85a262968ba9912de9ec43206e5472029d278eaf906f8449884820fba844c",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 16.548
+    },
+    {
+      "model": "gpt-5",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:20:16.477045+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5",
+          "http_status": 200,
+          "response_model": "gpt-5-2025-08-07"
+        }
+      ],
+      "output_characters": 1378,
+      "output_sha256": "65f63822bac1521b9193cc30edf4c3b5179ef2125c72139abc7ae3b0c08f1204",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 34.152
+    },
+    {
+      "model": "gpt-5",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:20:45.321675+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5",
+          "http_status": 200,
+          "response_model": "gpt-5-2025-08-07"
+        }
+      ],
+      "output_characters": 41,
+      "output_sha256": "db91b91956850fe790be08398941e3d0fdf1f647a945a9688bfa0a8a5996fd8d",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 9.198
+    },
+    {
+      "model": "gpt-5-mini",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:20:51.077619+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5-mini"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5-mini",
+          "http_status": 200,
+          "response_model": "gpt-5-mini-2025-08-07"
+        }
+      ],
+      "output_characters": 4124,
+      "output_sha256": "5b682ba4d8319d8de11d75c3dd94f176c1c12e636dee4aace43802e7e3ae97e3",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 14.879
+    },
+    {
+      "model": "gpt-5-mini",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:20:54.984077+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5-mini"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5-mini",
+          "http_status": 200,
+          "response_model": "gpt-5-mini-2025-08-07"
+        }
+      ],
+      "output_characters": 1613,
+      "output_sha256": "fb8e5f3fd4148fcee5b4f218899f68c20e21fbf8e016c88029b3f0c560dc2cbd",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 11.763
+    },
+    {
+      "model": "gpt-5-mini",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:21:06.437061+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5-mini"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5-mini",
+          "http_status": 200,
+          "response_model": "gpt-5-mini-2025-08-07"
+        }
+      ],
+      "output_characters": 1487,
+      "output_sha256": "5d4e0e6ee5d04a853a689e7455b111535028646a3304c76c656b2e88b7106297",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 12.871
+    },
+    {
+      "model": "gpt-5-mini",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:21:07.220237+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5-mini"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5-mini",
+          "http_status": 200,
+          "response_model": "gpt-5-mini-2025-08-07"
+        }
+      ],
+      "output_characters": 990,
+      "output_sha256": "b0c8b6a07d343666b0f3d3d89ceea6507de95115c7602e28e9e3e0660d59e1ba",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 12.343
+    },
+    {
+      "model": "gpt-5-mini",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:21:19.732382+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5-mini"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5-mini",
+          "http_status": 200,
+          "response_model": "gpt-5-mini-2025-08-07"
+        }
+      ],
+      "output_characters": 32,
+      "output_sha256": "8507d781490613cf4def5c24c45ef3bd82aca10e75277adda27e89e471fef0e0",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 4.554
+    },
+    {
+      "model": "gpt-5-nano",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:21:20.047109+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5-nano"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5-nano",
+          "http_status": 200,
+          "response_model": "gpt-5-nano-2025-08-07"
+        }
+      ],
+      "output_characters": 3191,
+      "output_sha256": "c35782104c340e7e0a897c99d0d6c84d56d4e099e0d9423eb9d4dcee0e7ce3d5",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 10.903
+    },
+    {
+      "model": "gpt-5-nano",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:21:24.678514+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5-nano"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5-nano",
+          "http_status": 200,
+          "response_model": "gpt-5-nano-2025-08-07"
+        }
+      ],
+      "output_characters": 1616,
+      "output_sha256": "9362dfde9b29f3726414dc1372deef4ec7adbe4632f427ef8ff3544e2fb8b3a2",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 13.028
+    },
+    {
+      "model": "gpt-5-nano",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:21:31.332917+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5-nano"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5-nano",
+          "http_status": 200,
+          "response_model": "gpt-5-nano-2025-08-07"
+        }
+      ],
+      "output_characters": 1317,
+      "output_sha256": "30d51d4064ac4f469173ea96a7f0fcbf319ad1554abe7486df354e0d6f870c99",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 13.466
+    },
+    {
+      "model": "gpt-5-nano",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:21:45.126092+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5-nano"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5-nano",
+          "http_status": 200,
+          "response_model": "gpt-5-nano-2025-08-07"
+        }
+      ],
+      "output_characters": 41,
+      "output_sha256": "db91b91956850fe790be08398941e3d0fdf1f647a945a9688bfa0a8a5996fd8d",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 3.27
+    },
+    {
+      "model": "gpt-5-nano",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:21:38.043951+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5-nano"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5-nano",
+          "http_status": 200,
+          "response_model": "gpt-5-nano-2025-08-07"
+        }
+      ],
+      "output_characters": 1224,
+      "output_sha256": "0b268f2c26568baf55a0504f4c14aa0ce1d36db65636489ff5869191c67af261",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 11.928
+    },
+    {
+      "model": "o3",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:21:48.615923+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "o3"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "o3",
+          "http_status": 200,
+          "response_model": "o3-2025-04-16"
+        }
+      ],
+      "output_characters": 2045,
+      "output_sha256": "553d93934dc84813e7cd340ad69e66034543b15a84f0c0dec718bf0136b9b2ff",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 6.289
+    },
+    {
+      "model": "o3",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:21:50.220789+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "o3"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "o3",
+          "http_status": 200,
+          "response_model": "o3-2025-04-16"
+        }
+      ],
+      "output_characters": 1000,
+      "output_sha256": "98ceb87988c643cb7c3b107daf9454bd0e8e451b9cfad4c05dba9f0576f5de0d",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 5.284
+    },
+    {
+      "model": "o3",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:21:55.749209+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "o3"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "o3",
+          "http_status": 200,
+          "response_model": "o3-2025-04-16"
+        }
+      ],
+      "output_characters": 861,
+      "output_sha256": "660852fe6372051e39fed4e9993c0c2dd0917752dd9f8bd9c1e659ad8181a6e3",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 5.135
+    },
+    {
+      "model": "o3",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:21:55.227898+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "o3"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "o3",
+          "http_status": 200,
+          "response_model": "o3-2025-04-16"
+        }
+      ],
+      "output_characters": 946,
+      "output_sha256": "31fbe2475bb2c8bfe7acbeec24d7adc02ef9b9f5563485e6b98174d041b25c15",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 5.962
+    },
+    {
+      "model": "o3-pro",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:28:58.291938+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "o3-pro"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/responses",
+          "requested_model": "o3-pro",
+          "http_status": 200,
+          "response_model": "o3-pro-2025-06-10"
+        }
+      ],
+      "output_characters": 2558,
+      "output_sha256": "f6e468230510801588f1cbd7f6cedf9c0c32da140047f1374981912f367adffc",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 26.326,
+      "previous_attempts": [
+        {
+          "model": "o3-pro",
+          "role": "scoping",
+          "tested_at": "2026-10-28T22:22:01.467379+00:00",
+          "timeout_seconds": 90,
+          "max_output_tokens": 4096,
+          "inference": "real",
+          "fallback_allowed": false,
+          "provider": "openai",
+          "status": "provider_error",
+          "requests": [
+            {
+              "endpoint": "/v1/responses",
+              "requested_model": "o3-pro",
+              "error_type": "HTTPError",
+              "http_status": 400,
+              "provider_type": "invalid_request_error",
+              "provider_param": "input"
+            }
+          ],
+          "dispatched_models": [
+            "o3-pro"
+          ],
+          "error_type": "HTTPError",
+          "http_status": 400,
+          "provider_type": "invalid_request_error",
+          "provider_param": "input",
+          "elapsed_seconds": 1.788
+        }
+      ],
+      "revision_note": "Responses developer/user input correction; exact selected model retained"
+    },
+    {
+      "model": "o3",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:22:01.123734+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "o3"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "o3",
+          "http_status": 200,
+          "response_model": "o3-2025-04-16"
+        }
+      ],
+      "output_characters": 122,
+      "output_sha256": "2dd3c1ea19ec4fd96fa66ac087b580f7e3bd8b173e5f82046c9af19aca9facba",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 2.926
+    },
+    {
+      "model": "o3-pro",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:28:58.295132+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "o3-pro"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/responses",
+          "requested_model": "o3-pro",
+          "http_status": 200,
+          "response_model": "o3-pro-2025-06-10"
+        }
+      ],
+      "output_characters": 1132,
+      "output_sha256": "75f6ee1aa4e9bb5633456f90da15552708aec8ace75fb42cce71ab3571441b4b",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 29.037,
+      "previous_attempts": [
+        {
+          "model": "o3-pro",
+          "role": "reviewer1",
+          "tested_at": "2026-10-28T22:22:03.498008+00:00",
+          "timeout_seconds": 90,
+          "max_output_tokens": 4096,
+          "inference": "real",
+          "fallback_allowed": false,
+          "provider": "openai",
+          "status": "provider_error",
+          "schema_errors": [
+            "no_parsed_object"
+          ],
+          "dispatched_models": [
+            "o3-pro"
+          ],
+          "requests": [
+            {
+              "endpoint": "/v1/responses",
+              "requested_model": "o3-pro",
+              "error_type": "HTTPError",
+              "http_status": 400,
+              "provider_type": "invalid_request_error",
+              "provider_param": "input"
+            }
+          ],
+          "output_characters": 0,
+          "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "output_fields": [],
+          "error_type": "HTTPError",
+          "http_status": 400,
+          "provider_type": "invalid_request_error",
+          "provider_param": "input",
+          "elapsed_seconds": 1.617
+        }
+      ],
+      "revision_note": "Responses developer/user input correction; exact selected model retained"
+    },
+    {
+      "model": "o3-pro",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:29:24.993087+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "o3-pro"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/responses",
+          "requested_model": "o3-pro",
+          "http_status": 200,
+          "response_model": "o3-pro-2025-06-10"
+        }
+      ],
+      "output_characters": 1250,
+      "output_sha256": "a7aeb91073c9d9d663726f0becc6d9282dc2cb29663e41476eb1590a459a40fb",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 21.961,
+      "previous_attempts": [
+        {
+          "model": "o3-pro",
+          "role": "reviewer2",
+          "tested_at": "2026-10-28T22:22:04.279382+00:00",
+          "timeout_seconds": 90,
+          "max_output_tokens": 4096,
+          "inference": "real",
+          "fallback_allowed": false,
+          "provider": "openai",
+          "status": "provider_error",
+          "schema_errors": [
+            "no_parsed_object"
+          ],
+          "dispatched_models": [
+            "o3-pro"
+          ],
+          "requests": [
+            {
+              "endpoint": "/v1/responses",
+              "requested_model": "o3-pro",
+              "error_type": "HTTPError",
+              "http_status": 400,
+              "provider_type": "invalid_request_error",
+              "provider_param": "input"
+            }
+          ],
+          "output_characters": 0,
+          "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "output_fields": [],
+          "error_type": "HTTPError",
+          "http_status": 400,
+          "provider_type": "invalid_request_error",
+          "provider_param": "input",
+          "elapsed_seconds": 1.377
+        }
+      ],
+      "revision_note": "Responses developer/user input correction; exact selected model retained"
+    },
+    {
+      "model": "o3-pro",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:29:27.663259+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "o3-pro"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/responses",
+          "requested_model": "o3-pro",
+          "http_status": 200,
+          "response_model": "o3-pro-2025-06-10"
+        }
+      ],
+      "output_characters": 1011,
+      "output_sha256": "2b4a2198c36667c5d178bb31b418fc7dae55e8b9ff85d71d1c69fcdf08a5f47e",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 24.597,
+      "previous_attempts": [
+        {
+          "model": "o3-pro",
+          "role": "tiebreaker",
+          "tested_at": "2026-10-28T22:22:05.382963+00:00",
+          "timeout_seconds": 90,
+          "max_output_tokens": 4096,
+          "inference": "real",
+          "fallback_allowed": false,
+          "provider": "openai",
+          "status": "provider_error",
+          "schema_errors": [
+            "no_parsed_object"
+          ],
+          "dispatched_models": [
+            "o3-pro"
+          ],
+          "requests": [
+            {
+              "endpoint": "/v1/responses",
+              "requested_model": "o3-pro",
+              "error_type": "HTTPError",
+              "http_status": 400,
+              "provider_type": "invalid_request_error",
+              "provider_param": "input"
+            }
+          ],
+          "output_characters": 0,
+          "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "output_fields": [],
+          "error_type": "HTTPError",
+          "http_status": 400,
+          "provider_type": "invalid_request_error",
+          "provider_param": "input",
+          "elapsed_seconds": 1.335
+        }
+      ],
+      "revision_note": "Responses developer/user input correction; exact selected model retained"
+    },
+    {
+      "model": "gemini-3.1-flash-lite",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:22:06.960281+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.1-flash-lite"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.1-flash-lite:generateContent",
+          "requested_model": "gemini-3.1-flash-lite",
+          "http_status": 200,
+          "response_model": "gemini-3.1-flash-lite"
+        }
+      ],
+      "output_characters": 2442,
+      "output_sha256": "f2bbc167bc331f30de4013776f5df81604b13737fc5103bb8accc5af4fc17235",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 4.487
+    },
+    {
+      "model": "o3-pro",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:29:47.350110+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "o3-pro"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/responses",
+          "requested_model": "o3-pro",
+          "http_status": 200,
+          "response_model": "o3-pro-2025-06-10"
+        }
+      ],
+      "output_characters": 41,
+      "output_sha256": "db91b91956850fe790be08398941e3d0fdf1f647a945a9688bfa0a8a5996fd8d",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 22.462,
+      "previous_attempts": [
+        {
+          "model": "o3-pro",
+          "role": "pi",
+          "tested_at": "2026-10-28T22:22:05.900667+00:00",
+          "timeout_seconds": 90,
+          "max_output_tokens": 4096,
+          "inference": "real",
+          "fallback_allowed": false,
+          "provider": "openai",
+          "status": "passed",
+          "schema_errors": [],
+          "dispatched_models": [
+            "o3-pro"
+          ],
+          "requests": [
+            {
+              "endpoint": "/v1/responses",
+              "requested_model": "o3-pro",
+              "http_status": 200,
+              "response_model": "o3-pro-2025-06-10"
+            }
+          ],
+          "output_characters": 41,
+          "output_sha256": "db91b91956850fe790be08398941e3d0fdf1f647a945a9688bfa0a8a5996fd8d",
+          "output_fields": [
+            "concerns",
+            "messages"
+          ],
+          "elapsed_seconds": 9.11
+        }
+      ],
+      "revision_note": "Responses developer/user input correction; exact selected model retained"
+    },
+    {
+      "model": "gemini-3.1-flash-lite",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:22:11.739465+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.1-flash-lite"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.1-flash-lite:generateContent",
+          "requested_model": "gemini-3.1-flash-lite",
+          "http_status": 200,
+          "response_model": "gemini-3.1-flash-lite"
+        }
+      ],
+      "output_characters": 1287,
+      "output_sha256": "c9fdba3095234dc84e84c9b8f53eb062ce093a689aac4ad29d092c2c35970191",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 5.831
+    },
+    {
+      "model": "gemini-3.1-flash-lite",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:22:15.335439+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.1-flash-lite"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.1-flash-lite:generateContent",
+          "requested_model": "gemini-3.1-flash-lite",
+          "http_status": 200,
+          "response_model": "gemini-3.1-flash-lite"
+        }
+      ],
+      "output_characters": 1086,
+      "output_sha256": "0bd8b6931ed18ece7d4b19a4183486cc2097db1c2e40a2965da8efc88dac70bd",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 4.371
+    },
+    {
+      "model": "gemini-3.1-flash-lite",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:22:17.977877+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.1-flash-lite"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.1-flash-lite:generateContent",
+          "requested_model": "gemini-3.1-flash-lite",
+          "http_status": 200,
+          "response_model": "gemini-3.1-flash-lite"
+        }
+      ],
+      "output_characters": 1143,
+      "output_sha256": "c69edc314bbb40b124e6ea2d9ed59f56691a2c2e8ed5f30f9262fae9511990f5",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 3.622
+    },
+    {
+      "model": "gemini-3.1-flash-lite",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:22:19.942818+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.1-flash-lite"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.1-flash-lite:generateContent",
+          "requested_model": "gemini-3.1-flash-lite",
+          "http_status": 200,
+          "response_model": "gemini-3.1-flash-lite"
+        }
+      ],
+      "output_characters": 258,
+      "output_sha256": "9b8f382442986ee2f25e4950a2f9984475c6b47364847ab7e8eb3c8f06f8bc8c",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 3.078
+    },
+    {
+      "model": "gemini-3.8-flash",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:22:23.270430+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.8-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.8-flash:generateContent",
+          "requested_model": "gemini-3.8-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.8-flash"
+        }
+      ],
+      "output_characters": 1164,
+      "output_sha256": "7d097ece4aa94cb2f3ce13996d56949a7a49df2eac6e2b100b93dde1eab23386",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 6.654
+    },
+    {
+      "model": "gemini-3.8-flash",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:22:21.879177+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.8-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.8-flash:generateContent",
+          "requested_model": "gemini-3.8-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.8-flash"
+        }
+      ],
+      "output_characters": 2469,
+      "output_sha256": "f8d2416af22077c1db358e56e8698c2d8ccd597117510d362bb7435e33031ffc",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 8.098
+    },
+    {
+      "model": "gemini-3.8-flash",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:22:30.261829+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.8-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.8-flash:generateContent",
+          "requested_model": "gemini-3.8-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.8-flash"
+        }
+      ],
+      "output_characters": 1032,
+      "output_sha256": "30b49c3075f56681e4959b40707c94f8a43b9bf913de69e19df50ac65c12b16b",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 5.412
+    },
+    {
+      "model": "gemini-3.8-flash",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:22:30.333143+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.8-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.8-flash:generateContent",
+          "requested_model": "gemini-3.8-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.8-flash"
+        }
+      ],
+      "output_characters": 1111,
+      "output_sha256": "60ace1100c8fb7c65b7774579394e32576fd3580888a31566b6d76480c603f15",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 5.835
+    },
+    {
+      "model": "gemini-3.8-flash",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:22:35.942385+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.8-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.8-flash:generateContent",
+          "requested_model": "gemini-3.8-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.8-flash"
+        }
+      ],
+      "output_characters": 266,
+      "output_sha256": "231d4298100ba231f50874b1fb420313f61d96652cbbca28a5aebd847acfa0cf",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 3.36
+    },
+    {
+      "model": "gemini-3.7-flash",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:22:36.433052+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.7-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.7-flash:generateContent",
+          "requested_model": "gemini-3.7-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.8-flash"
+        }
+      ],
+      "output_characters": 2570,
+      "output_sha256": "d6d325c14cac44906469ae476c184c511c693678af4ec9b06a7c316085b66e44",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 8.906
+    },
+    {
+      "model": "gemini-3.7-flash",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:22:39.567596+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.7-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.7-flash:generateContent",
+          "requested_model": "gemini-3.7-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.8-flash"
+        }
+      ],
+      "output_characters": 1114,
+      "output_sha256": "562ec3bf391224f60a40cffc7ddf41b7515cac8925a2215ebeeb37c32a6ee507",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 6.064
+    },
+    {
+      "model": "gemini-3.7-flash",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:22:45.532944+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.7-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.7-flash:generateContent",
+          "requested_model": "gemini-3.7-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.8-flash"
+        }
+      ],
+      "output_characters": 1063,
+      "output_sha256": "b7220d231f8dd3f049a2061a1e010eb9a03be0c10e46cfd1fb3f68781334f1dc",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 5.345
+    },
+    {
+      "model": "gemini-3.7-flash",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:22:45.891873+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.7-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.7-flash:generateContent",
+          "requested_model": "gemini-3.7-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.8-flash"
+        }
+      ],
+      "output_characters": 1021,
+      "output_sha256": "8e65fd2112ea711f445213baf03ce33362392cf68fbcdf0853342e8cacab8d7b",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 5.282
+    },
+    {
+      "model": "gemini-3.7-flash",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:22:51.133561+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.7-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.7-flash:generateContent",
+          "requested_model": "gemini-3.7-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.8-flash"
+        }
+      ],
+      "output_characters": 206,
+      "output_sha256": "27ab1d6a59a34833c82b87cded2450624c943dcc89ad202af441177042a2563b",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 3.181
+    },
+    {
+      "model": "gemini-3.6-flash",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:22:51.419537+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.6-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.6-flash:generateContent",
+          "requested_model": "gemini-3.6-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.6-flash"
+        }
+      ],
+      "output_characters": 2100,
+      "output_sha256": "5589b1bcee49bbd1eb04f4662e56bcf1da88a3448c98511936619eeb8241aae9",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 5.225
+    },
+    {
+      "model": "gemini-3.6-flash",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:22:54.537371+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.6-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.6-flash:generateContent",
+          "requested_model": "gemini-3.6-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.6-flash"
+        }
+      ],
+      "output_characters": 982,
+      "output_sha256": "b7528f6e103f7bb45858bd9d19dfedb0b423cac43146919fc2c1a00cea53d4f3",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 4.664
+    },
+    {
+      "model": "gemini-3.6-flash",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:22:56.926630+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.6-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.6-flash:generateContent",
+          "requested_model": "gemini-3.6-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.6-flash"
+        }
+      ],
+      "output_characters": 1040,
+      "output_sha256": "23502ee573da49cce37cad98bc0e91cb484429d340d261a768f8e6138be0b7b2",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 3.88
+    },
+    {
+      "model": "gemini-3.6-flash",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:23:01.049221+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.6-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.6-flash:generateContent",
+          "requested_model": "gemini-3.6-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.6-flash"
+        }
+      ],
+      "output_characters": 109,
+      "output_sha256": "0f971aa96c8c0cda55a9dc40681bcdf1747330d76cfc77611c471945f26d1202",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 2.691
+    },
+    {
+      "model": "gemini-3.6-flash",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:22:59.442752+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.6-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.6-flash:generateContent",
+          "requested_model": "gemini-3.6-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.6-flash"
+        }
+      ],
+      "output_characters": 921,
+      "output_sha256": "264252a26966c73988f2dd6bc364fe267ea5de2371e0c8d97ad57678d5f4fcf0",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 5.202
+    },
+    {
+      "model": "gemini-3.5-flash",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:23:03.985628+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.5-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.5-flash:generateContent",
+          "requested_model": "gemini-3.5-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.6-flash"
+        }
+      ],
+      "output_characters": 2535,
+      "output_sha256": "5bd1aef87a792c95380973e6a83e1ec99f4ae5a0e9d84a2ecd5ee295ea533dcb",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 5.832
+    },
+    {
+      "model": "gemini-3.5-flash",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:23:04.929078+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.5-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.5-flash:generateContent",
+          "requested_model": "gemini-3.5-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.6-flash"
+        }
+      ],
+      "output_characters": 976,
+      "output_sha256": "164f58104e42621b35cd2392e3d6c4c30fde16a2fc926792895683ed3310aa63",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 5.504
+    },
+    {
+      "model": "gemini-3.5-flash",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:23:10.064966+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.5-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.5-flash:generateContent",
+          "requested_model": "gemini-3.5-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.6-flash"
+        }
+      ],
+      "output_characters": 1054,
+      "output_sha256": "dfb46504510a2ec5c8102042b314de633c885e97fad8deb3a3067534e24222c4",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 4.829
+    },
+    {
+      "model": "gemini-3.5-flash",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:23:10.726278+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.5-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.5-flash:generateContent",
+          "requested_model": "gemini-3.5-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.6-flash"
+        }
+      ],
+      "output_characters": 844,
+      "output_sha256": "956e57d0c59d193e253cfa8cf8d0244e178e0e07795910e82393d163b29cda62",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 4.854
+    },
+    {
+      "model": "gemini-3.5-flash",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:23:15.169999+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.5-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.5-flash:generateContent",
+          "requested_model": "gemini-3.5-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.6-flash"
+        }
+      ],
+      "output_characters": 111,
+      "output_sha256": "fde647a6cf8b5b19eee0362e083c0c6c37aebe5b629ef11fb69a3a55973dee20",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 2.7
+    },
+    {
+      "model": "gemini-3.5-flash-lite",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:23:15.844088+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.5-flash-lite"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.5-flash-lite:generateContent",
+          "requested_model": "gemini-3.5-flash-lite",
+          "http_status": 200,
+          "response_model": "gemini-3.5-flash-lite"
+        }
+      ],
+      "output_characters": 2036,
+      "output_sha256": "9379d39c35632763bf72b74c0ff5ac702cd618d871c937a5f905cbf8996bc7be",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 3.79
+    },
+    {
+      "model": "gemini-3.5-flash-lite",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:23:18.158188+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.5-flash-lite"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.5-flash-lite:generateContent",
+          "requested_model": "gemini-3.5-flash-lite",
+          "http_status": 200,
+          "response_model": "gemini-3.5-flash-lite"
+        }
+      ],
+      "output_characters": 990,
+      "output_sha256": "282ec4ff9b4a65c7e26da9f74d16d2bc58f76780a3339ac3a89824a76e121a28",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 2.999
+    },
+    {
+      "model": "gemini-3.5-flash-lite",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:23:19.864112+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.5-flash-lite"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.5-flash-lite:generateContent",
+          "requested_model": "gemini-3.5-flash-lite",
+          "http_status": 200,
+          "response_model": "gemini-3.5-flash-lite"
+        }
+      ],
+      "output_characters": 947,
+      "output_sha256": "b526a6fcbed1f80aef0a202786d8ae2e6b5d1e32085f7922b47451d9d56658f5",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 2.928
+    },
+    {
+      "model": "gemini-3.5-flash-lite",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:23:21.442274+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.5-flash-lite"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.5-flash-lite:generateContent",
+          "requested_model": "gemini-3.5-flash-lite",
+          "http_status": 200,
+          "response_model": "gemini-3.5-flash-lite"
+        }
+      ],
+      "output_characters": 735,
+      "output_sha256": "80cfaf93826b26b7b3adcbebc9cbd68278cb71ac354c686d9e24fe02867b5075",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 2.738
+    },
+    {
+      "model": "gemini-3.5-flash-lite",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:23:23.124309+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.5-flash-lite"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.5-flash-lite:generateContent",
+          "requested_model": "gemini-3.5-flash-lite",
+          "http_status": 200,
+          "response_model": "gemini-3.5-flash-lite"
+        }
+      ],
+      "output_characters": 132,
+      "output_sha256": "4bf083356abdaea3ef0202ef66aef4042ff4dbd6ce02bc1ef582fccce0b3f725",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 2.117
+    },
+    {
+      "model": "gemini-3.1-pro-preview",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:23:25.560328+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.1-pro-preview"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.1-pro-preview:generateContent",
+          "requested_model": "gemini-3.1-pro-preview",
+          "http_status": 200,
+          "response_model": "gemini-3.1-pro-preview"
+        }
+      ],
+      "output_characters": 1188,
+      "output_sha256": "748b6ac3878e4b7559e8f3ff852f4f633111dbb9035e2e8cab7ed1b900609754",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 9.304
+    },
+    {
+      "model": "gemini-3.1-pro-preview",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:23:24.440570+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.1-pro-preview"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.1-pro-preview:generateContent",
+          "requested_model": "gemini-3.1-pro-preview",
+          "http_status": 200,
+          "response_model": "gemini-3.1-pro-preview"
+        }
+      ],
+      "output_characters": 1944,
+      "output_sha256": "1e1842b69cfb4a372bd382d38023afde95b5655a5aa16b12ecaf66661b767204",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 12.935
+    },
+    {
+      "model": "gemini-3.1-pro-preview",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:23:35.172999+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.1-pro-preview"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.1-pro-preview:generateContent",
+          "requested_model": "gemini-3.1-pro-preview",
+          "http_status": 200,
+          "response_model": "gemini-3.1-pro-preview"
+        }
+      ],
+      "output_characters": 1208,
+      "output_sha256": "69df5d803c15e7f780a6d88c25e08b857c002fb02cf8704da71676df25de1a14",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 8.935
+    },
+    {
+      "model": "gemini-3.1-pro-preview",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:23:37.727825+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.1-pro-preview"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.1-pro-preview:generateContent",
+          "requested_model": "gemini-3.1-pro-preview",
+          "http_status": 200,
+          "response_model": "gemini-3.1-pro-preview"
+        }
+      ],
+      "output_characters": 879,
+      "output_sha256": "4c7d2a1b3e5d031c9eb86d4081f5df4002e3234d18e00c8a1a39558fe14e0708",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 10.391
+    },
+    {
+      "model": "gemini-3.1-pro-preview",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:23:44.451001+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.1-pro-preview"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.1-pro-preview:generateContent",
+          "requested_model": "gemini-3.1-pro-preview",
+          "http_status": 200,
+          "response_model": "gemini-3.1-pro-preview"
+        }
+      ],
+      "output_characters": 131,
+      "output_sha256": "7be6ecca38b1ffd569be10723647cc290f46f60c4ab6a377883aa81d1cf9cd9b",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 5.885
+    },
+    {
+      "model": "gemini-2.5-pro",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:23:48.385224+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-2.5-pro"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-2.5-pro:generateContent",
+          "requested_model": "gemini-2.5-pro",
+          "http_status": 200,
+          "response_model": "gemini-2.5-pro"
+        }
+      ],
+      "output_characters": 3558,
+      "output_sha256": "3598bb48a9802656a61de28ac79c69ee9050e1c1b103cdc80543a86b221b16d9",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 24.257
+    },
+    {
+      "model": "gemini-2.5-pro",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:23:50.666446+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-2.5-pro"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-2.5-pro:generateContent",
+          "requested_model": "gemini-2.5-pro",
+          "http_status": 200,
+          "response_model": "gemini-2.5-pro"
+        }
+      ],
+      "output_characters": 1148,
+      "output_sha256": "ee75efac54fb7105b257f9c7ac7f5e0772cdbf9bae37b8152b2b81848d2b2b2b",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 26.319
+    },
+    {
+      "model": "gemini-2.5-pro",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:24:12.893771+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-2.5-pro"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-2.5-pro:generateContent",
+          "requested_model": "gemini-2.5-pro",
+          "http_status": 200,
+          "response_model": "gemini-2.5-pro"
+        }
+      ],
+      "output_characters": 1101,
+      "output_sha256": "3aefb64f3cd08eba13dcec151f896d0491e88073a68c0aa992de6935e28df59c",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 20.501
+    },
+    {
+      "model": "gemini-2.5-pro",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:24:17.222886+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-2.5-pro"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-2.5-pro:generateContent",
+          "requested_model": "gemini-2.5-pro",
+          "http_status": 200,
+          "response_model": "gemini-2.5-pro"
+        }
+      ],
+      "output_characters": 1026,
+      "output_sha256": "606b96d666f4dd00020312d687455ed6522cf7f55818110e14b3d7a0dcd4aece",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 17.081
+    },
+    {
+      "model": "gemini-2.5-pro",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:24:33.670350+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-2.5-pro"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-2.5-pro:generateContent",
+          "requested_model": "gemini-2.5-pro",
+          "http_status": 200,
+          "response_model": "gemini-2.5-pro"
+        }
+      ],
+      "output_characters": 314,
+      "output_sha256": "bdf0f5041308f4cd17c9e0e15774458589dca269ef763ba0f1a7792ee3acdf9d",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 14.405
+    },
+    {
+      "model": "gemini-2.5-flash",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:24:34.572898+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-2.5-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-2.5-flash:generateContent",
+          "requested_model": "gemini-2.5-flash",
+          "http_status": 200,
+          "response_model": "gemini-2.5-flash"
+        }
+      ],
+      "output_characters": 5446,
+      "output_sha256": "8ed787451e28d97d8f91d0d79c08a74d29d9e947b3e9fb864cbbe0f65ce50bfa",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 18.032
+    },
+    {
+      "model": "gemini-2.5-flash",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:24:48.342398+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-2.5-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-2.5-flash:generateContent",
+          "requested_model": "gemini-2.5-flash",
+          "http_status": 200,
+          "response_model": "gemini-2.5-flash"
+        }
+      ],
+      "output_characters": 1162,
+      "output_sha256": "24500199bd0bb9008928112a2760124b830f39e6dac74d1c0ef71129eb7a7b71",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 12.425
+    },
+    {
+      "model": "gemini-2.5-flash",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:24:52.861133+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-2.5-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-2.5-flash:generateContent",
+          "requested_model": "gemini-2.5-flash",
+          "http_status": 200,
+          "response_model": "gemini-2.5-flash"
+        }
+      ],
+      "output_characters": 1182,
+      "output_sha256": "0012318709c120c19d7f924ec27c9c539230b74c80a54d9cd8cdf4e128f72258",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 8.995
+    },
+    {
+      "model": "gemini-2.5-flash",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:25:02.126808+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-2.5-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-2.5-flash:generateContent",
+          "requested_model": "gemini-2.5-flash",
+          "http_status": 200,
+          "response_model": "gemini-2.5-flash"
+        }
+      ],
+      "output_characters": 41,
+      "output_sha256": "db91b91956850fe790be08398941e3d0fdf1f647a945a9688bfa0a8a5996fd8d",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 4.859
+    },
+    {
+      "model": "gemini-2.5-flash",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:25:01.071412+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-2.5-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-2.5-flash:generateContent",
+          "requested_model": "gemini-2.5-flash",
+          "http_status": 200,
+          "response_model": "gemini-2.5-flash"
+        }
+      ],
+      "output_characters": 1110,
+      "output_sha256": "dc64de230a959aa4177c8d7e1fdd0533307ce2156680942ca9f4fac80199a551",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 9.474
+    },
+    {
+      "model": "claude-fable-5-1",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:25:10.787122+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-fable-5-1"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-fable-5-1",
+          "http_status": 200,
+          "response_model": "claude-fable-5-1"
+        }
+      ],
+      "output_characters": 1716,
+      "output_sha256": "3055edaed35e1273f77fb3f782235373fbe3746fa73489f639ee3cc2513abd19",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 11.309
+    },
+    {
+      "model": "claude-fable-5-1",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:25:07.234884+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-fable-5-1"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-fable-5-1",
+          "http_status": 200,
+          "response_model": "claude-fable-5-1"
+        }
+      ],
+      "output_characters": 3504,
+      "output_sha256": "b37da2b63ace24e899675fcf168f8bd49a7c8a87f67f91e87b176f87acdbe2af",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 22.413
+    },
+    {
+      "model": "claude-fable-5-1",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:25:22.339060+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-fable-5-1"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-fable-5-1",
+          "http_status": 200,
+          "response_model": "claude-fable-5-1"
+        }
+      ],
+      "output_characters": 1581,
+      "output_sha256": "b2281bf5bf2c70c26aea5414066dfd60f071e7f912c4c37e33108699ccf086d4",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 10.989
+    },
+    {
+      "model": "claude-fable-5-1",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:25:33.581782+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-fable-5-1"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-fable-5-1",
+          "http_status": 200,
+          "response_model": "claude-fable-5-1"
+        }
+      ],
+      "output_characters": 150,
+      "output_sha256": "257c57c9f73bd673a66987c92537cc9dcd68c5ba6c3d6832e614df0751c50c95",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 2.723
+    },
+    {
+      "model": "claude-fable-5-1",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:25:29.886727+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-fable-5-1"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-fable-5-1",
+          "http_status": 200,
+          "response_model": "claude-fable-5-1"
+        }
+      ],
+      "output_characters": 1481,
+      "output_sha256": "a33c222b55ebb5725ee4ed59aab748029b20d1ae43946e158016d9918dece3de",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 14.188
+    },
+    {
+      "model": "claude-sonnet-5",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:25:44.297802+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-sonnet-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-sonnet-5",
+          "http_status": 200,
+          "response_model": "claude-sonnet-5"
+        }
+      ],
+      "output_characters": 1221,
+      "output_sha256": "f0ac67310360b955bad4d075cb8a73810a210bb8e101c5e42e2eadc9f1539b25",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 9.081
+    },
+    {
+      "model": "claude-sonnet-5",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:25:36.524437+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-sonnet-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-sonnet-5",
+          "http_status": 200,
+          "response_model": "claude-sonnet-5"
+        }
+      ],
+      "output_characters": 3626,
+      "output_sha256": "24e2ff3ae1ae0da3fbab272f0229d0be63193ae2239a408c5e7b1c1563db2c8d",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 16.936
+    },
+    {
+      "model": "claude-sonnet-5",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:25:53.633797+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-sonnet-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-sonnet-5",
+          "http_status": 200,
+          "response_model": "claude-sonnet-5"
+        }
+      ],
+      "output_characters": 1134,
+      "output_sha256": "5ee9f2f57b23fb030b7bacbd6f7aad318951dac16c5be710345a73d60567caab",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 9.552
+    },
+    {
+      "model": "claude-sonnet-5",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:25:53.748205+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-sonnet-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-sonnet-5",
+          "http_status": 200,
+          "response_model": "claude-sonnet-5"
+        }
+      ],
+      "output_characters": 1178,
+      "output_sha256": "39ee92e747935f390ab1374ad7bec2b17b60e13162ae911c104d1b5cde3c39b6",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 12.225
+    },
+    {
+      "model": "claude-sonnet-5",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:26:03.437564+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-sonnet-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-sonnet-5",
+          "http_status": 200,
+          "response_model": "claude-sonnet-5"
+        }
+      ],
+      "output_characters": 142,
+      "output_sha256": "758f4c4a6435f3e4557ecb6a01176c373140b2e3152557a771d77cdf3583390a",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 2.62
+    },
+    {
+      "model": "claude-fable-5",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:26:06.290146+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-fable-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-fable-5",
+          "http_status": 200,
+          "response_model": "claude-fable-5"
+        }
+      ],
+      "output_characters": 1592,
+      "output_sha256": "320cd0c49a783b76bd03751657199bc254761e571a69e07a8ebac853966f3caf",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 12.354
+    },
+    {
+      "model": "claude-fable-5",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:26:06.244739+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-fable-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-fable-5",
+          "http_status": 200,
+          "response_model": "claude-fable-5"
+        }
+      ],
+      "output_characters": 3703,
+      "output_sha256": "45de7f4a20f3231333876ab6a3b16e232c45f59e9623f0b4a3dd894c836e4085",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 20.319
+    },
+    {
+      "model": "claude-fable-5",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:26:18.883134+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-fable-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-fable-5",
+          "http_status": 200,
+          "response_model": "claude-fable-5"
+        }
+      ],
+      "output_characters": 1245,
+      "output_sha256": "ae9d2df9301b7dd7ff353ec8b7e40a98b2538704048671070d39e1b31ad45fec",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 10.85
+    },
+    {
+      "model": "claude-fable-5",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:26:29.951527+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-fable-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-fable-5",
+          "http_status": 200,
+          "response_model": "claude-fable-5"
+        }
+      ],
+      "output_characters": 237,
+      "output_sha256": "857c8418a5bda348f905fa8dd99b93150923df529ad3ecd1b0a10c4371b2bace",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 5.272
+    },
+    {
+      "model": "claude-fable-5",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:26:26.766149+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-fable-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-fable-5",
+          "http_status": 200,
+          "response_model": "claude-fable-5"
+        }
+      ],
+      "output_characters": 1355,
+      "output_sha256": "87bdcda5fc68b56beb1270e75786a7e4a9ded1e819744bc20b7bcb52b8f9d538",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 10.41
+    },
+    {
+      "model": "claude-opus-4-8",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:26:37.432388+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-4-8"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-4-8",
+          "http_status": 200,
+          "response_model": "claude-opus-4-8"
+        }
+      ],
+      "output_characters": 1031,
+      "output_sha256": "1c4d51fb13007ff58e765eb40130ed057fdf2f6a5c9c7e5a2b4840da1577ba76",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 8.151
+    },
+    {
+      "model": "claude-opus-4-8",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:26:35.518125+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-4-8"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-4-8",
+          "http_status": 200,
+          "response_model": "claude-opus-4-8"
+        }
+      ],
+      "output_characters": 3123,
+      "output_sha256": "e9784b338d896c58046a87d524b8aae0de1ad58211c876e197e12faa3237aa53",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 18.769
+    },
+    {
+      "model": "claude-opus-4-8",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:26:45.891599+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-4-8"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-4-8",
+          "http_status": 200,
+          "response_model": "claude-opus-4-8"
+        }
+      ],
+      "output_characters": 1088,
+      "output_sha256": "ed3867a55d60493267beee8108b2bea96f6141e16ad667e26a6c39595c41a7fb",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 9.369
+    },
+    {
+      "model": "claude-opus-4-8",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:26:55.533736+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-4-8"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-4-8",
+          "http_status": 200,
+          "response_model": "claude-opus-4-8"
+        }
+      ],
+      "output_characters": 341,
+      "output_sha256": "8d0f35185e595ebf82bd7eeaaf3194c39baf025fc6ec752849a0dadf4d4b5c1e",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 3.841
+    },
+    {
+      "model": "claude-opus-4-8",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:26:54.561267+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-4-8"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-4-8",
+          "http_status": 200,
+          "response_model": "claude-opus-4-8"
+        }
+      ],
+      "output_characters": 1100,
+      "output_sha256": "627dc4ea250d4fa0c1017c094342de029204b371626ba34da58366126e4d5ac9",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 8.428
+    },
+    {
+      "model": "claude-opus-4-7",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:27:03.228022+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-4-7"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-4-7",
+          "http_status": 200,
+          "response_model": "claude-opus-4-7"
+        }
+      ],
+      "output_characters": 1406,
+      "output_sha256": "81e76847ad3ea0b1c2beff9629fa0c2486cdd5551d9c901ddf944221b5e71bda",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 11.143
+    },
+    {
+      "model": "claude-opus-4-7",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:26:59.627156+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-4-7"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-4-7",
+          "http_status": 200,
+          "response_model": "claude-opus-4-7"
+        }
+      ],
+      "output_characters": 3040,
+      "output_sha256": "22bc76228f0796e01bcbef2059a7db3c625d145b821d1d3ff7478c23e8b3ac29",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 20.243
+    },
+    {
+      "model": "claude-opus-4-7",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:27:14.629679+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-4-7"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-4-7",
+          "http_status": 200,
+          "response_model": "claude-opus-4-7"
+        }
+      ],
+      "output_characters": 1411,
+      "output_sha256": "c4ac877f8388839d5969e9a956cf59e38518c827bea00634d7d4f134e84d7671",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 10.542
+    },
+    {
+      "model": "claude-opus-4-7",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:27:25.421638+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-4-7"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-4-7",
+          "http_status": 200,
+          "response_model": "claude-opus-4-7"
+        }
+      ],
+      "output_characters": 126,
+      "output_sha256": "ff1ef92025d847d03b3f4b7665e9e0b58f70a5b12cdfcd8fe1d3b994230ad666",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 3.331
+    },
+    {
+      "model": "claude-opus-4-7",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:27:20.135150+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-4-7"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-4-7",
+          "http_status": 200,
+          "response_model": "claude-opus-4-7"
+        }
+      ],
+      "output_characters": 1156,
+      "output_sha256": "aad298eba1dc5765294165f60a7be7817a0b51d98abf0b553c79623a00518a6d",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 9.456
+    },
+    {
+      "model": "claude-opus-4-6",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:27:29.833476+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-4-6"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-4-6",
+          "http_status": 200,
+          "response_model": "claude-opus-4-6"
+        }
+      ],
+      "output_characters": 1468,
+      "output_sha256": "846a6ce09cddd54b3ab9a49336b4296a0de6501e1aa7a6f55f964ce407667b47",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 12.469
+    },
+    {
+      "model": "claude-opus-4-6",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:27:29.032397+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-4-6"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-4-6",
+          "http_status": 200,
+          "response_model": "claude-opus-4-6"
+        }
+      ],
+      "output_characters": 2947,
+      "output_sha256": "33d767faf10bf8e47c5c8d9231aebe1b3e2802837a3cea137cf7ee4a86448042",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 22.697
+    },
+    {
+      "model": "claude-opus-4-6",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:27:42.586965+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-4-6"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-4-6",
+          "http_status": 200,
+          "response_model": "claude-opus-4-6"
+        }
+      ],
+      "output_characters": 1165,
+      "output_sha256": "ecdf01876c83de8d960feef3ce61512a319261f89a5b4420c1019965d8cd58af",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 11.211
+    },
+    {
+      "model": "claude-opus-4-6",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:27:54.187249+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-4-6"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-4-6",
+          "http_status": 200,
+          "response_model": "claude-opus-4-6"
+        }
+      ],
+      "output_characters": 293,
+      "output_sha256": "4f2e8fe3874596f0a70759cf0c6ae48e64ff1a9e966ac23d720de9f2949fb824",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 5.968
+    },
+    {
+      "model": "claude-opus-4-6",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:27:52.073834+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-4-6"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-4-6",
+          "http_status": 200,
+          "response_model": "claude-opus-4-6"
+        }
+      ],
+      "output_characters": 1326,
+      "output_sha256": "85c771a19fd7c230f88d43336c9b7c22a16196b0c17f1c0b4f81d8a173dcd32b",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 13.018
+    },
+    {
+      "model": "claude-sonnet-4-6",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:28:05.542368+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-sonnet-4-6"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-sonnet-4-6",
+          "http_status": 200,
+          "response_model": "claude-sonnet-4-6"
+        }
+      ],
+      "output_characters": 1189,
+      "output_sha256": "537c5bd18b300373a95b69831df9eec3104deda1c4582da38cc3b565c9439e7e",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 9.44
+    },
+    {
+      "model": "claude-sonnet-4-6",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:28:00.498514+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-sonnet-4-6"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-sonnet-4-6",
+          "http_status": 200,
+          "response_model": "claude-sonnet-4-6"
+        }
+      ],
+      "output_characters": 2922,
+      "output_sha256": "88db24f796d1a0c966152b09e0fbbb6f0e58cb505501c520fd5860849a86d854",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 20.792
+    },
+    {
+      "model": "claude-sonnet-4-6",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:28:15.378444+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-sonnet-4-6"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-sonnet-4-6",
+          "http_status": 200,
+          "response_model": "claude-sonnet-4-6"
+        }
+      ],
+      "output_characters": 1088,
+      "output_sha256": "c3665dd30a282f04ade2bc3b68dca7abd36642cf362e6eb2b68c8ca48a09bc67",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 9.163
+    },
+    {
+      "model": "claude-sonnet-4-6",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:28:24.973702+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-sonnet-4-6"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-sonnet-4-6",
+          "http_status": 200,
+          "response_model": "claude-sonnet-4-6"
+        }
+      ],
+      "output_characters": 130,
+      "output_sha256": "15f6d5f43dc0ac6db7f165b342370707cbcd7cf10e476ae11c22beb4af2125e5",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 4.026
+    },
+    {
+      "model": "claude-sonnet-4-6",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:28:21.673776+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-sonnet-4-6"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-sonnet-4-6",
+          "http_status": 200,
+          "response_model": "claude-sonnet-4-6"
+        }
+      ],
+      "output_characters": 1099,
+      "output_sha256": "1447d94655c110f2a2554b98555a674dd21f1d0b3ba1bb6d31ca5c1a24f1484f",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 10.476
+    },
+    {
+      "model": "claude-haiku-4-5-20251001",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:28:32.555078+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-haiku-4-5-20251001"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-haiku-4-5-20251001",
+          "http_status": 200,
+          "response_model": "claude-haiku-4-5-20251001"
+        }
+      ],
+      "output_characters": 1902,
+      "output_sha256": "7304551c56e906abea9e00d2ad824c3028718046f84856ee6d3ed4a6eb722c12",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 9.816
+    },
+    {
+      "model": "claude-haiku-4-5-20251001",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:28:29.278215+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-haiku-4-5-20251001"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-haiku-4-5-20251001",
+          "http_status": 200,
+          "response_model": "claude-haiku-4-5-20251001"
+        }
+      ],
+      "output_characters": 3133,
+      "output_sha256": "0c9b4cda84c4798dfcead3e0445223855d4a686caa821e7f5f3042c7ce34aa51",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 13.316
+    },
+    {
+      "model": "claude-haiku-4-5-20251001",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:36:06.626326+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-haiku-4-5-20251001"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-haiku-4-5-20251001",
+          "http_status": 200,
+          "response_model": "claude-haiku-4-5-20251001"
+        }
+      ],
+      "output_characters": 652,
+      "output_sha256": "e7185c92456d487c574ae1758f358eed699609348a971dfcb76a73d85ef2bfbf",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 4.864,
+      "previous_attempts": [
+        {
+          "model": "claude-haiku-4-5-20251001",
+          "role": "tiebreaker",
+          "tested_at": "2026-10-28T22:33:02.184709+00:00",
+          "timeout_seconds": 90,
+          "max_output_tokens": 4096,
+          "inference": "real",
+          "fallback_allowed": false,
+          "provider": "claude",
+          "status": "passed",
+          "schema_errors": [],
+          "dispatched_models": [
+            "claude-haiku-4-5-20251001"
+          ],
+          "requests": [
+            {
+              "endpoint": "/v1/messages",
+              "requested_model": "claude-haiku-4-5-20251001",
+              "http_status": 200,
+              "response_model": "claude-haiku-4-5-20251001"
+            }
+          ],
+          "output_characters": 1264,
+          "output_sha256": "fee88553193b3e473c775d0169cfaa7af7e8004543eaadd496d0132d7c1fa79f",
+          "output_fields": [
+            "learning",
+            "new_ideas",
+            "rerank_pending",
+            "verdict",
+            "veto"
+          ],
+          "elapsed_seconds": 7.587,
+          "previous_attempts": [
+            {
+              "model": "claude-haiku-4-5-20251001",
+              "role": "tiebreaker",
+              "tested_at": "2026-10-28T22:28:42.939881+00:00",
+              "timeout_seconds": 90,
+              "max_output_tokens": 4096,
+              "inference": "real",
+              "fallback_allowed": false,
+              "provider": "claude",
+              "status": "invalid_role_response",
+              "schema_errors": [
+                "no_parsed_object"
+              ],
+              "dispatched_models": [
+                "claude-haiku-4-5-20251001"
+              ],
+              "requests": [
+                {
+                  "endpoint": "/v1/messages",
+                  "requested_model": "claude-haiku-4-5-20251001",
+                  "http_status": 200,
+                  "response_model": "claude-haiku-4-5-20251001"
+                }
+              ],
+              "output_characters": 1757,
+              "output_sha256": "d383a3b2a4e4d764d467c46c5972ee0a3f306166178c53d7612880f4719a24db",
+              "output_fields": [],
+              "elapsed_seconds": 8.371
+            }
+          ],
+          "revision_note": "Explicit JSON tiebreaker schema; exact selected model retained"
+        }
+      ],
+      "revision_note": "Concise uncertainty-aware tiebreaker with explicit JSON and learning markers; exact model retained"
+    },
+    {
+      "model": "claude-haiku-4-5-20251001",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:28:42.755526+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-haiku-4-5-20251001"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-haiku-4-5-20251001",
+          "http_status": 200,
+          "response_model": "claude-haiku-4-5-20251001"
+        }
+      ],
+      "output_characters": 2540,
+      "output_sha256": "e5773eafb40d2d2f420e320a613402b7c69bb4016c1207229b2c2bbad8195592",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 11.133
+    },
+    {
+      "model": "claude-haiku-4-5-20251001",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:28:51.727868+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-haiku-4-5-20251001"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-haiku-4-5-20251001",
+          "http_status": 200,
+          "response_model": "claude-haiku-4-5-20251001"
+        }
+      ],
+      "output_characters": 329,
+      "output_sha256": "5b1215cc03e4840238718aac4e5545dc052fc11bdbcf52ad5c9848fc6c19013f",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 3.94
+    }
+  ]
+}

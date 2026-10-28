@@ -1,0 +1,283 @@
+{
+  "generated_at": null,
+  "results": [
+    {
+      "model": "flint/local",
+      "provider": "flint",
+      "role": "research",
+      "tested_at": "2026-10-28T22:41:52.300139+00:00",
+      "inference": "real",
+      "fallback_allowed": false,
+      "transport": "agent_cli.command/mini/pty",
+      "timeout_seconds": 120,
+      "dispatched_models": [
+        "flint/local"
+      ],
+      "status": "passed",
+      "tool_task_passed": true,
+      "observed_models": [
+        "flint/local"
+      ],
+      "completed_tools": [
+        "read",
+        "shell",
+        "write"
+      ],
+      "workspace_verified": true,
+      "created_files": [
+        "solution.py",
+        "result.json"
+      ],
+      "file_sha256": {
+        "solution.py": "1671a6e1c386083b992b02919512272a67cadfc4badd20a6e72c4232f04f696d",
+        "result.json": "89b8d06f22cce686bfebd21631e50a710955a714c5283e777e7c3c92da77f6f3"
+      },
+      "elapsed_seconds": 19.527,
+      "configuration_revision": "Final isolated configuration, private DB, exact API model/body/endpoint, builtin/delegate pins and production 16384/8192 limits.",
+      "strict_revalidation": "passed",
+      "previous_attempts": [
+        {
+          "model": "flint/local",
+          "provider": "flint",
+          "role": "research",
+          "tested_at": "2026-10-28T22:28:06.979137+00:00",
+          "inference": "real",
+          "fallback_allowed": false,
+          "transport": "agent_cli.command/mini/pty",
+          "timeout_seconds": 180,
+          "dispatched_models": [
+            "flint/local"
+          ],
+          "status": "passed",
+          "tool_task_passed": true,
+          "observed_models": [
+            "flint/local"
+          ],
+          "completed_tools": [
+            "read",
+            "shell",
+            "write"
+          ],
+          "workspace_verified": true,
+          "created_files": [
+            "solution.py",
+            "result.json"
+          ],
+          "file_sha256": {
+            "solution.py": "1671a6e1c386083b992b02919512272a67cadfc4badd20a6e72c4232f04f696d",
+            "result.json": "89b8d06f22cce686bfebd21631e50a710955a714c5283e777e7c3c92da77f6f3"
+          },
+          "elapsed_seconds": 23.533
+        },
+        {
+          "model": "flint/local",
+          "provider": "flint",
+          "role": "research",
+          "tested_at": "2026-10-28T22:30:46.432812+00:00",
+          "inference": "real",
+          "fallback_allowed": false,
+          "transport": "agent_cli.command/mini/pty",
+          "timeout_seconds": 180,
+          "dispatched_models": [
+            "flint/local"
+          ],
+          "status": "passed",
+          "tool_task_passed": true,
+          "observed_models": [
+            "flint/local"
+          ],
+          "completed_tools": [
+            "read",
+            "shell",
+            "write"
+          ],
+          "workspace_verified": true,
+          "created_files": [
+            "solution.py",
+            "result.json"
+          ],
+          "file_sha256": {
+            "solution.py": "1c9c965b780cf99e3064b754d76dcfeb6d4f71c67490b7ad19a4c0c75160b1fc",
+            "result.json": "c29762db3aaec5ad0c957e1300998e4f1324801ffb876b0d598e54b2e9c2598a"
+          },
+          "elapsed_seconds": 17.881
+        },
+        {
+          "model": "flint/local",
+          "provider": "flint",
+          "role": "research",
+          "tested_at": "2026-10-28T22:38:34.525464+00:00",
+          "inference": "real",
+          "fallback_allowed": false,
+          "transport": "agent_cli.command/mini/pty",
+          "timeout_seconds": 120,
+          "dispatched_models": [
+            "flint/local"
+          ],
+          "status": "passed",
+          "tool_task_passed": true,
+          "observed_models": [
+            "flint/local"
+          ],
+          "completed_tools": [
+            "read",
+            "shell",
+            "write"
+          ],
+          "workspace_verified": true,
+          "created_files": [
+            "solution.py",
+            "result.json"
+          ],
+          "file_sha256": {
+            "solution.py": "5a95d7019b98d80009fd4f22d4b2473ed2e7c54e73f679d5a3a53fc193f0eb23",
+            "result.json": "89b8d06f22cce686bfebd21631e50a710955a714c5283e777e7c3c92da77f6f3"
+          },
+          "elapsed_seconds": 15.766
+        }
+      ]
+    },
+    {
+      "model": "flint/local",
+      "provider": "flint",
+      "role": "author",
+      "tested_at": "2026-10-28T22:42:11.827661+00:00",
+      "inference": "real",
+      "fallback_allowed": false,
+      "transport": "agent_cli.command/mini/pty",
+      "timeout_seconds": 120,
+      "dispatched_models": [
+        "flint/local"
+      ],
+      "status": "passed",
+      "tool_task_passed": true,
+      "observed_models": [
+        "flint/local"
+      ],
+      "completed_tools": [
+        "read",
+        "write"
+      ],
+      "workspace_verified": true,
+      "created_files": [
+        "appendix.tex",
+        "paper-check.json"
+      ],
+      "file_sha256": {
+        "appendix.tex": "30e107798062008e1c78194f8f9832f40ae3bda2a28f1930ccdf8495515472fa",
+        "paper-check.json": "29e7d4e72d583e5fbf5faf5d521dc3d3a0895beea273a2b9743987b28143dbd3"
+      },
+      "elapsed_seconds": 27.537,
+      "configuration_revision": "Final isolated configuration, private DB, exact API model/body/endpoint, builtin/delegate pins and production 16384/8192 limits.",
+      "strict_revalidation": "passed",
+      "previous_attempts": [
+        {
+          "model": "flint/local",
+          "provider": "flint",
+          "role": "author",
+          "tested_at": "2026-10-28T22:28:30.512913+00:00",
+          "inference": "real",
+          "fallback_allowed": false,
+          "transport": "agent_cli.command/mini/pty",
+          "timeout_seconds": 180,
+          "dispatched_models": [
+            "flint/local"
+          ],
+          "status": "passed",
+          "tool_task_passed": true,
+          "observed_models": [
+            "flint/local"
+          ],
+          "completed_tools": [
+            "read",
+            "write"
+          ],
+          "workspace_verified": true,
+          "created_files": [
+            "appendix.tex",
+            "paper-check.json"
+          ],
+          "file_sha256": {
+            "appendix.tex": "d6aadbe70d3220dd2fddc96db8b5a5cff7f3412f46b5c332cb722c056c280fcc",
+            "paper-check.json": "29e7d4e72d583e5fbf5faf5d521dc3d3a0895beea273a2b9743987b28143dbd3"
+          },
+          "elapsed_seconds": 16.952
+        },
+        {
+          "model": "flint/local",
+          "provider": "flint",
+          "role": "author",
+          "tested_at": "2026-10-28T22:31:04.314870+00:00",
+          "inference": "real",
+          "fallback_allowed": false,
+          "transport": "agent_cli.command/mini/pty",
+          "timeout_seconds": 180,
+          "dispatched_models": [
+            "flint/local"
+          ],
+          "status": "passed",
+          "tool_task_passed": true,
+          "observed_models": [
+            "flint/local"
+          ],
+          "completed_tools": [
+            "read",
+            "write"
+          ],
+          "workspace_verified": true,
+          "created_files": [
+            "appendix.tex",
+            "paper-check.json"
+          ],
+          "file_sha256": {
+            "appendix.tex": "74b0a4835c2fc231fe4a7f322f7d967a5ec578a80d4fe2e7de4a5489294394e1",
+            "paper-check.json": "29e7d4e72d583e5fbf5faf5d521dc3d3a0895beea273a2b9743987b28143dbd3"
+          },
+          "elapsed_seconds": 18.19
+        },
+        {
+          "model": "flint/local",
+          "provider": "flint",
+          "role": "author",
+          "tested_at": "2026-10-28T22:38:50.291597+00:00",
+          "inference": "real",
+          "fallback_allowed": false,
+          "transport": "agent_cli.command/mini/pty",
+          "timeout_seconds": 120,
+          "dispatched_models": [
+            "flint/local"
+          ],
+          "status": "passed",
+          "tool_task_passed": true,
+          "observed_models": [
+            "flint/local"
+          ],
+          "completed_tools": [
+            "read",
+            "write"
+          ],
+          "workspace_verified": true,
+          "created_files": [
+            "appendix.tex",
+            "paper-check.json"
+          ],
+          "file_sha256": {
+            "appendix.tex": "86574142307ec7364dd186ee59aa78ac09c45763e3b1fba40f0c1f3612e1def8",
+            "paper-check.json": "29e7d4e72d583e5fbf5faf5d521dc3d3a0895beea273a2b9743987b28143dbd3"
+          },
+          "elapsed_seconds": 58.595
+        }
+      ]
+    }
+  ],
+  "final_source_sha256": {
+    "backend/app/opencode_runtime.py": "bac872558f23ee421d569c711ca5d8270145f5be9687b207e583afcfb036f112",
+    "backend/app/provider_config.py": "3fd5a6d2afa4a18afd1e29d3ef94150e04e72472c0c13be53318fdf49a3691bc",
+    "backend/app/council.py": "15ba9c6b7ffcdd0d554e384042cfd8e47d68018a7f10bcab05a6ef6a99321fd4",
+    "backend/app/pi.py": "d368ab12ca6a3c080f1d1f4dd17eaa876169d215be04cc501df7048033e73856",
+    "backend/app/agent_cli.py": "a756eaf9d1e41af0bdf0b8920e49d735d7c29790aced446c373d24e2342ba5fa"
+  },
+  "strict_configuration": "App-owned config and private DB; exact provider/endpoint/package/API model and request body; all allowed agent models pinned; unpinned delegates denied.",
+  "quota_note": "After earlier successful free inference, HTTP429 free usage limit responses also blocked simple coding. Redundant retries were stopped. Captured CLI error responses exposed body only, with no Retry-After headers or reset time metadata recorded.",
+  "synthetic_validation": "35 focused tests including real installed CLI against synthetic local protocol, hostile global/project model/body/baseURL settings, readonly context permissions and rejection of unpinned custom delegates."
+}

@@ -119,9 +119,12 @@ def test_track_run_allows_smoke_probe_when_paused(client):
     assert "run_id" in r.json()
 
 
-def test_track_run_allowed_after_resume(client):
+def test_track_run_allowed_after_resume(client, monkeypatch):
     """After /api/research/resume the gate lifts immediately — the next
     POST /api/track/run goes through."""
+    from backend.app import council
+    # A resumed run still requires independent code-review approval.
+    monkeypatch.setattr(council, "is_code_blessed", lambda: True)
     client.post("/api/research/pause")
     assert client.post("/api/track/run",
                        json={"name": "blocked", "config": {}}).status_code == 423

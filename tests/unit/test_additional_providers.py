@@ -1,6 +1,7 @@
 """Provider protocols and every new model across coding/advisory roles."""
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -21,7 +22,7 @@ def test_free_model_all_roles(short, arui_env, monkeypatch):
     registry = {m["id"]: m for m in public_registry()["models"]}
     assert registry[model]["agent_cli"] and registry[model]["free"]
     seen = []
-    monkeypatch.setattr(opencode_runtime, "complete", lambda *args: seen.append(args) or '{"ok":true}')
+    monkeypatch.setattr(opencode_runtime, "complete", lambda *args, **kwargs: seen.append(args) or '{"ok":true}')
     for slot in ("gemini", "openai", "claude"):
         cfg = dict(council.DEFAULTS, **{f"council_{slot}_model": model})
         if slot == "claude":
@@ -96,7 +97,7 @@ def test_local_flint_coding_and_advisors(arui_env, monkeypatch):
                and "response_format" not in body for url, body, headers in seen)
 
 
-def test_advisor_cli_is_tool_disabled_and_uses_stdin(arui_env, monkeypatch, tmp_path):
+def test_advisor_cli_reads_only_private_context_and_uses_stdin(arui_env, monkeypatch, tmp_path):
     from backend.app import opencode_runtime
     monkeypatch.setattr(opencode_runtime, "opencode_binary", lambda: "/bin/opencode")
     captured = {}
@@ -104,16 +105,40 @@ def test_advisor_cli_is_tool_disabled_and_uses_stdin(arui_env, monkeypatch, tmp_
         returncode = 0
         def __init__(self, argv, **kw):
             captured.update(argv=argv, **kw)
+            captured["context"] = (Path(kw["cwd"]) / "context.txt").read_text()
         def communicate(self, user, timeout):
             captured.update(input=user, timeout=timeout)
-            return json.dumps({"type": "text", "part": {"text": "answer"}}), ""
+            read = {"type": "tool_use", "part": {"tool": "read", "state": {
+                "status": "completed", "input": {"path": "context.txt"}}}}
+            return json.dumps(read) + "\n" + json.dumps({"type": "text", "part": {"text": "answer"}}), ""
     monkeypatch.setattr(opencode_runtime.subprocess, "Popen", Proc)
     assert opencode_runtime.complete("opencode/big-pickle", "system", "private context") == "answer"
-    assert "private context" not in captured["argv"] and captured["input"] == "private context"
+    assert "private context" not in captured["argv"] and captured["context"] == "private context"
+    assert "Read context.txt" in captured["input"]
     assert "--standalone" in captured["argv"]
     cfg = json.loads(captured["env"]["OPENCODE_CONFIG_CONTENT"])
-    assert cfg["agents"]["arui-advisor"]["permissions"] == [{"action": "*", "resource": "*", "effect": "deny"}]
+    assert cfg["agents"]["arui-advisor"]["permissions"] == [
+        {"action": "*", "resource": "*", "effect": "deny"},
+        {"action": "read", "resource": "context.txt", "effect": "allow"}]
     assert cfg["agents"]["arui-advisor"]["system"] == "system"
+    assert captured["env"]["OPENCODE_DB"] == str(Path(captured["cwd"]) / "opencode.db")
+    assert captured["env"]["PWD"] == captured["cwd"]
+
+
+@pytest.mark.parametrize("path,status,accepted", [
+    ("context.txt", "completed", True),
+    ("other.txt", "completed", False),
+    ("../context.txt", "completed", False),
+    ("context.txt", "error", False),
+])
+def test_advisor_requires_its_exact_successful_context_read(arui_env, tmp_path, path, status, accepted):
+    from backend.app.opencode_runtime import _read_context_completed
+    event = {"type": "tool_use", "part": {"tool": "read", "state": {
+        "status": status, "input": {"path": path}}}}
+    assert _read_context_completed(json.dumps(event), str(tmp_path)) is accepted
+    # Assistant prose claiming a read is never evidence of a tool execution.
+    assert not _read_context_completed(json.dumps({"type": "text", "part": {
+        "text": "I read context.txt successfully"}}), str(tmp_path))
 
 
 def test_cli_errors_do_not_leak_response_secrets(arui_env):
@@ -133,11 +158,33 @@ def test_quota_error_has_actionable_message_without_raw_payload(arui_env):
     assert "usage limit" in str(exc.value) and "secret" not in str(exc.value)
 
 
+def test_unavailable_model_is_reported_without_silent_substitution(arui_env):
+    from backend.app.opencode_runtime import OpenCodeRequestError, parse_events
+    with pytest.raises(OpenCodeRequestError) as exc:
+        parse_events(json.dumps({"type": "error", "error": {
+            "message": "Selected model unavailable: private request secret"}}))
+    assert exc.value.error_category == "model_unavailable"
+    assert "explicitly select another model" in str(exc.value)
+    assert "secret" not in str(exc.value)
+
+
 def test_local_missing_endpoint_does_not_report_missing_cloud_key(arui_env, monkeypatch):
     from backend.app import pi
     monkeypatch.delenv("ARUI_FLINT_BASE_URL", raising=False)
     with pytest.raises(RuntimeError, match="server URL"):
         pi._call("flint/local", "system", "user")
+
+
+def test_flint_context_limits_fit_small_servers_and_allow_explicit_override(arui_env, monkeypatch):
+    from backend.app.provider_config import flint_limits
+    monkeypatch.delenv("ARUI_FLINT_CONTEXT_TOKENS", raising=False)
+    monkeypatch.delenv("ARUI_FLINT_MAX_OUTPUT_TOKENS", raising=False)
+    assert flint_limits() == (16384, 8192)
+    monkeypatch.setenv("ARUI_FLINT_CONTEXT_TOKENS", "32768")
+    monkeypatch.setenv("ARUI_FLINT_MAX_OUTPUT_TOKENS", "8192")
+    assert flint_limits() == (32768, 8192)
+    with pytest.raises(ValueError, match="smaller"):
+        flint_limits({"flint_context_tokens": 4096, "flint_max_output_tokens": 4096})
 
 
 def test_served_id_alone_does_not_trigger_local_validation(arui_env, monkeypatch):
@@ -201,3 +248,25 @@ def test_resume_preserves_workspace_after_display_rename(arui_env, monkeypatch, 
     monkeypatch.setattr(realrun, "RealAgent", Agent)
     realrun.start_real({"repo_name": "new-name", "purpose": "existing purpose"}, resume=True)
     assert captured["workspace"] == str(workspace)
+
+
+def test_opencode_pins_provider_api_id_and_all_maintenance_models(arui_env):
+    from backend.app.opencode_runtime import agent_environment
+    model = 'opencode/nemotron-3.5-lightning-free'
+    config = json.loads(agent_environment(model)['OPENCODE_CONFIG_CONTENT'])
+    provider = config['providers']['opencode']
+    chosen = provider['models']['nemotron-3.5-lightning-free']
+    assert chosen['modelID'] == 'nemotron-3.5-lightning-free'
+    for route in (provider, chosen):
+        assert route['package'] == '@opencode/ai/providers/openai-compatible'
+        assert route['settings']['baseURL'] == 'https://opencode.ai/inference/openai/v1'
+        assert route['body']['model'] == 'nemotron-3.5-lightning-free'
+    assert config['policies'] == [
+        {'action':'provider.use','resource':'*','effect':'deny'},
+        {'action':'provider.use','resource':'opencode','effect':'allow'},
+        {'action':'tool.use','resource':'subagent:*','effect':'deny'},
+        {'action':'tool.use','resource':'subagent:general','effect':'allow'},
+        {'action':'tool.use','resource':'subagent:explore','effect':'allow'}]
+    for agent in ('arui-research','build','plan','general','explore','title','summary','compaction'):
+        assert config['agents'][agent]['model'] == model
+        assert config['agents'][agent]['request']['body']['model'] == 'nemotron-3.5-lightning-free'

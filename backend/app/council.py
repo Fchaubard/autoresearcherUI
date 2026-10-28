@@ -110,6 +110,16 @@ def _settings() -> dict:
 
 
 # ── reviewer availability ────────────────────────────────────────────────
+def configured_reviewers(cfg: dict) -> list[str]:
+    """Enabled logical reviewers, including ones with missing credentials.
+
+    These are required participants, not interchangeable fallbacks. Readiness
+    checks may explain a failed review but must never change this selection.
+    """
+    return [slot for slot in ("gemini", "openai")
+            if cfg.get(f"council_enable_{slot}", True)]
+
+
 def _available_reviewers(cfg: dict) -> list[str]:
     rs = []
     first_model = cfg.get("council_gemini_model") or DEFAULTS["council_gemini_model"]
@@ -128,12 +138,35 @@ def _claude_available(cfg: dict) -> bool:
 
 
 def is_enabled() -> bool:
-    return bool(_available_reviewers(_settings()))
+    return bool(configured_reviewers(_settings()))
 
 
 _INFLIGHT_LOCK = threading.Lock()
 _INFLIGHT: set[str] = set()
 _FILE_LOCK = threading.Lock()           # serialize ideas.md edits
+_LAST_REVIEW_ERROR = threading.local()
+
+
+def _reviewer_failure(reviewer: str, cfg: dict, detail: str,
+                      kind: str = "call_failed") -> None:
+    model = cfg.get(f"council_{reviewer}_model") or DEFAULTS[f"council_{reviewer}_model"]
+    message = f"Selected {reviewer} reviewer model {model} failed: {detail}"
+    _LAST_REVIEW_ERROR.message = message
+    print(f"[council] {message}", flush=True)
+    _emit_token_failure_event(reviewer, kind, message)
+
+def _preflight_reviewers(cfg: dict, reviewers: list[str]) -> bool:
+    """Report missing selected configuration before scheduling any inference."""
+    from .provider_config import requirement_error
+    ready = True
+    for reviewer in reviewers:
+        model = cfg.get(f"council_{reviewer}_model") or DEFAULTS[f"council_{reviewer}_model"]
+        missing = requirement_error(model)
+        if missing:
+            _reviewer_failure(reviewer, cfg, missing, "not_configured")
+            ready = False
+    return ready
+
 
 # Global semaphore: never more than this many council reviews in flight at
 # once across the whole process. A runaway agent that finishes 300 runs/min
@@ -282,21 +315,28 @@ regressing"):
   was wrong — that's the entire point of adversarial mode."""
 
 
-TIEBREAKER_SYSTEM = """You are the tiebreaker on a senior advisory panel for
-an autonomous ML research project. Two expert reviewers disagree after 3
-rounds of debate. Read both of their final positions and the run context,
-then make the final call. Return the same JSON schema as the reviewers
-(verdict, learning, rerank_pending, new_ideas, veto).
+TIEBREAKER_SYSTEM = """You are the final scientific reviewer for an ML experiment.
+Read the supplied experiment context and both reviewers' positions, then
+resolve their disagreement using only the evidence provided. An inconclusive
+result is valid when evidence is insufficient; do not manufacture certainty.
+Use any provided tools to read the supplied context before answering.
 
-""" + _LEARNING_CONTRACT + """
-
-In "learning", follow the same HYPOTHESIS / RESULT / WHY / GENERALIZABLE
-INSIGHT / NEXT EXPERIMENT contract. Cite at least one run_id in RESULT.
-You may add a parenthetical at the end of GENERALIZABLE INSIGHT noting
-which reviewer you sided with and why — but only as a parenthetical.
-The lessons.md entry must still be research content, not a procedural
-note about the debate. Be decisive — no hedging."""
-
+Return JSON ONLY in your final answer, with no surrounding prose or markdown:
+{
+  "verdict": "kept" | "discarded" | "crashed" | "inconclusive",
+  "learning": "HYPOTHESIS: ...\nRESULT: ...\nWHY: ...\nGENERALIZABLE INSIGHT: ...\nNEXT EXPERIMENT: ...",
+  "rerank_pending": ["<existing pending idea_id>", ...],
+  "new_ideas": [{"idea_id": "<snake_case>", "what": "<concrete experiment>",
+                 "why": "<falsifiable hypothesis>"}],
+  "veto": ["<existing pending idea_id>", ...]
+}
+Include all five keys; use empty arrays when appropriate. Keep the response
+concise. In learning, use one short sentence per literal marker. RESULT must
+cite a supplied run_id and measured number; WHY must acknowledge uncertainty
+when causality is not established. Write a scientific takeaway, not process
+advice or a recap of the debate. If the supplied evidence cannot support a
+truthful learning, leave that field empty. Recommend at most one new idea;
+rerank_pending and veto may contain only supplied pending idea IDs."""
 
 STRATEGIC_SYSTEM = """You are the senior scientific advisor on an autonomous
 ML research project. The agent has just finished a BATCH of N parallel
@@ -843,15 +883,15 @@ def _post_json(url: str, body: dict, headers: dict) -> dict:
 
 def _post_json_retry(url: str, body: dict, headers: dict) -> dict:
     """POST with retry on 429 (rate limit) and 5xx (transient). Other HTTP
-    errors propagate so the caller can log and skip.
+    errors propagate so the caller records an incomplete selected-model call.
 
     Read-timeouts are NOT retried: a timeout means the request is simply
     too slow (e.g. gpt-5 at high reasoning effort on a 60k-char completion-
     review prompt exceeding the 240s limit), and re-issuing the identical
     heavy request 4x just burns ~16 minutes per reviewer — which deadlocked
     the research-completion review (no verdict ever landed, so the agent
-    polled forever). Fail fast on timeout so the worker proceeds with
-    whatever reviewer DID respond."""
+    polled forever). Fail fast on timeout so the worker marks the required
+    review incomplete instead of approving with a surviving reviewer."""
     import socket as _socket
     last_exc: Exception | None = None
     for i, d in enumerate((0,) + _RETRY_DELAYS):
@@ -892,21 +932,43 @@ def _call_model(model: str, effort: str, system: str, user: str) -> str:
     raise RuntimeError(f"unknown model provider for {model!r}")
 
 
+class ModelOutputBudgetError(RuntimeError):
+    user_message = ("Flint exhausted its output budget before completing the answer; "
+                    "increase Flint's output limit within the server context limit")
+
+    def __init__(self):
+        super().__init__(self.user_message)
+
+
+def _model_error_detail(exc: BaseException) -> str:
+    """Allow controlled adapter guidance, never arbitrary provider error text."""
+    if isinstance(exc, ModelOutputBudgetError):
+        return exc.user_message
+    from .safe_errors import describe
+    status = getattr(exc, "status", None)
+    return f"HTTP {status}" if isinstance(status, int) else describe(exc)
+
+
 def _call_additional_model(model: str, system: str, user: str) -> str:
     if provider_for(model) == "opencode":
         from .opencode_runtime import complete
-        return complete(model, system, user)
-    from .provider_config import flint_config
+        return complete(model, system, user, timeout=_TIMEOUT)
+    from .provider_config import flint_config, flint_limits
     url, served_model, token = flint_config()
     body = {"model": served_model,
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": user}],
-            "max_tokens": 32768}
+            # Respect the configured local context/output budget, including
+            # room for reasoning tokens before the visible JSON answer.
+            "max_tokens": flint_limits()[1]}
     # Flint servers differ in structured-output support. Council/PI already
     # parse and validate their response; do not force unsupported JSON mode.
     data = _post_json_retry(url + "/chat/completions", body,
                            {"Authorization": f"Bearer {token}"} if token else {})
-    text = data["choices"][0]["message"].get("content")
+    choice = data["choices"][0]
+    if choice.get("finish_reason") == "length":
+        raise ModelOutputBudgetError()
+    text = choice["message"].get("content")
     if not isinstance(text, str) or not text.strip():
         raise RuntimeError("Flint returned no assistant text")
     return text
@@ -927,16 +989,21 @@ def _call_text_model(model: str, system: str, user: str) -> str:
             {"system_instruction": {"parts": [{"text": system}]},
              "contents": [{"role": "user", "parts": [{"text": user}]}]},
             {"x-goog-api-key": key})
-        return "".join(part.get("text", "") for part in data["candidates"][0]["content"]["parts"]
-                       if not part.get("thought"))
+        return _gemini_text(data)
     if provider == "openai":
-        data = _post_json_retry(
-            "https://api.openai.com/v1/chat/completions",
-            {"model": model, "messages": [{"role": "system", "content": system},
-                                            {"role": "user", "content": user}]},
-            {"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"})
-        return data["choices"][0]["message"]["content"]
+        return _call_openai_api(model, "low", system, user, json_mode=False)
     raise RuntimeError(f"Unknown provider for {model}")
+
+
+def _gemini_text(data: dict) -> str:
+    """Read visible text, never a thought block preceding the JSON answer."""
+    candidates = data.get("candidates") or []
+    parts = (candidates[0].get("content") or {}).get("parts") if candidates else []
+    text = "".join(p.get("text", "") for p in (parts or [])
+                   if not p.get("thought") and isinstance(p.get("text"), str))
+    if not text.strip():
+        raise RuntimeError("Gemini returned no assistant text")
+    return text
 
 
 def _call_gemini_api(model: str, effort: str, system: str, user: str) -> str:
@@ -952,23 +1019,53 @@ def _call_gemini_api(model: str, effort: str, system: str, user: str) -> str:
     if effort and efforts_for(model):
         body["generationConfig"]["thinkingConfig"] = {"thinkingLevel": effort}
     data = _post_json_retry(url, body, {"x-goog-api-key": key})
-    return data["candidates"][0]["content"]["parts"][0]["text"]
+    return _gemini_text(data)
 
 
-def _call_openai_api(model: str, effort: str, system: str, user: str) -> str:
+def _call_openai_api(model: str, effort: str, system: str, user: str,
+                     *, json_mode: bool = True) -> str:
     key = os.environ["OPENAI_API_KEY"]
+    allowed = efforts_for(model)
+    if allowed and effort not in allowed:
+        effort = "medium" if "medium" in allowed else allowed[0]
+    # o3-pro and maximum reasoning require Responses. Keep the exact
+    # selected model and effort; Chat Completions rejects effort="max".
+    if model == "o3-pro" or model.startswith("o3-pro-") or effort == "max":
+        # The JSON-mode validator checks input messages for the JSON
+        # instruction. A separate instructions field was insufficient for
+        # o3-pro when the user/context message itself did not mention JSON.
+        body = {"model": model,
+                "input": [{"role": "developer", "content": system},
+                          {"role": "user", "content": user}],
+                "reasoning": {"effort": effort}}
+        if json_mode:
+            body["text"] = {"format": {"type": "json_object"}}
+        data = _post_json_retry("https://api.openai.com/v1/responses", body,
+                               {"Authorization": f"Bearer {key}"})
+        text = "".join(part.get("text", "")
+                       for item in data.get("output", [])
+                       if item.get("type") == "message"
+                       for part in item.get("content", [])
+                       if part.get("type") == "output_text")
+        if not text.strip():
+            raise RuntimeError("OpenAI Responses returned no assistant text")
+        return text
     body = {
         "model": model,
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": user}],
-        "response_format": {"type": "json_object"},
     }
+    if json_mode:
+        body["response_format"] = {"type": "json_object"}
     # gpt-5 family and o-series accept reasoning_effort
     if efforts_for(model):
         body["reasoning_effort"] = effort
     data = _post_json_retry("https://api.openai.com/v1/chat/completions", body,
                             {"Authorization": f"Bearer {key}"})
-    return data["choices"][0]["message"]["content"]
+    text = data["choices"][0]["message"].get("content")
+    if not isinstance(text, str) or not text.strip():
+        raise RuntimeError("OpenAI returned no assistant text")
+    return text
 
 
 def _call_claude_api(model: str, system: str, user: str) -> str:
@@ -982,7 +1079,11 @@ def _call_claude_api(model: str, system: str, user: str) -> str:
     data = _post_json_retry("https://api.anthropic.com/v1/messages", body,
                             {"x-api-key": key,
                              "anthropic-version": "2023-06-01"})
-    return data["content"][0]["text"]
+    text = "".join(part.get("text", "") for part in data.get("content", [])
+                   if part.get("type", "text") == "text")
+    if not text.strip():
+        raise RuntimeError("Claude returned no assistant text")
+    return text
 
 
 def _call_gemini(system: str, user: str, cfg: dict) -> str:
@@ -1068,8 +1169,8 @@ def _emit_token_failure_event(reviewer: str, kind: str, detail: str) -> None:
                        actor=reviewer,
                        message=(f"{reviewer} reviewer is failing "
                                 f"({kind}): {detail[:160]}. "
-                                "Council will run with the other reviewers "
-                                "until you fix the token / quota."),
+                                "The required review is incomplete; no "
+                                "replacement model will be selected."),
                        created_at=_dt.datetime.now(
                            _dt.timezone.utc).isoformat())
             db.add(ev)
@@ -1087,59 +1188,41 @@ def _emit_token_failure_event(reviewer: str, kind: str, detail: str) -> None:
 
 def _call_reviewer(reviewer: str, system: str, user: str, cfg: dict
                    ) -> dict | None:
-    # PAUSE / HALT GATE — single choke point for ALL external council
-    # API calls. Every other council entry point (deliberate,
-    # strategic_review, _bless_worker) eventually funnels through here
-    # so this one early-return covers the whole module. If the user has
-    # paused research (or the system has hard-halted), we must NOT fire
-    # a Gemini/GPT/Claude API call — that's the entire point of pause.
+    _LAST_REVIEW_ERROR.message = ""
     try:
         from . import notify as _notify
         if _notify.research_paused():
-            print(f"[council] {reviewer} call suppressed — "
-                  "research_paused", flush=True)
+            _reviewer_failure(reviewer, cfg, "research is paused", "paused")
             return None
         halted, _reason = _notify.research_halted()
         if halted:
-            print(f"[council] {reviewer} call suppressed — "
-                  "research_halted", flush=True)
+            _reviewer_failure(reviewer, cfg, "research is halted", "paused")
             return None
     except Exception:
-        # Best-effort: don't break the council if the gate helper
-        # malfunctions.
         pass
+    model = cfg.get(f"council_{reviewer}_model") or DEFAULTS[f"council_{reviewer}_model"]
+    from .provider_config import requirement_error
+    missing = requirement_error(model)
+    if missing:
+        _reviewer_failure(reviewer, cfg, missing, "not_configured")
+        return None
     try:
         text = _CALLERS[reviewer](system, user, cfg)
-    except urllib.error.HTTPError as e:
-        body = ""
-        try:
-            body = e.read().decode("utf-8", errors="ignore")[:300]
-        except Exception:
-            pass
-        print(f"[council] {reviewer} HTTP {e.code}: {body}", flush=True)
-        # Surface auth + rate-limit errors as Events so the user sees
-        # them in the Summary feed + digest emails.
-        if e.code in (401, 403):
-            _emit_token_failure_event(reviewer, "auth_failed",
-                                       f"HTTP {e.code} {body}")
-        elif e.code == 429:
-            _emit_token_failure_event(reviewer, "rate_limited",
-                                       f"HTTP 429 {body}")
+    except urllib.error.HTTPError as exc:
+        kind = "auth_failed" if exc.code in (401, 403) else "rate_limited" if exc.code == 429 else "call_failed"
+        _reviewer_failure(reviewer, cfg, f"HTTP {exc.code}", kind)
         return None
-    except Exception as e:                              # noqa: BLE001
-        print(f"[council] {reviewer} call failed: {e}", flush=True)
-        # A read/socket timeout is the failure that wedged us before — make it
-        # VISIBLE in the feed (and de-duped) instead of a silent return.
-        if "timed out" in str(e).lower() or e.__class__.__name__ == "timeout":
-            _emit_token_failure_event(reviewer, "timed_out",
-                                       str(e)[:200] or "read timeout")
+    except Exception as exc:
+        detail = _model_error_detail(exc)
+        _reviewer_failure(reviewer, cfg, detail,
+                          "timed_out" if isinstance(exc, TimeoutError) else "call_failed")
         return None
     out = _safe_parse(text)
     if not out:
-        print(f"[council] {reviewer} returned non-JSON; first 200: "
-              f"{text[:200]!r}", flush=True)
+        _reviewer_failure(reviewer, cfg, "response was not a JSON object", "invalid_response")
         return None
     out["reviewer"] = reviewer
+    out["model"] = model
     out["reviewed_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
     return out
 
@@ -1194,7 +1277,7 @@ def deliberate(run_id: str) -> dict | None:
     """Full debate orchestrator. Returns the final aggregate review (with
     rounds embedded under 'rounds') or None if nothing could be produced."""
     cfg = _settings()
-    reviewers = _available_reviewers(cfg)
+    reviewers = configured_reviewers(cfg)
     if not reviewers:
         return None
     ctx = _build_context(run_id)
@@ -1220,7 +1303,10 @@ def deliberate(run_id: str) -> dict | None:
     for rev in reviewers:
         if results.get(rev):
             positions[rev] = results[rev]
-    if not positions:
+    missing = [reviewer for reviewer in reviewers if reviewer not in positions]
+    if missing:
+        for reviewer in missing:
+            _reviewer_failure(reviewer, cfg, "required initial review did not complete", "incomplete")
         return None
     rounds.append({"round": 0, "positions": dict(positions)})
 
@@ -1261,10 +1347,10 @@ def deliberate(run_id: str) -> dict | None:
             for t in threads:
                 t.join()
             for rev in list(positions.keys()):
-                if results.get(rev):
-                    new_positions[rev] = results[rev]
-                else:                            # call failed -> hold position
-                    new_positions[rev] = positions[rev]
+                if not results.get(rev):
+                    _reviewer_failure(rev, cfg, "required debate turn did not complete", "incomplete")
+                    return None
+                new_positions[rev] = results[rev]
             positions = new_positions
             rounds.append({"round": n_round, "positions": dict(positions)})
 
@@ -1277,7 +1363,7 @@ def deliberate(run_id: str) -> dict | None:
                      for r in revs_sorted[1:])
 
     tiebreaker = None
-    if not agreed and _claude_available(cfg):
+    if not agreed and cfg.get("council_enable_claude_tiebreaker", True):
         user_tb = (user_initial
                    + "\n\nFINAL POSITIONS AFTER " + str(n_round)
                    + " ROUNDS OF DEBATE:\n"
@@ -1288,14 +1374,22 @@ def deliberate(run_id: str) -> dict | None:
         if tiebreaker:
             final = dict(tiebreaker)
             final["reviewer"] = "claude (tiebreaker)"
+        else:
+            _reviewer_failure("claude", cfg, "required tiebreaker did not complete", "incomplete")
+            return None
+
+    if not agreed and final is None:
+        _emit_token_failure_event("council", "incomplete",
+                                  "Selected reviewers disagree and the tiebreaker is disabled; no decision applied")
+        return None
 
     if final is None:
-        # Consensus or no tiebreaker available — pick the first reviewer's
-        # latest position as canonical (Gemini wins ties by alpha order).
+        # All selected participants completed and agree, or only one was
+        # explicitly enabled. Never substitute a surviving failed peer.
         final = dict(positions[revs_sorted[0]])
         final["reviewer"] = (
-            "+".join(revs_sorted) + (" (consensus)" if agreed else
-                                     " (no agreement, no tiebreaker)")
+            "+".join(revs_sorted) + (" (consensus)" if len(revs_sorted) > 1
+                                     else " (single configured reviewer)")
         )
 
     final["rounds"] = rounds
@@ -1333,9 +1427,11 @@ def note_run_finished(run_id: str) -> bool:
     strategic review. Returns True if a strategic review was triggered.
     Per-run reviews can be enabled separately in Settings."""
     cfg = _settings()
-    if not _available_reviewers(cfg):
+    reviewers = configured_reviewers(cfg)
+    if not reviewers or not cfg.get("strategic_review_enabled", True):
         return False
-    if not cfg.get("strategic_review_enabled", True):
+    selected = "openai" if "openai" in reviewers else "gemini"
+    if not _preflight_reviewers(cfg, [selected]):
         return False
     global _BATCH_INFLIGHT
     threshold = _strategic_threshold(cfg)
@@ -1519,8 +1615,8 @@ def strategic_review(batch_run_ids: list[str]) -> dict | None:
     """Run ONE expert through the strategic-review prompt over a batch.
     Strategic reviews don't debate — they're already a 'reflection' call
     that asks the model to look at the whole trajectory at once. We pick
-    the highest-quality reviewer available (claude > openai > gemini)
-    since the call only fires every N runs and we want the best judgment.
+    enabled second reviewer slot, or the first if the second is disabled.
+    Missing credentials never select a different model.
 
     The orchestrator-computed strategic state (previous top directive,
     implemented?, consecutive unimplemented count) is injected into the
@@ -1528,16 +1624,12 @@ def strategic_review(batch_run_ids: list[str]) -> dict | None:
     deterministic fields rather than re-compute them.
     """
     cfg = _settings()
-    available = _available_reviewers(cfg)
-    if not available:
+    configured = configured_reviewers(cfg)
+    if not configured:
+        _emit_token_failure_event("strategic", "not_configured", "No strategic reviewer is enabled")
         return None
-    # Prefer claude for strategic if we have it, else openai, else gemini.
-    if "claude" in available:
-        reviewer = "claude"
-    elif "openai" in available:
-        reviewer = "openai"
-    else:
-        reviewer = available[0]
+    # The enabled slot determines selection, never credential availability.
+    reviewer = "openai" if "openai" in configured else "gemini"
     ctx = _build_strategic_context(batch_run_ids)
     if not ctx:
         return None
@@ -1720,9 +1812,10 @@ def review_async(run_id: str) -> bool:
     after the strategic-review redesign); the strategic batch review does
     the heavy lifting."""
     cfg = _settings()
-    if not _available_reviewers(cfg):
+    reviewers = configured_reviewers(cfg)
+    if not reviewers or not cfg.get("council_per_run_enabled", False):
         return False
-    if not cfg.get("council_per_run_enabled", False):
+    if not _preflight_reviewers(cfg, reviewers):
         return False
     if not _worth_reviewing(run_id):
         return False
@@ -2616,25 +2709,15 @@ def _emit_preflight_event(ev_type: str, message: str) -> None:
 
 
 def is_code_blessed() -> bool:
-    """True iff the council has approved the current codebase — OR if
-    there are no reviewers configured at all (Claude-only setups + the
-    e2e test, neither of which can sensibly produce a verdict, get the
-    gate auto-opened so they can launch runs).
+    """Only a completed real approval opens the code-review gate.
 
-    The Setting row's actual status is still authoritative once the user
-    has configured reviewers and the agent has called /api/council/bless;
-    this only short-circuits the 'no reviewers ever => infinite block'
-    failure mode."""
-    st = _bless_state_get().get("status")
-    if st == "approved":
-        return True
-    # Defensive: a half-finished setup with no reviewers should not
-    # permanently block /api/track/run. The dashboard banner still tells
-    # the user no review happened.
-    cfg = _settings()
-    if not _available_reviewers(cfg):
-        return True
-    return False
+    Missing credentials and legacy automatic approvals cannot stand in for
+    the selected reviewers' verdicts.
+    """
+    state = _bless_state_get()
+    if not configured_reviewers(_settings()):
+        return True  # explicit opt-out, independent of credential readiness
+    return state.get("status") == "approved" and not state.get("auto")
 
 
 def seed_task_blockers(meta: dict | None) -> list[str]:
@@ -2682,7 +2765,7 @@ def seed_task_blockers(meta: dict | None) -> list[str]:
 
 def _bless_worker(workspace: str, bless_meta: dict | None = None) -> None:
     cfg = _settings()
-    reviewers = _available_reviewers(cfg)
+    reviewers = configured_reviewers(cfg)
     # ─── seed-task gate (RESEARCH_IMPROVEMENT_PLAN #7) ─────────────────
     # Deterministic check — runs BEFORE the LLM call so the agent gets
     # the exact reason without burning council tokens.
@@ -2704,16 +2787,11 @@ def _bless_worker(workspace: str, bless_meta: dict | None = None) -> None:
             "seed_task_gate": True,
         })
         return
-    # If no reviewers are configured we cannot block forever; auto-approve
-    # but record the verdict honestly so the dashboard says so.
     if not reviewers:
         _bless_state_set({
-            "status": "approved",
-            "summary": ("No council reviewers configured — auto-approved. "
-                        "Add an OpenAI or Gemini key in Settings to enable "
-                        "code review before training runs."),
-            "blockers": [], "suggestions": [], "verdicts": {},
-            "auto": True,
+            "status": "skipped", "reason": "reviewers_explicitly_disabled",
+            "summary": "Code review was explicitly disabled; no review was performed",
+            "missing_reviewers": [], "blockers": [], "suggestions": [], "verdicts": {},
         })
         return
     code = _collect_codebase(workspace)
@@ -2762,13 +2840,25 @@ def _bless_worker(workspace: str, bless_meta: dict | None = None) -> None:
                                   f"{reviewer}: call failed (token / quota?)"}
         else:
             verdicts[reviewer] = {
-                "approved": bool(v.get("approved")),
+                # A malformed JSON string such as "false" is truthy in
+                # Python; only an actual JSON boolean is a valid verdict.
+                "approved": v.get("approved") if isinstance(v.get("approved"), bool) else None,
                 "blockers": list(v.get("blockers") or []),
                 "suggestions": list(v.get("suggestions") or []),
                 "summary": (v.get("summary") or "")[:280],
             }
         _publish_pending()   # incremental progress for the review modal
-    # Aggregate: ALL working reviewers must approve. Any blocker from any
+    missing = [r for r in reviewers if verdicts[r].get("approved") is None]
+    if missing:
+        details = [f"{r}: {cfg.get('council_' + r + '_model') or DEFAULTS['council_' + r + '_model']}" for r in missing]
+        message = "Required code review incomplete: " + ", ".join(details)
+        _bless_state_set({"status": "error", "incomplete": True,
+                          "error": message, "summary": message,
+                          "missing_reviewers": missing, "verdicts": verdicts,
+                          "blockers": [], "suggestions": []})
+        _emit_token_failure_event("council", "incomplete", message)
+        return
+    # Aggregate: ALL configured reviewers completed. Any blocker from any
     # reviewer is included in the blocker list shown to the agent.
     working = [r for r, v in verdicts.items() if v.get("approved") is not None]
     approved = bool(working) and all(verdicts[r]["approved"] for r in working)
@@ -3224,32 +3314,15 @@ def _completion_review_worker_inner(evidence_run_ids: list[str], summary: str,
                                       answer_to_purpose: str,
                                       recommendation: str) -> None:
     cfg = _settings()
-    reviewers = _available_reviewers(cfg)
+    reviewers = configured_reviewers(cfg)
     if not reviewers:
-        # No reviewers — auto-approve so the agent isn't blocked, but
-        # record it honestly so the dashboard tells the user nothing
-        # actually got reviewed.
         existing = _conclusion_state_get()
-        existing.update({
-            "status": "approved",
-            "council_verdict": {
-                "verdict": "APPROVED",
-                "reasons": ["no council reviewers configured — auto-approved"],
-                "missing_evidence": [],
-                "summary": ("No reviewers configured; conclusion was "
-                            "auto-approved. Add an OpenAI or Gemini key "
-                            "to enable real completion review."),
-                "verdicts": {},
-                "auto": True,
-                "reviewed_at":
-                    dt.datetime.now(dt.timezone.utc).isoformat(),
-            },
-        })
+        message = "Completion review disabled; operator can switch to paper mode"
+        existing.update({"status": "skipped", "reason": "reviewers_explicitly_disabled",
+                         "council_verdict": {"verdict": "SKIPPED", "summary": message,
+                                             "missing_reviewers": [], "verdicts": {}}})
         _conclusion_state_set(existing)
-        _emit_completion_event(
-            "research_completion_auto_approved",
-            "Research conclusion auto-approved (no reviewers).")
-        _auto_enter_paper_after_approval(recommendation, summary)
+        _emit_completion_event("research_completion_skipped", message)
         return
     ctx = _build_completion_review_context(
         evidence_run_ids, summary, answer_to_purpose, recommendation)
@@ -3291,7 +3364,19 @@ def _completion_review_worker_inner(evidence_run_ids: list[str], summary: str,
             "missing_evidence": list(v.get("missing_evidence") or []),
             "summary": (v.get("summary") or "")[:600],
         }
-    # Aggregate: ALL working reviewers must say APPROVED. Otherwise it's
+    missing = [r for r in reviewers
+               if verdicts[r].get("verdict") not in ("APPROVED", "REJECTED", "NEEDS_MORE")]
+    if missing:
+        details = [f"{r}: {cfg.get('council_' + r + '_model') or DEFAULTS['council_' + r + '_model']}" for r in missing]
+        message = "Required completion review incomplete: " + ", ".join(details)
+        existing = _conclusion_state_get()
+        existing.update({"status": "error", "incomplete": True, "error": message,
+                         "council_verdict": {"verdict": "INCOMPLETE", "summary": message,
+                                             "missing_reviewers": missing, "verdicts": verdicts}})
+        _conclusion_state_set(existing)
+        _emit_completion_event("research_completion_incomplete", message)
+        return
+    # Aggregate: ALL configured reviewers must say APPROVED. Otherwise it's
     # either REJECTED or NEEDS_MORE (worst wins).
     working = [r for r, v in verdicts.items()
                if v.get("verdict") in ("APPROVED", "REJECTED", "NEEDS_MORE")]
@@ -3462,8 +3547,13 @@ def propose_next_move_async() -> dict:
     """
     global _BATCH_INFLIGHT
     cfg = _settings()
-    if not _available_reviewers(cfg):
-        return {"started": False, "reason": "no_reviewers"}
+    reviewers = configured_reviewers(cfg)
+    if not reviewers:
+        return {"started": False, "reason": "reviewers_explicitly_disabled"}
+    selected = "openai" if "openai" in reviewers else "gemini"
+    if not _preflight_reviewers(cfg, [selected]):
+        return {"started": False, "reason": "selected_model_not_configured",
+                "error": _LAST_REVIEW_ERROR.message}
     db = SessionLocal()
     try:
         n = max(_strategic_threshold(cfg), 1)
@@ -3569,25 +3659,32 @@ def _scope_papers_block(papers: list[dict], max_chars: int = 14000) -> str:
 
 
 def _scoping_order(cfg: dict) -> list[str]:
-    """Reviewer order for the scoping phase: the user's chosen `scoping_model`
-    first (onboarding dropdown; default 'gemini'), then the others as fallback.
-    Only includes providers whose keys are present."""
-    selected = (cfg.get("scoping_model") or "gemini-3.8-flash").strip().lower()
-    pref = provider_for(selected) or selected
-    if pref in ("opencode", "flint"):
-        pref = "gemini"  # first logical council slot carries these providers
-    if pref not in ("gemini", "openai", "claude"):
-        pref = "gemini"
-    avail = list(_available_reviewers(cfg))        # gemini / openai (with keys)
-    if _claude_available(cfg):
-        avail.append("claude")
-    return [r for r in avail if r == pref] + [r for r in avail if r != pref]
+    """Exactly one configured scoping model; no automatic provider fallback."""
+    model = (cfg.get("scoping_model") or DEFAULTS["scoping_model"]).strip()
+    from .token_check import DEFAULT_MODELS
+    model = DEFAULT_MODELS.get(model, model)
+    provider = provider_for(model)
+    slot = {"gemini": "gemini", "openai": "openai", "claude": "claude",
+            "opencode": "gemini", "flint": "gemini"}.get(provider)
+    if not slot:
+        raise RuntimeError(f"Selected scoping model {model} has an unknown provider")
+    return [slot]
+
+
+def _scope_failed(cfg: dict) -> RuntimeError:
+    model = cfg.get("scoping_model") or DEFAULTS["scoping_model"]
+    detail = getattr(_LAST_REVIEW_ERROR, "message", "") or "no valid response received"
+    return RuntimeError(f"Scoping model {model} failed: {detail}")
 
 
 def _with_scoping_model(cfg: dict) -> dict:
     """Apply the exact scoping model to its provider's logical council slot."""
     out = dict(cfg)
     model = (out.get("scoping_model") or "").strip()
+    from .token_check import DEFAULT_MODELS
+    model = DEFAULT_MODELS.get(model, model)
+    if model:
+        out["scoping_model"] = model
     provider = provider_for(model)
     field = {"gemini": "council_gemini_model",
              "openai": "council_openai_model",
@@ -3623,9 +3720,11 @@ def _validate_scope_keys(synth: dict, valid_keys: set[str]) -> dict:
 
 def scope_review(purpose: str, metric: str, seed_ideas: str,
                  papers: list[dict]) -> dict | None:
-    """Synthesize SOTA + adversarially assess the direction. Prefers the
-    flagship Claude reviewer for quality; falls back to gemini/openai.
-    Returns the parsed+citation-validated synthesis dict, or None on failure."""
+    """Synthesize a research plan using exactly the selected scoping model.
+
+    Missing credentials, provider failures and invalid model output raise a
+    visible error; no other model or provider is substituted.
+    """
     cfg = _with_scoping_model(_settings())
     user = (f"# Purpose\n{purpose}\n\n# Validation metric\n{metric}\n\n"
             f"# User's seed ideas\n{seed_ideas or '(none provided)'}\n\n"
@@ -3638,7 +3737,7 @@ def scope_review(purpose: str, metric: str, seed_ideas: str,
             out.pop("reviewed_at", None)
             valid = {p.get("key") for p in papers if p.get("key")}
             return _validate_scope_keys(out, valid)
-    return None
+    raise _scope_failed(cfg)
 
 
 def scope_finalize(purpose: str, metric: str, seed_ideas: str,
@@ -3673,7 +3772,7 @@ def scope_finalize(purpose: str, metric: str, seed_ideas: str,
             out.pop("reviewed_at", None)
             valid = {p.get("key") for p in papers if p.get("key")}
             return _validate_scope_keys(out, valid)
-    return None
+    raise _scope_failed(cfg)
 
 
 def scope_chat(history: list[dict], synthesis: dict, papers: list[dict],
@@ -3681,7 +3780,7 @@ def scope_chat(history: list[dict], synthesis: dict, papers: list[dict],
     """One conversational turn for the scoping modal — FREE TEXT (not JSON).
     Stateless reducer: caller passes the full history; we ground the model in
     the synthesis + retrieved papers and return the assistant's next reply.
-    Prefers Claude (text-mode); falls back to a text Gemini/OpenAI call."""
+    Uses the selected model in text mode and surfaces failure explicitly."""
     cfg = _with_scoping_model(_settings())
     sys = (
         "You are the same skeptical ML research advisor, now in a live "
@@ -3700,15 +3799,16 @@ def scope_chat(history: list[dict], synthesis: dict, papers: list[dict],
                         for m in history)
     user = ctx + "\n\n# Conversation so far\n" + convo + "\n\nASSISTANT:"
 
-    # Slots are logical reviewers: dispatch by their selected model, including
-    # when the first slot contains OpenCode or the local Flint server.
-    for reviewer in _scoping_order(cfg):
-        model = cfg.get(f"council_{reviewer}_model") or DEFAULTS[f"council_{reviewer}_model"]
-        try:
-            return _call_text_model(model, sys, user)
-        except Exception as exc:
-            from .safe_errors import describe
-            print(f"[scope] {reviewer} chat failed: {describe(exc)}", flush=True)
-
-    return ("(The advisor model is unavailable right now — check that an "
-            "provider credentials or local server are configured.)")
+    reviewer = _scoping_order(cfg)[0]
+    model = cfg[f"council_{reviewer}_model"]
+    from .provider_config import requirement_error
+    missing = requirement_error(model)
+    if missing:
+        raise RuntimeError(f"Scoping model {model} failed: {missing}")
+    try:
+        return _call_text_model(model, sys, user)
+    except Exception as exc:
+        from .safe_errors import describe
+        status = getattr(exc, "code", None) or getattr(exc, "status", None)
+        detail = f"HTTP {status}" if isinstance(status, int) else describe(exc)
+        raise RuntimeError(f"Scoping model {model} failed: {detail}") from None

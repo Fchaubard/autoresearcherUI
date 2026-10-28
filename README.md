@@ -280,6 +280,14 @@ preserve the workspace and independent experiments; changes wait while the
 agent has an experiment running inside its own session or research is paused.
 See [provider setup and verification](docs/model-provider-verification.md)
 for model IDs, local Flint configuration, and provider availability limits.
+
+Model selections are strict. A missing key, unavailable model, quota error,
+or invalid response is reported against the selected model; the app never
+switches to another model or provider automatically. Required council reviewers
+must all complete before their assessment can approve an action. Gemini CLI's
+automatic model chains are restricted to the selected model as well.
+The [real model-role matrix](docs/model-role-matrix-2026-10-28.md) records
+successful inference, failures, and provider limits for every supported role.
 The [mobile audit](docs/mobile-ui-audit.md) records iPhone layouts and tests.
 
 ![Onboarding / Settings](docs/screenshots/onboarding-settings.png)

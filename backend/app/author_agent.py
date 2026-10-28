@@ -547,8 +547,11 @@ def _send_keys(session: str, *args, literal: str | None = None) -> None:
 
 
 def _looks_busy(session: str) -> bool:
-    low = "\n".join(_pane_text(session).lower().splitlines()[-16:])
-    return any(m in low for m in _BUSY_MARKERS)
+    lines = [line for line in _pane_text(session).lower().splitlines() if line.strip()]
+    low = "\n".join(lines[-16:])
+    return (any(m in low for m in _BUSY_MARKERS)
+            or any(line.startswith("responding ") and "esc to cancel" in line
+                   for line in lines[-16:]))
 
 
 # Per-session feed lock: start(), refeed_if_idle(), and the watchdog restart
@@ -591,22 +594,37 @@ def _feed_brief_inner(session: str = None, brief: str = None,
     brief = brief or _AUTHOR_BRIEF
     if not _tmux_alive(session):
         return False
-    # 1) Wait for the REPL to be interactive; dismiss a consent prompt ONCE
-    #    if it actually shows (numeric "2" = "Yes, I accept").
-    consent_done = False
+    # 1) Wait for the REPL; handle each consent screen once. Current Claude
+    #    menus use arrow selection and no longer accept numeric shortcuts.
+    consent_done = set()
     deadline = time.time() + ready_timeout
     ready = False
     while time.time() < deadline:
         txt = _pane_text(session)
         low = txt.lower()
-        if not consent_done and ("do you trust" in low
-                                 or "yes, i accept" in low
+        from .agent_cli import model_selection_failed
+        if model_selection_failed(txt):
+            return False
+        if "key" not in consent_done and "do you want to use this api key" in low:
+            _send_keys(session, "Up", "Enter")
+            consent_done.add("key")
+            time.sleep(3)
+            continue
+        if "trust" not in consent_done and "yes, i trust this folder" in low and "no, exit" in low:
+            _send_keys(session, "Home", "Down", "Enter")
+            consent_done.add("trust")
+            time.sleep(3)
+            continue
+        if "bypass" not in consent_done and ("yes, i accept" in low
                                  or ("bypass permissions" in low
                                      and "accept" in low)):
-            _send_keys(session, literal="2")
-            time.sleep(0.5)
+            _send_keys(session, "Down", "Enter")
+            consent_done.add("bypass")
+            time.sleep(3)
+            continue
+        if "trust" not in consent_done and "do you trust" in low:
             _send_keys(session, "Enter")
-            consent_done = True
+            consent_done.add("trust")
             time.sleep(3)
             continue
         # Claude, Codex, and Gemini render different prompt glyphs/copy.
@@ -618,25 +636,40 @@ def _feed_brief_inner(session: str = None, brief: str = None,
             break
         time.sleep(2)
     if not ready:
-        time.sleep(3)                       # last-ditch: feed anyway
+        return False
     # 2) Type the brief and submit.
     time.sleep(1)
     _send_keys(session, literal=brief)
     time.sleep(0.7)
     _send_keys(session, "Enter")
+    # Poll promptly: a short turn can complete during one nine-second sleep,
+    # causing the feeder to miss it and submit the same request again.
+    def wait_for_work(seconds):
+        for _ in range(int(seconds * 2)):
+            if model_selection_failed(_pane_text(session)):
+                return False
+            if _looks_busy(session):
+                return True
+            time.sleep(0.5)
+        return False
     # 3) Verify it started; if it sits queued/idle, nudge Enter then re-type.
-    time.sleep(9)
+    if wait_for_work(9):
+        return True
+    if model_selection_failed(_pane_text(session)):
+        return False
     if _looks_busy(session):
         return True
     _send_keys(session, "Enter")
-    time.sleep(4)
+    if wait_for_work(4):
+        return True
+    if model_selection_failed(_pane_text(session)):
+        return False
     if _looks_busy(session):
         return True
     _send_keys(session, literal=brief)
     time.sleep(0.7)
     _send_keys(session, "Enter")
-    time.sleep(6)
-    return _looks_busy(session)
+    return wait_for_work(6)
 
 
 def refeed_if_idle() -> bool:
@@ -699,6 +732,20 @@ def start(proposal_id: str = "") -> dict:
     """Spawn the Author Agent in tmux 'author'. Idempotent."""
     if _tmux_alive(SESSION):
         return {"status": "already_running"}
+    # Read the selected role before touching files or sessions. An unreadable
+    # settings row must not silently substitute the default provider/model.
+    try:
+        from .models import Setting
+        db = SessionLocal()
+        try:
+            saved = db.query(Setting).filter(Setting.key == "onboarding").first()
+            if saved is None or not isinstance(saved.value, dict):
+                return {"status": "error", "detail": "Saved model settings are missing; author was not started."}
+            author_config = dict(saved.value)
+        finally:
+            db.close()
+    except Exception:
+        return {"status": "error", "detail": "Saved model settings could not be read; author was not started."}
     db = SessionLocal()
     try:
         proposal = (db.query(PaperProposal)
@@ -752,39 +799,19 @@ def start(proposal_id: str = "") -> dict:
     _claude_key = os.environ.get("ANTHROPIC_API_KEY", "")
     _openai_key = os.environ.get("OPENAI_API_KEY", "")
     _gemini_key = os.environ.get("GEMINI_API_KEY", "")
-    _author_model = ""
-    _author_effort = ""
-    if not _claude_key or not _author_model:
-        try:
-            from .db import SessionLocal as _SL
-            from .models import Setting as _S
-            db = _SL()
-            try:
-                row = db.query(_S).filter(_S.key == "onboarding").first()
-                if row and isinstance(row.value, dict):
-                    from .provider_config import environment_from_config
-                    os.environ.update(environment_from_config(row.value))
-                    _claude_key = (row.value.get("claude_token")
-                                    or "").strip()
-                    _author_model = (row.value.get("author_agent_model")
-                                     or row.value.get("research_agent_model")
-                                     or "claude-opus-5").strip()
-                    _author_effort = (row.value.get("author_agent_effort")
-                                      or row.value.get("research_agent_effort")
-                                      or "high").strip()
-                    _openai_key = (row.value.get("openai_token")
-                                   or _openai_key).strip()
-                    _gemini_key = (row.value.get("gemini_token")
-                                   or _gemini_key).strip()
-            finally:
-                db.close()
-        except Exception as e:                              # noqa: BLE001
-            print(f"[author] could not read onboarding key: {e}",
-                  flush=True)
+    from .provider_config import environment_from_config
+    os.environ.update(environment_from_config(author_config))
+    _claude_key = (author_config.get("claude_token") or _claude_key).strip()
+    _openai_key = (author_config.get("openai_token") or _openai_key).strip()
+    _gemini_key = (author_config.get("gemini_token") or _gemini_key).strip()
+    _author_model = (author_config.get("author_agent_model")
+                     or author_config.get("research_agent_model") or "claude-opus-5").strip()
+    _author_effort = (author_config.get("author_agent_effort")
+                      or author_config.get("research_agent_effort") or "high").strip()
     # Sync back into process env so subprocess inherits it.
     if _claude_key:
         os.environ["ANTHROPIC_API_KEY"] = _claude_key
-    launch_env = {"IS_SANDBOX": "1"}
+    launch_env = {"IS_SANDBOX": "1", "PWD": str(folder.resolve())}
     if _token_value:
         launch_env["ARUI_INGEST_TOKEN"] = _token_value
     if _claude_key:
@@ -809,13 +836,14 @@ def start(proposal_id: str = "") -> dict:
         # `alternate-screen off` below): the full-screen TUI then paints into the
         # NORMAL buffer, so the pane keeps real scrollback (scroll to the first
         # message + select + copy) while looking exactly like Claude Code should.
-        from .agent_cli import command
+        from .agent_cli import command, prepare_environment
+        launch_env.update(prepare_environment(_author_model))
         # Always boot an interactive REPL first. Passing a first prompt on the
         # command line is provider/version-sensitive: some Codex builds open
         # the TUI but leave that prompt unsubmitted. The verified feeder below
         # is the single delivery path for every provider.
         provider, inner = command(_author_model or "claude-opus-5",
-                                  _author_effort, "")
+                                  _author_effort, "", workspace=folder)
         from .opencode_runtime import agent_environment
         launch_env.update(agent_environment(_author_model))
         # Make sure Claude uses the API key (set in env) instead of

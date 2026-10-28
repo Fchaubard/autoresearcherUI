@@ -1,9 +1,19 @@
 # Model providers: implementation and verification
 
-Verified against official catalogs on 2026-10-27. All entries below are
-available to research, author, scoping, both council reviewer slots, the
-tiebreaker and PI. Runtime availability still depends on provider capacity,
-credentials and the configured local server.
+Catalog verified on 2026-10-27; real role testing expanded on 2026-10-28.
+The catalog has 41 models: all support scoping, both council reviewer slots,
+tiebreaker and PI; 32 also support research and author coding agents.
+The nine API-only compatibility models are intentionally absent from coding
+role dropdowns. Runtime availability depends on provider capacity,
+credentials and the configured local server. See the
+[live role matrix](model-role-matrix-2026-10-28.md) for per-model results.
+
+Model selection is strict. Missing credentials, quota, malformed responses,
+or an unavailable model produce a named error. The app does not select another
+model, accept a surviving reviewer's decision as consensus, or count a failed
+review as approval. Underlying Gemini, Claude and OpenCode client routing is
+also pinned to the selected model. Explicitly disabling both review slots
+records a skipped review; it does not fabricate an approval.
 
 ## Catalog and configuration
 
@@ -42,6 +52,8 @@ Local Flint is a separate `flint/local` choice. Configure:
 | `flint_base_url` | `ARUI_FLINT_BASE_URL` | Running OpenAI-compatible server, e.g. `http://127.0.0.1:30000/v1` |
 | `flint_model` | `ARUI_FLINT_MODEL` | Exact served ID from `/v1/models`; default `flint` |
 | `flint_token` | `ARUI_FLINT_API_KEY` | Optional server authentication |
+| `flint_context_tokens` | `ARUI_FLINT_CONTEXT_TOKENS` | Server context size, default `16384` |
+| `flint_max_output_tokens` | `ARUI_FLINT_MAX_OUTPUT_TOKENS` | Output budget including reasoning, default `8192`; must be below context size |
 
 The app connects to a server the operator starts; selecting Flint does not
 download weights or take GPUs from experiments. Recursive's reference SGLang
@@ -49,8 +61,13 @@ server uses `flint`; other runtimes may use `RecursiveSI/flint` or another
 configured alias. Connection validation checks both the served ID and a
 synthetic tool call, detecting servers missing the tool parser.
 
-Research/author use OpenCode's interactive `mini` client. Advisors run with
-all tools denied, in temporary directories, with context passed through stdin.
+Research/author use OpenCode's interactive `mini` client. Free hosted advisors
+run in private temporary directories and databases. They may read only the
+staged `context.txt`; shell, writes, network, other files and subagents are
+denied. A completed context read is required before accepting the answer.
+The earlier deny-all-tools request was rejected by the free service and
+produced misleading 429 responses; the documented read-only reviewer agent
+works with the real client.
 Each invocation uses a private server so current credentials/settings apply
 without modifying the user's shared service. Local Flint advisors use the
 OpenAI-compatible completion protocol directly. Credentials are environment
@@ -63,30 +80,24 @@ PTY; the author feeder and supervisor recognize their distinct status text.
 
 ## Observed tests
 
-These results distinguish actual inference from a protocol fixture.
+All 269 supported model-role pairs were attempted. The 31 hosted models passed
+all 155 advisor checks, 44 supported coding-role checks, and 31 scoping chat
+checks. All 76 advertised API effort combinations passed. Local Flint passed
+all seven roles plus chat with actual weights; its
+[checkpoint, runtime and serving instructions](flint-live-verification.md) are recorded separately.
 
-| Target | Result on this host |
-| --- | --- |
-| Gemini 4 Argon API | HTTP 200; synthetic arithmetic returned `4` |
-| Gemini 3.1 Flash-Lite API | HTTP 200; synthetic arithmetic returned `4` |
-| Gemini 3.8 Flash API regression | HTTP 200; synthetic arithmetic returned `4` |
-| Gemini 4 Argon CLI | Exit 0; returned `4` after workspace trust fix |
-| Gemini 3.1 Flash-Lite CLI | Exit 0; returned `4` after workspace trust fix |
-| OpenCode 2.0.29 catalog | All nine free IDs listed by the real client |
-| Nemotron 3 Ultra inference | HTTP 400: upstream model unavailable |
-| Other eight free models | HTTP 429: free usage limit reached |
-| Local Flint weights | No running local server supplied; no weights launched on occupied GPUs |
-| Local Flint protocol | Real OpenCode CLI against synthetic HTTP/SSE server; model-ID routing, tool-disabled advisor, actual file-writing tool and reasoning-content replay passed |
+The nine free OpenCode models passed 35 of 63 core-role checks before final
+configuration isolation. Nemotron Ultra was unavailable, and other remaining
+core checks hit free-tier usage limits. Quota also blocked live revalidation
+of the final isolated configuration. All nine free chat attempts failed;
+their original probe wrapper did not retain the underlying HTTP status.
+Those limitations are explicit in the [per-model matrix](model-role-matrix-2026-10-28.md).
+No alternate paid or free model was substituted.
 
-Free-provider inference could not be certified successful while those upstream
-responses persisted. No paid fallback was used. Catalog validation reports
-model visibility separately from inference/quota. Runtime errors retain useful
-HTTP status classifications without exposing nested provider request details.
-
-Unit coverage exercises each free model and new Gemini model through all
-roles, local endpoint validation, tool parser checks, shell quoting, safe
-errors, and restart workspace preservation. Existing agent-launch,
-author-feeder, token-validation, council, PI and scoping regressions also pass.
+Final configuration isolation, exact model routing, read-only permissions and
+blocked custom delegates passed real OpenCode CLI tests against a synthetic
+server with hostile inherited settings. These protocol tests are recorded
+separately from successful real inference.
 
 Run the focused deterministic suite:
 

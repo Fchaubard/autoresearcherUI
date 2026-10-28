@@ -1,0 +1,838 @@
+{
+  "generated_at": null,
+  "results": [
+    {
+      "model": "opencode/nemotron-3-ultra-free",
+      "provider": "opencode",
+      "role": "research",
+      "tested_at": "2026-10-28T22:19:46.189736+00:00",
+      "inference": "real",
+      "fallback_allowed": false,
+      "transport": "agent_cli.command/mini/pty",
+      "timeout_seconds": 90,
+      "dispatched_models": [
+        "opencode/nemotron-3-ultra-free"
+      ],
+      "status": "provider_error",
+      "tool_task_passed": false,
+      "error_category": "model_unavailable",
+      "created_files": [],
+      "elapsed_seconds": 7.806,
+      "configuration_revision": "Initial complete real coding matrix with exact selected-model/workspace observation; before final configuration isolation.",
+      "strict_revalidation_attempts": [
+        {
+          "model": "opencode/nemotron-3-ultra-free",
+          "provider": "opencode",
+          "role": "research",
+          "tested_at": "2026-10-28T22:37:21.253467+00:00",
+          "inference": "real",
+          "fallback_allowed": false,
+          "transport": "agent_cli.command/mini/pty",
+          "timeout_seconds": 120,
+          "dispatched_models": [
+            "opencode/nemotron-3-ultra-free"
+          ],
+          "status": "provider_error",
+          "tool_task_passed": false,
+          "observed_models": [
+            "opencode/nemotron-3-ultra-free"
+          ],
+          "completed_tools": [],
+          "workspace_verified": true,
+          "error_category": "model_unavailable",
+          "created_files": [],
+          "file_sha256": {},
+          "elapsed_seconds": 7.548
+        }
+      ],
+      "strict_revalidation": "failed_model_unavailable",
+      "final_isolated_configuration_live_revalidation": "model_unavailable"
+    },
+    {
+      "model": "opencode/nemotron-3-ultra-free",
+      "provider": "opencode",
+      "role": "author",
+      "tested_at": "2026-10-28T22:19:53.996311+00:00",
+      "inference": "real",
+      "fallback_allowed": false,
+      "transport": "agent_cli.command/mini/pty",
+      "timeout_seconds": 90,
+      "dispatched_models": [
+        "opencode/nemotron-3-ultra-free"
+      ],
+      "status": "provider_error",
+      "tool_task_passed": false,
+      "error_category": "model_unavailable",
+      "created_files": [],
+      "elapsed_seconds": 7.943,
+      "configuration_revision": "Initial complete real coding matrix with exact selected-model/workspace observation; before final configuration isolation.",
+      "strict_revalidation_attempts": [
+        {
+          "model": "opencode/nemotron-3-ultra-free",
+          "provider": "opencode",
+          "role": "author",
+          "tested_at": "2026-10-28T22:37:28.801928+00:00",
+          "inference": "real",
+          "fallback_allowed": false,
+          "transport": "agent_cli.command/mini/pty",
+          "timeout_seconds": 120,
+          "dispatched_models": [
+            "opencode/nemotron-3-ultra-free"
+          ],
+          "status": "provider_error",
+          "tool_task_passed": false,
+          "observed_models": [
+            "opencode/nemotron-3-ultra-free"
+          ],
+          "completed_tools": [],
+          "workspace_verified": true,
+          "error_category": "model_unavailable",
+          "created_files": [],
+          "file_sha256": {},
+          "elapsed_seconds": 7.537
+        }
+      ],
+      "strict_revalidation": "failed_model_unavailable",
+      "final_isolated_configuration_live_revalidation": "model_unavailable"
+    },
+    {
+      "model": "opencode/nemotron-3.5-lightning-free",
+      "provider": "opencode",
+      "role": "research",
+      "tested_at": "2026-10-28T22:22:49.638733+00:00",
+      "inference": "real",
+      "fallback_allowed": false,
+      "transport": "agent_cli.command/mini/pty",
+      "timeout_seconds": 90,
+      "dispatched_models": [
+        "opencode/nemotron-3.5-lightning-free"
+      ],
+      "status": "passed",
+      "tool_task_passed": true,
+      "observed_models": [
+        "opencode/nemotron-3.5-lightning-free"
+      ],
+      "completed_tools": [
+        "read",
+        "shell",
+        "write"
+      ],
+      "workspace_verified": true,
+      "created_files": [
+        "solution.py",
+        "result.json"
+      ],
+      "elapsed_seconds": 17.758,
+      "configuration_revision": "Initial complete real coding matrix with exact selected-model/workspace observation; before final configuration isolation.",
+      "strict_revalidation_attempts": [
+        {
+          "model": "opencode/nemotron-3.5-lightning-free",
+          "provider": "opencode",
+          "role": "research",
+          "tested_at": "2026-10-28T22:37:36.340187+00:00",
+          "inference": "real",
+          "fallback_allowed": false,
+          "transport": "agent_cli.command/mini/pty",
+          "timeout_seconds": 120,
+          "dispatched_models": [
+            "opencode/nemotron-3.5-lightning-free"
+          ],
+          "status": "provider_error",
+          "tool_task_passed": false,
+          "observed_models": [
+            "opencode/nemotron-3.5-lightning-free"
+          ],
+          "completed_tools": [],
+          "workspace_verified": true,
+          "http_status": 429,
+          "error_category": "quota_exhausted",
+          "created_files": [],
+          "file_sha256": {},
+          "elapsed_seconds": 7.482
+        }
+      ],
+      "strict_revalidation": "blocked_by_quota",
+      "final_isolated_configuration_live_revalidation": "blocked_by_quota"
+    },
+    {
+      "model": "opencode/nemotron-3.5-lightning-free",
+      "provider": "opencode",
+      "role": "author",
+      "tested_at": "2026-10-28T22:23:07.397916+00:00",
+      "inference": "real",
+      "fallback_allowed": false,
+      "transport": "agent_cli.command/mini/pty",
+      "timeout_seconds": 90,
+      "dispatched_models": [
+        "opencode/nemotron-3.5-lightning-free"
+      ],
+      "status": "passed",
+      "tool_task_passed": true,
+      "observed_models": [
+        "opencode/nemotron-3.5-lightning-free"
+      ],
+      "completed_tools": [
+        "read",
+        "write"
+      ],
+      "workspace_verified": true,
+      "created_files": [
+        "appendix.tex",
+        "paper-check.json"
+      ],
+      "elapsed_seconds": 16.442,
+      "configuration_revision": "Initial complete real coding matrix with exact selected-model/workspace observation; before final configuration isolation.",
+      "strict_revalidation_attempts": [
+        {
+          "model": "opencode/nemotron-3.5-lightning-free",
+          "provider": "opencode",
+          "role": "author",
+          "tested_at": "2026-10-28T22:37:43.823037+00:00",
+          "inference": "real",
+          "fallback_allowed": false,
+          "transport": "agent_cli.command/mini/pty",
+          "timeout_seconds": 120,
+          "dispatched_models": [
+            "opencode/nemotron-3.5-lightning-free"
+          ],
+          "status": "provider_error",
+          "tool_task_passed": false,
+          "observed_models": [
+            "opencode/nemotron-3.5-lightning-free"
+          ],
+          "completed_tools": [],
+          "workspace_verified": true,
+          "http_status": 429,
+          "error_category": "quota_exhausted",
+          "created_files": [],
+          "file_sha256": {},
+          "elapsed_seconds": 7.458
+        }
+      ],
+      "strict_revalidation": "blocked_by_quota",
+      "final_isolated_configuration_live_revalidation": "blocked_by_quota"
+    },
+    {
+      "model": "opencode/nemotron-3.5-super-vl-free",
+      "provider": "opencode",
+      "role": "research",
+      "tested_at": "2026-10-28T22:23:38.375253+00:00",
+      "inference": "real",
+      "fallback_allowed": false,
+      "transport": "agent_cli.command/mini/pty",
+      "timeout_seconds": 90,
+      "dispatched_models": [
+        "opencode/nemotron-3.5-super-vl-free"
+      ],
+      "status": "passed",
+      "tool_task_passed": true,
+      "observed_models": [
+        "opencode/nemotron-3.5-super-vl-free"
+      ],
+      "completed_tools": [
+        "read",
+        "shell",
+        "write"
+      ],
+      "workspace_verified": true,
+      "created_files": [
+        "solution.py",
+        "result.json"
+      ],
+      "elapsed_seconds": 14.862,
+      "configuration_revision": "Initial complete real coding matrix with exact selected-model/workspace observation; before final configuration isolation.",
+      "strict_revalidation_attempts": [
+        {
+          "model": "opencode/nemotron-3.5-super-vl-free",
+          "provider": "opencode",
+          "role": "research",
+          "tested_at": "2026-10-28T22:37:51.282305+00:00",
+          "inference": "real",
+          "fallback_allowed": false,
+          "transport": "agent_cli.command/mini/pty",
+          "timeout_seconds": 120,
+          "dispatched_models": [
+            "opencode/nemotron-3.5-super-vl-free"
+          ],
+          "status": "provider_error",
+          "tool_task_passed": false,
+          "observed_models": [
+            "opencode/nemotron-3.5-super-vl-free"
+          ],
+          "completed_tools": [],
+          "workspace_verified": true,
+          "http_status": 429,
+          "error_category": "quota_exhausted",
+          "created_files": [],
+          "file_sha256": {},
+          "elapsed_seconds": 7.511
+        }
+      ],
+      "strict_revalidation": "blocked_by_quota",
+      "final_isolated_configuration_live_revalidation": "blocked_by_quota"
+    },
+    {
+      "model": "opencode/nemotron-3.5-super-vl-free",
+      "provider": "opencode",
+      "role": "author",
+      "tested_at": "2026-10-28T22:23:53.238442+00:00",
+      "inference": "real",
+      "fallback_allowed": false,
+      "transport": "agent_cli.command/mini/pty",
+      "timeout_seconds": 90,
+      "dispatched_models": [
+        "opencode/nemotron-3.5-super-vl-free"
+      ],
+      "status": "passed",
+      "tool_task_passed": true,
+      "observed_models": [
+        "opencode/nemotron-3.5-super-vl-free"
+      ],
+      "completed_tools": [
+        "read",
+        "write"
+      ],
+      "workspace_verified": true,
+      "created_files": [
+        "appendix.tex",
+        "paper-check.json"
+      ],
+      "elapsed_seconds": 11.825,
+      "configuration_revision": "Initial complete real coding matrix with exact selected-model/workspace observation; before final configuration isolation.",
+      "strict_revalidation_attempts": [
+        {
+          "model": "opencode/nemotron-3.5-super-vl-free",
+          "provider": "opencode",
+          "role": "author",
+          "tested_at": "2026-10-28T22:37:58.794588+00:00",
+          "inference": "real",
+          "fallback_allowed": false,
+          "transport": "agent_cli.command/mini/pty",
+          "timeout_seconds": 120,
+          "dispatched_models": [
+            "opencode/nemotron-3.5-super-vl-free"
+          ],
+          "status": "provider_error",
+          "tool_task_passed": false,
+          "observed_models": [
+            "opencode/nemotron-3.5-super-vl-free"
+          ],
+          "completed_tools": [],
+          "workspace_verified": true,
+          "http_status": 429,
+          "error_category": "quota_exhausted",
+          "created_files": [],
+          "file_sha256": {},
+          "elapsed_seconds": 7.66
+        }
+      ],
+      "strict_revalidation": "blocked_by_quota",
+      "final_isolated_configuration_live_revalidation": "blocked_by_quota"
+    },
+    {
+      "model": "opencode/big-pickle",
+      "provider": "opencode",
+      "role": "research",
+      "tested_at": "2026-10-28T22:24:05.064382+00:00",
+      "inference": "real",
+      "fallback_allowed": false,
+      "transport": "agent_cli.command/mini/pty",
+      "timeout_seconds": 90,
+      "dispatched_models": [
+        "opencode/big-pickle"
+      ],
+      "status": "passed",
+      "tool_task_passed": true,
+      "observed_models": [
+        "opencode/big-pickle"
+      ],
+      "completed_tools": [
+        "read",
+        "shell",
+        "write"
+      ],
+      "workspace_verified": true,
+      "created_files": [
+        "solution.py",
+        "result.json"
+      ],
+      "elapsed_seconds": 12.873,
+      "configuration_revision": "Initial complete real coding matrix with exact selected-model/workspace observation; before final configuration isolation.",
+      "strict_revalidation_attempts": [
+        {
+          "model": "opencode/big-pickle",
+          "provider": "opencode",
+          "role": "research",
+          "tested_at": "2026-10-28T22:38:06.456119+00:00",
+          "inference": "real",
+          "fallback_allowed": false,
+          "transport": "agent_cli.command/mini/pty",
+          "timeout_seconds": 120,
+          "dispatched_models": [
+            "opencode/big-pickle"
+          ],
+          "status": "provider_error",
+          "tool_task_passed": false,
+          "observed_models": [
+            "opencode/big-pickle"
+          ],
+          "completed_tools": [],
+          "workspace_verified": true,
+          "http_status": 429,
+          "error_category": "quota_exhausted",
+          "created_files": [],
+          "file_sha256": {},
+          "elapsed_seconds": 7.527
+        }
+      ],
+      "strict_revalidation": "blocked_by_quota",
+      "final_isolated_configuration_live_revalidation": "blocked_by_quota"
+    },
+    {
+      "model": "opencode/big-pickle",
+      "provider": "opencode",
+      "role": "author",
+      "tested_at": "2026-10-28T22:24:17.938612+00:00",
+      "inference": "real",
+      "fallback_allowed": false,
+      "transport": "agent_cli.command/mini/pty",
+      "timeout_seconds": 90,
+      "dispatched_models": [
+        "opencode/big-pickle"
+      ],
+      "status": "passed",
+      "tool_task_passed": true,
+      "observed_models": [
+        "opencode/big-pickle"
+      ],
+      "completed_tools": [
+        "read",
+        "write"
+      ],
+      "workspace_verified": true,
+      "created_files": [
+        "appendix.tex",
+        "paper-check.json"
+      ],
+      "elapsed_seconds": 10.671,
+      "configuration_revision": "Initial complete real coding matrix with exact selected-model/workspace observation; before final configuration isolation.",
+      "strict_revalidation_attempts": [
+        {
+          "model": "opencode/big-pickle",
+          "provider": "opencode",
+          "role": "author",
+          "tested_at": "2026-10-28T22:38:13.986058+00:00",
+          "inference": "real",
+          "fallback_allowed": false,
+          "transport": "agent_cli.command/mini/pty",
+          "timeout_seconds": 120,
+          "dispatched_models": [
+            "opencode/big-pickle"
+          ],
+          "status": "provider_error",
+          "tool_task_passed": false,
+          "observed_models": [
+            "opencode/big-pickle"
+          ],
+          "completed_tools": [],
+          "workspace_verified": true,
+          "http_status": 429,
+          "error_category": "quota_exhausted",
+          "created_files": [],
+          "file_sha256": {},
+          "elapsed_seconds": 7.461
+        }
+      ],
+      "strict_revalidation": "blocked_by_quota",
+      "final_isolated_configuration_live_revalidation": "blocked_by_quota"
+    },
+    {
+      "model": "opencode/glm-5.3-flash-free",
+      "provider": "opencode",
+      "role": "research",
+      "tested_at": "2026-10-28T22:26:54.940177+00:00",
+      "inference": "real",
+      "fallback_allowed": false,
+      "transport": "agent_cli.command/mini/pty",
+      "timeout_seconds": 90,
+      "dispatched_models": [
+        "opencode/glm-5.3-flash-free"
+      ],
+      "status": "passed",
+      "tool_task_passed": true,
+      "observed_models": [
+        "opencode/glm-5.3-flash-free"
+      ],
+      "completed_tools": [
+        "glob",
+        "read",
+        "shell",
+        "write"
+      ],
+      "workspace_verified": true,
+      "created_files": [
+        "solution.py",
+        "result.json"
+      ],
+      "elapsed_seconds": 13.989,
+      "previous_attempts": [
+        {
+          "model": "opencode/glm-5.3-flash-free",
+          "provider": "opencode",
+          "role": "research",
+          "tested_at": "2026-10-28T22:24:28.623146+00:00",
+          "inference": "real",
+          "fallback_allowed": false,
+          "transport": "agent_cli.command/mini/pty",
+          "timeout_seconds": 90,
+          "dispatched_models": [
+            "opencode/glm-5.3-flash-free"
+          ],
+          "status": "provider_error",
+          "tool_task_passed": false,
+          "observed_models": [
+            "opencode/glm-5.3-flash-free"
+          ],
+          "completed_tools": [],
+          "workspace_verified": true,
+          "error_category": "model_unavailable",
+          "created_files": [],
+          "elapsed_seconds": 7.064
+        }
+      ],
+      "configuration_revision": "Initial complete real coding matrix with exact selected-model/workspace observation; before final configuration isolation.",
+      "strict_revalidation_attempts": [
+        {
+          "model": "opencode/glm-5.3-flash-free",
+          "provider": "opencode",
+          "role": "research",
+          "tested_at": "2026-10-28T22:38:21.448048+00:00",
+          "inference": "real",
+          "fallback_allowed": false,
+          "transport": "agent_cli.command/mini/pty",
+          "timeout_seconds": 120,
+          "dispatched_models": [
+            "opencode/glm-5.3-flash-free"
+          ],
+          "status": "provider_error",
+          "tool_task_passed": false,
+          "observed_models": [
+            "opencode/glm-5.3-flash-free"
+          ],
+          "completed_tools": [],
+          "workspace_verified": true,
+          "http_status": 429,
+          "error_category": "quota_exhausted",
+          "created_files": [],
+          "file_sha256": {},
+          "elapsed_seconds": 7.523
+        }
+      ],
+      "strict_revalidation": "blocked_by_quota",
+      "final_isolated_configuration_live_revalidation": "blocked_by_quota"
+    },
+    {
+      "model": "opencode/glm-5.3-flash-free",
+      "provider": "opencode",
+      "role": "author",
+      "tested_at": "2026-10-28T22:24:35.688299+00:00",
+      "inference": "real",
+      "fallback_allowed": false,
+      "transport": "agent_cli.command/mini/pty",
+      "timeout_seconds": 90,
+      "dispatched_models": [
+        "opencode/glm-5.3-flash-free"
+      ],
+      "status": "passed",
+      "tool_task_passed": true,
+      "observed_models": [
+        "opencode/glm-5.3-flash-free"
+      ],
+      "completed_tools": [
+        "read",
+        "write"
+      ],
+      "workspace_verified": true,
+      "created_files": [
+        "appendix.tex",
+        "paper-check.json"
+      ],
+      "elapsed_seconds": 12.846,
+      "configuration_revision": "Initial complete real coding matrix with exact selected-model/workspace observation; before final configuration isolation.",
+      "strict_revalidation_attempts": [],
+      "strict_revalidation": "not_repeated_after_quota",
+      "final_isolated_configuration_live_revalidation": "blocked_by_quota"
+    },
+    {
+      "model": "opencode/deepseek-v4.1-flash-free",
+      "provider": "opencode",
+      "role": "research",
+      "tested_at": "2026-10-28T22:24:48.535456+00:00",
+      "inference": "real",
+      "fallback_allowed": false,
+      "transport": "agent_cli.command/mini/pty",
+      "timeout_seconds": 90,
+      "dispatched_models": [
+        "opencode/deepseek-v4.1-flash-free"
+      ],
+      "status": "passed",
+      "tool_task_passed": true,
+      "observed_models": [
+        "opencode/deepseek-v4.1-flash-free"
+      ],
+      "completed_tools": [
+        "read",
+        "shell",
+        "write"
+      ],
+      "workspace_verified": true,
+      "created_files": [
+        "solution.py",
+        "result.json"
+      ],
+      "elapsed_seconds": 15.596,
+      "configuration_revision": "Initial complete real coding matrix with exact selected-model/workspace observation; before final configuration isolation.",
+      "strict_revalidation_attempts": [],
+      "strict_revalidation": "not_repeated_after_quota",
+      "final_isolated_configuration_live_revalidation": "blocked_by_quota"
+    },
+    {
+      "model": "opencode/deepseek-v4.1-flash-free",
+      "provider": "opencode",
+      "role": "author",
+      "tested_at": "2026-10-28T22:25:04.133028+00:00",
+      "inference": "real",
+      "fallback_allowed": false,
+      "transport": "agent_cli.command/mini/pty",
+      "timeout_seconds": 90,
+      "dispatched_models": [
+        "opencode/deepseek-v4.1-flash-free"
+      ],
+      "status": "passed",
+      "tool_task_passed": true,
+      "observed_models": [
+        "opencode/deepseek-v4.1-flash-free"
+      ],
+      "completed_tools": [
+        "read",
+        "write"
+      ],
+      "workspace_verified": true,
+      "created_files": [
+        "appendix.tex",
+        "paper-check.json"
+      ],
+      "elapsed_seconds": 12.353,
+      "configuration_revision": "Initial complete real coding matrix with exact selected-model/workspace observation; before final configuration isolation.",
+      "strict_revalidation_attempts": [],
+      "strict_revalidation": "not_repeated_after_quota",
+      "final_isolated_configuration_live_revalidation": "blocked_by_quota"
+    },
+    {
+      "model": "opencode/beam-free",
+      "provider": "opencode",
+      "role": "research",
+      "tested_at": "2026-10-28T22:25:16.487350+00:00",
+      "inference": "real",
+      "fallback_allowed": false,
+      "transport": "agent_cli.command/mini/pty",
+      "timeout_seconds": 90,
+      "dispatched_models": [
+        "opencode/beam-free"
+      ],
+      "status": "passed",
+      "tool_task_passed": true,
+      "observed_models": [
+        "opencode/beam-free"
+      ],
+      "completed_tools": [
+        "glob",
+        "read",
+        "shell",
+        "write"
+      ],
+      "workspace_verified": true,
+      "created_files": [
+        "solution.py",
+        "result.json"
+      ],
+      "elapsed_seconds": 12.064,
+      "configuration_revision": "Initial complete real coding matrix with exact selected-model/workspace observation; before final configuration isolation.",
+      "strict_revalidation_attempts": [],
+      "strict_revalidation": "not_repeated_after_quota",
+      "final_isolated_configuration_live_revalidation": "blocked_by_quota"
+    },
+    {
+      "model": "opencode/beam-free",
+      "provider": "opencode",
+      "role": "author",
+      "tested_at": "2026-10-28T22:25:28.553061+00:00",
+      "inference": "real",
+      "fallback_allowed": false,
+      "transport": "agent_cli.command/mini/pty",
+      "timeout_seconds": 90,
+      "dispatched_models": [
+        "opencode/beam-free"
+      ],
+      "status": "passed",
+      "tool_task_passed": true,
+      "observed_models": [
+        "opencode/beam-free"
+      ],
+      "completed_tools": [
+        "read",
+        "write"
+      ],
+      "workspace_verified": true,
+      "created_files": [
+        "appendix.tex",
+        "paper-check.json"
+      ],
+      "elapsed_seconds": 8.824,
+      "configuration_revision": "Initial complete real coding matrix with exact selected-model/workspace observation; before final configuration isolation.",
+      "strict_revalidation_attempts": [],
+      "strict_revalidation": "not_repeated_after_quota",
+      "final_isolated_configuration_live_revalidation": "blocked_by_quota"
+    },
+    {
+      "model": "opencode/flint-40b-free",
+      "provider": "opencode",
+      "role": "research",
+      "tested_at": "2026-10-28T22:25:37.378854+00:00",
+      "inference": "real",
+      "fallback_allowed": false,
+      "transport": "agent_cli.command/mini/pty",
+      "timeout_seconds": 90,
+      "dispatched_models": [
+        "opencode/flint-40b-free"
+      ],
+      "status": "passed",
+      "tool_task_passed": true,
+      "observed_models": [
+        "opencode/flint-40b-free"
+      ],
+      "completed_tools": [
+        "read",
+        "shell",
+        "write"
+      ],
+      "workspace_verified": true,
+      "created_files": [
+        "solution.py",
+        "result.json"
+      ],
+      "elapsed_seconds": 14.807,
+      "configuration_revision": "Initial complete real coding matrix with exact selected-model/workspace observation; before final configuration isolation.",
+      "strict_revalidation_attempts": [],
+      "strict_revalidation": "not_repeated_after_quota",
+      "final_isolated_configuration_live_revalidation": "blocked_by_quota"
+    },
+    {
+      "model": "opencode/flint-40b-free",
+      "provider": "opencode",
+      "role": "author",
+      "tested_at": "2026-10-28T22:25:52.186904+00:00",
+      "inference": "real",
+      "fallback_allowed": false,
+      "transport": "agent_cli.command/mini/pty",
+      "timeout_seconds": 90,
+      "dispatched_models": [
+        "opencode/flint-40b-free"
+      ],
+      "status": "passed",
+      "tool_task_passed": true,
+      "observed_models": [
+        "opencode/flint-40b-free"
+      ],
+      "completed_tools": [
+        "read",
+        "write"
+      ],
+      "workspace_verified": true,
+      "created_files": [
+        "appendix.tex",
+        "paper-check.json"
+      ],
+      "elapsed_seconds": 14.238,
+      "configuration_revision": "Initial complete real coding matrix with exact selected-model/workspace observation; before final configuration isolation.",
+      "strict_revalidation_attempts": [],
+      "strict_revalidation": "not_repeated_after_quota",
+      "final_isolated_configuration_live_revalidation": "blocked_by_quota"
+    },
+    {
+      "model": "opencode/mimo-v2.6-flash-free",
+      "provider": "opencode",
+      "role": "research",
+      "tested_at": "2026-10-28T22:26:06.426406+00:00",
+      "inference": "real",
+      "fallback_allowed": false,
+      "transport": "agent_cli.command/mini/pty",
+      "timeout_seconds": 90,
+      "dispatched_models": [
+        "opencode/mimo-v2.6-flash-free"
+      ],
+      "status": "passed",
+      "tool_task_passed": true,
+      "observed_models": [
+        "opencode/mimo-v2.6-flash-free"
+      ],
+      "completed_tools": [
+        "read",
+        "shell",
+        "write"
+      ],
+      "workspace_verified": true,
+      "created_files": [
+        "solution.py",
+        "result.json"
+      ],
+      "elapsed_seconds": 22.483,
+      "configuration_revision": "Initial complete real coding matrix with exact selected-model/workspace observation; before final configuration isolation.",
+      "strict_revalidation_attempts": [],
+      "strict_revalidation": "not_repeated_after_quota",
+      "final_isolated_configuration_live_revalidation": "blocked_by_quota"
+    },
+    {
+      "model": "opencode/mimo-v2.6-flash-free",
+      "provider": "opencode",
+      "role": "author",
+      "tested_at": "2026-10-28T22:26:28.910247+00:00",
+      "inference": "real",
+      "fallback_allowed": false,
+      "transport": "agent_cli.command/mini/pty",
+      "timeout_seconds": 90,
+      "dispatched_models": [
+        "opencode/mimo-v2.6-flash-free"
+      ],
+      "status": "passed",
+      "tool_task_passed": true,
+      "observed_models": [
+        "opencode/mimo-v2.6-flash-free"
+      ],
+      "completed_tools": [
+        "read",
+        "write"
+      ],
+      "workspace_verified": true,
+      "created_files": [
+        "appendix.tex",
+        "paper-check.json"
+      ],
+      "elapsed_seconds": 14.254,
+      "configuration_revision": "Initial complete real coding matrix with exact selected-model/workspace observation; before final configuration isolation.",
+      "strict_revalidation_attempts": [],
+      "strict_revalidation": "not_repeated_after_quota",
+      "final_isolated_configuration_live_revalidation": "blocked_by_quota"
+    }
+  ],
+  "final_source_sha256": {
+    "backend/app/opencode_runtime.py": "bac872558f23ee421d569c711ca5d8270145f5be9687b207e583afcfb036f112",
+    "backend/app/provider_config.py": "3fd5a6d2afa4a18afd1e29d3ef94150e04e72472c0c13be53318fdf49a3691bc",
+    "backend/app/council.py": "15ba9c6b7ffcdd0d554e384042cfd8e47d68018a7f10bcab05a6ef6a99321fd4",
+    "backend/app/pi.py": "d368ab12ca6a3c080f1d1f4dd17eaa876169d215be04cc501df7048033e73856",
+    "backend/app/agent_cli.py": "a756eaf9d1e41af0bdf0b8920e49d735d7c29790aced446c373d24e2342ba5fa"
+  },
+  "strict_configuration": "App-owned config and private DB; exact provider/endpoint/package/API model and request body; all allowed agent models pinned; unpinned delegates denied.",
+  "quota_note": "After earlier successful free inference, HTTP429 free usage limit responses also blocked simple coding. Redundant retries were stopped. Captured CLI error responses exposed body only, with no Retry-After headers or reset time metadata recorded.",
+  "synthetic_validation": "35 focused tests including real installed CLI against synthetic local protocol, hostile global/project model/body/baseURL settings, readonly context permissions and rejection of unpinned custom delegates."
+}
