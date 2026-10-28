@@ -1,10 +1,19 @@
 """A timed-out live probe cannot leave a detached CLI inferring behind it."""
 import os
+from pathlib import Path
 import subprocess
 import sys
 import time
 
 import psutil
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def probe_source_path(monkeypatch):
+    # These are checkout-only scripts, not installed application packages.
+    # The pytest executable does not add cwd as `python -m pytest` does.
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2]))
 
 
 def test_timeout_cleanup_kills_detached_descendant(tmp_path):
