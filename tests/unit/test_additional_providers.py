@@ -77,6 +77,10 @@ def test_local_flint_coding_and_advisors(arui_env, monkeypatch):
     monkeypatch.setenv("ARUI_FLINT_API_KEY", "local-secret")
     monkeypatch.setattr(provider_config, "opencode_binary", lambda: "/bin/opencode")
     config = json.loads(opencode_runtime.agent_environment("flint/local")["OPENCODE_CONFIG_CONTENT"])
+    assert config["agents"]["title"]["disabled"] is True
+    for name in ("build", "plan", "general", "explore", "summary", "compaction"):
+        assert config["agents"][name]["model"] == "flint/local"
+        assert not config["agents"][name].get("disabled")
     provider = config["providers"]["flint"]
     assert provider["settings"]["baseURL"] == "http://127.0.0.1:30000/v1"
     assert provider["models"]["local"]["modelID"] == "RecursiveSI/flint"

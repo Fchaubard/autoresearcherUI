@@ -69,6 +69,10 @@ def _config(model: str) -> dict:
                 "settings": {"baseURL": _OPENCODE_INFERENCE_URL},
                 "body": {"model": selected_id}}}}}
     if provider_for(model) == "flint":
+        # V2's supported `disabled` flag removes the decorative title agent.
+        # Local reasoning models can otherwise spend minutes naming a session
+        # before the real coding request reaches the one-slot CPU server.
+        cfg["agents"]["title"]["disabled"] = True
         url, served_model, token = flint_config()
         context, output = flint_limits()
         cfg["providers"] = {"flint": {

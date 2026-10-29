@@ -222,3 +222,81 @@ def test_coding_blocks_unpinned_custom_delegate_with_real_cli(arui_env, monkeypa
         assert "Blocked by configuration policy" in json.dumps(seen[-1]["messages"])
     finally:
         server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+
+@pytest.mark.skipif(os.environ.get("ARUI_TEST_OPENCODE") != "1", reason="requires explicit local CLI protocol test")
+@pytest.mark.parametrize("enable_title_control", [False, True])
+def test_flint_tool_run_omits_title_inference_with_real_cli(
+        arui_env, monkeypatch, tmp_path, enable_title_control):
+    """A real untitled CLI session writes a file without a title-only request.
+
+    Reenabling titles is a positive control: it must produce an extra request,
+    proving this test did not accidentally bypass title generation itself.
+    """
+    from backend.app import opencode_runtime, provider_config
+    binary = provider_config.opencode_binary()
+    if not binary:
+        pytest.skip("OpenCode 2 is not installed")
+    seen = []
+    output = tmp_path / "title-protocol-result.txt"
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args): pass
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            seen.append(body)
+            names = {tool["function"]["name"] for tool in body.get("tools", [])}
+            previous = [message for message in body["messages"] if message.get("role") == "tool"]
+            if "write" in names and not previous:
+                delta = {"role": "assistant", "tool_calls": [{"index": 0,
+                    "id": "title-fixture-write", "type": "function", "function": {
+                        "name": "write", "arguments": json.dumps({
+                            "path": str(output), "content": "selected-flint-tool-ok\n"})}}]}
+                finish = "tool_calls"
+            else:
+                delta = {"role": "assistant", "content": "Synthetic fixture complete"}
+                finish = "stop"
+            chunks = [
+                {"id": "title-fixture", "object": "chat.completion.chunk", "created": 1,
+                 "choices": [{"index": 0, "delta": delta, "finish_reason": None}]},
+                {"id": "title-fixture", "object": "chat.completion.chunk", "created": 1,
+                 "choices": [{"index": 0, "delta": {}, "finish_reason": finish}]},
+            ]
+            raw = ("".join("data: " + json.dumps(chunk) + "\n\n" for chunk in chunks)
+                   + "data: [DONE]\n\n").encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setenv("ARUI_FLINT_BASE_URL", f"http://127.0.0.1:{server.server_port}/v1")
+    monkeypatch.setenv("ARUI_FLINT_MODEL", "flint")
+    env = {**os.environ, **opencode_runtime.agent_environment(
+        "flint/local", runtime_dir=str(tmp_path / "runtime")), "PWD": str(tmp_path)}
+    config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+    assert config["agents"]["title"]["disabled"] is True
+    if enable_title_control:
+        config["agents"]["title"]["disabled"] = False
+        env["OPENCODE_CONFIG_CONTENT"] = json.dumps(config)
+    try:
+        result = subprocess.run(
+            [binary, "run", "--standalone", "--model", "flint/local", "--agent", "arui-research",
+             "--format", "json", "Write the requested synthetic result file."],
+            cwd=tmp_path, env=env, capture_output=True, text=True, timeout=25)
+        assert result.returncode == 0, "OpenCode failed against synthetic local endpoint"
+        assert output.read_text() == "selected-flint-tool-ok\n"
+        assert all(body["model"] == "flint" for body in seen)
+        tool_requests = [body for body in seen if body.get("tools")]
+        title_requests = [body for body in seen if not body.get("tools")]
+        assert len(tool_requests) == 2
+        assert any(message.get("role") == "tool" for message in tool_requests[-1]["messages"])
+        assert len(title_requests) == int(enable_title_control)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
