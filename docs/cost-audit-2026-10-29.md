@@ -218,3 +218,27 @@ particular percentage reduction. The $196.60 polling bucket and $261.72 context
 sensitivity overlap. Post-deployment usage must be measured; the operator's
 separate change to medium also prevents a direct controlled comparison with
 the xhigh baseline.
+
+## Production event-wait verification
+
+The existing research conversation adopted the policy on 2026-10-29 without
+restarting its native process or changing the operator's selected Astra medium
+configuration. From 20:17:53.526 to 20:19:12.108 UTC it issued zero model
+responses and zero tool calls for 78.582 seconds while training workers kept
+running. A new operator research direction ended that wait in the same
+conversation.
+
+A subsequent experiment completion triggered an automatic event wake. The
+native CLI accepted the event reference at 20:22:38.964 UTC, read the complete
+private message, fetched bounded context, and rearmed the wait at 20:23:12.456.
+The resumed decision cycle used six model responses and five tool calls,
+with no sleeps. Ten workers were running after the cycle, and the same native
+thread and process were preserved. The sanitized
+[live verification receipt](verification/live-event-wait-2026-10-29.json)
+records the event, acceptance, read, and turn-completion boundaries.
+
+This verifies that waiting can avoid model calls and that automatic wake and
+rearming work in production. These short observations do not establish a
+daily savings rate or an overall application spending reduction. Useful work,
+cache-write volume, and the operator's separate effort change prevent a
+controlled comparison with the historical xhigh session.

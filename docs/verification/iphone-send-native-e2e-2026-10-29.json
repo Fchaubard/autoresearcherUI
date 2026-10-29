@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at_utc": "2026-10-29T20:13:37.668950+00:00",
+  "observed_at_utc": "2026-10-29T20:24:38.997092+00:00",
   "status": "passed",
   "scope": "Real WebKit frontend \u2192 real FastAPI Send endpoint \u2192 private native Codex tmux \u2192 synthetic loopback Responses stream \u2192 real terminal output polling",
   "browser": {
@@ -34,7 +34,7 @@
       "characters": 39,
       "multiline": false,
       "delivery": "accepted",
-      "message_id": "cm-f6930410",
+      "message_id": "cm-70bbbac5",
       "canonical_message_exact": true,
       "api_status": 200,
       "raw_offset_before": 2850,
@@ -59,10 +59,10 @@
       "characters": 1415,
       "multiline": false,
       "delivery": "queued",
-      "message_id": "cm-65979296",
+      "message_id": "cm-d976fea4",
       "canonical_message_exact": true,
       "api_status": 200,
-      "raw_offset_before": 14916,
+      "raw_offset_before": 14839,
       "native_at_acceptance": {
         "queue_visible": false,
         "busy": false,
@@ -89,10 +89,10 @@
       "characters": 1006,
       "multiline": true,
       "delivery": "submitted",
-      "message_id": "cm-e1838f59",
+      "message_id": "cm-58afabc3",
       "canonical_message_exact": true,
       "api_status": 200,
-      "raw_offset_before": 28325,
+      "raw_offset_before": 28288,
       "native_at_acceptance": {
         "queue_visible": false,
         "busy": false,
@@ -113,6 +113,13 @@
       "response_index": 4
     }
   ],
+  "renderer_selection": {
+    "coarse_pointer": true,
+    "bundled_webgl_available": true,
+    "dom_rows": 29,
+    "canvas_count": 0,
+    "renderer_override": false
+  },
   "assertions": {
     "chat_records_exact": true,
     "document_requests": 1,
@@ -121,7 +128,7 @@
     "browser_terminal_key_requests": 0,
     "send_requests": 3,
     "raw_frames_received": 49,
-    "raw_offset_last": 30874,
+    "raw_offset_last": 30837,
     "page_errors": [],
     "no_interrupt_keys": true,
     "backend_enter_count": 3,
@@ -182,19 +189,20 @@
     "note": "Native auxiliary requests are not assumed to create terminal messages; assertions match the request containing each submitted message."
   },
   "tested_source_sha256": {
-    "backend/app/static/app.js": "cec829879db8f2c9a0058b5f8175ccad6af92f26a123df24875882b1a90d2438",
+    "backend/app/static/app.js": "d38a69413066c10e19a9e8d06173c0c56e10845fb5dcfd1bbb52b2b6dfb0e3c0",
     "backend/app/api.py": "16cb0318d4179a325f8124b7038f2bca961e193a03a31e32a5593f0f3c0f8441",
     "backend/app/supervisor.py": "542625a66404157b89db7662a61003f11478caae952f2cee0a222a2a985148cc",
     "backend/app/agent_inbox.py": "9d734488bd4b4257ef1ff16bfdbdb975a898ebcc2af1e3f4275c674bef04b820"
   },
   "screenshots": [
     {
-      "file": "/tmp/arui-phone-send-oha_c5qc/queued-390x844.png",
-      "sha256": "bd6100e7d6dcc91b5f3645a1fa00f70bbbd1bf448862fb4007f7c7ae87a9f618"
+      "file": "/tmp/arui-phone-send-x76hqfk_/queued-390x844.png",
+      "sha256": "98501c9f1f24cb9def0d278fc9998dfb8163305b02cf009b4ade1c6246bb29c5"
     },
     {
-      "file": "/tmp/arui-phone-send-oha_c5qc/reply-live-390x844.png",
-      "sha256": "831775553a5b6fdfc1f97568bdbc7fd34910a53794bc45f18d6203c617d01d08"
+      "file": "/tmp/arui-phone-send-x76hqfk_/reply-live-390x844.png",
+      "sha256": "e669e2012a73e707ccf1c6b9fc1efb16e79210b94cbf7775c994003289eda1b9",
+      "repository_copy": "docs/screenshots/mobile-send-confirmed.png"
     }
   ],
   "cleanup": {
@@ -208,5 +216,5 @@
     "Current input is single-line. Multiline uses the actual sendChat handler/API/native queue, not a claim that the input preserves pasted newlines.",
     "The synthetic provider verifies delivery, queue handling, and live terminal rendering, not model intelligence or remote provider availability."
   ],
-  "local_raw_evidence_directory": "/tmp/arui-phone-send-oha_c5qc"
+  "local_raw_evidence_directory": "/tmp/arui-phone-send-x76hqfk_"
 }

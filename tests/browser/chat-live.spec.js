@@ -22,11 +22,19 @@ async function instrumentTerminal(page) {
   // Exercise the real bundled xterm renderer; retain a handle to inspect its
   // displayed text/scroll position rather than merely counting HTTP requests.
   await page.evaluate(() => {
-    window.WebglAddon = undefined;
     const Original = window.Terminal;
     window.Terminal = class extends Original {
       constructor(...args) { super(...args); window.testTerminal = this; }
     };
+  });
+}
+async function countWebglAttempts(page) {
+  await page.evaluate(() => {
+    const Original = window.WebglAddon.WebglAddon;
+    window.testWebglAttempts = 0;
+    window.WebglAddon = { WebglAddon: class extends Original {
+      constructor(...args) { window.testWebglAttempts++; super(...args); }
+    } };
   });
 }
 async function openLive(page) {
@@ -57,6 +65,34 @@ test('iPhone keyboard resize keeps actual terminal frames advancing', async ({pa
   await expect.poll(async () => (await terminalState(page)).last).not.toBe(shrunk);
   expect((await terminalState(page)).following).toBe(true);
   expect(mock.errors).toEqual([]);
+});
+
+test('coarse-pointer phones use legible DOM terminal rows without overriding the bundled renderer', async ({page}, info) => {
+  const stream = streamFixture(); const mock = await installMocks(page, {overrides:stream.overrides});
+  await page.goto('/dashboard'); await instrumentTerminal(page); await countWebglAttempts(page); await openLive(page);
+  expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(true);
+  expect(await page.evaluate(() => window.testWebglAttempts)).toBe(0);
+  await expect(page.locator('#term-host .xterm-rows')).toContainText('live update');
+  await expect(page.locator('#term-host canvas')).toHaveCount(0);
+  await page.setViewportSize({width:390,height:360});
+  await page.setViewportSize({width:390,height:844});
+  await expect.poll(async () => (await terminalState(page)).following).toBe(true);
+  await expect(page.locator('#term-host .xterm-rows')).toContainText('live update');
+  if (info.project.name === 'webkit') await page.screenshot({path:'/tmp/arui-mobile-audit/screenshots/390-default-dom-terminal.png'});
+  expect(mock.errors).toEqual([]);
+});
+
+test.describe('desktop renderer', () => {
+  test.use({isMobile:false,hasTouch:false,viewport:{width:1440,height:1000}});
+  test('fine-pointer desktops retain the WebGL renderer when available', async ({page}) => {
+    const stream = streamFixture(); const mock = await installMocks(page, {overrides:stream.overrides});
+    await page.goto('/dashboard'); await instrumentTerminal(page); await countWebglAttempts(page);
+    await page.locator('.rail-tab[data-tab="live"]').click();
+    expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(false);
+    await expect.poll(() => page.evaluate(() => window.testWebglAttempts)).toBe(1);
+    await expect.poll(async () => (await terminalState(page)).last).toMatch(/live update/);
+    expect(mock.errors).toEqual([]);
+  });
 });
 
 test('reading history is preserved, then Send resumes live frames without terminal Enter', async ({page}, info) => {

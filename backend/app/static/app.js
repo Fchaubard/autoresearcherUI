@@ -2602,13 +2602,14 @@ function createRailTerm(session) {
   if (WebLinksAddon) t.loadAddon(new WebLinksAddon((e, uri) =>
     window.open(uri, '_blank', 'noopener')));
   t.open(container);
-  // GPU-accelerated renderer — dramatically smoother than the default DOM
-  // renderer for Claude Code's constant full-screen repaints (the cause of the
-  // "laggy scroll" feel). Guarded: if WebGL is unavailable or its context is
-  // lost, dispose the addon and fall back to the DOM renderer automatically.
+  // Keep the DOM renderer on touch devices: mobile WebKit can lose glyphs
+  // from the WebGL atlas when the keyboard changes the viewport. Fine-pointer
+  // desktops keep acceleration for frequent full-screen repaints. If WebGL
+  // is unavailable or loses its context, the DOM renderer remains available.
   try {
     const Webgl = window.WebglAddon && window.WebglAddon.WebglAddon;
-    if (Webgl) {
+    const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches;
+    if (Webgl && !coarsePointer) {
       const gl = new Webgl();
       gl.onContextLoss(() => { try { gl.dispose(); } catch (e) {} });
       t.loadAddon(gl);

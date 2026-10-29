@@ -1,0 +1,193 @@
+{
+  "recorded_at": "2026-10-29T20:24:13.978608+00:00",
+  "scope": "Read-only observation of the existing production research conversation; the observer sent no prompts, keys or model requests and changed no settings.",
+  "same_process": {
+    "pid": 4193992,
+    "native_thread_id": "01a18907-084c-7f72-830d-9004573d6ce7",
+    "selected_model": "gpt-6-astra",
+    "selected_reasoning_effort": "medium"
+  },
+  "policy_delivery": {
+    "initial_api_send_at": "2026-10-29T19:51:16.147561Z",
+    "existing_draft_queued_by_operator_at": "2026-10-29T20:04:35.246881Z",
+    "verified_steering_api_send_at": "2026-10-29T20:16:14.627Z",
+    "steering_pointer_accepted_at": "2026-10-29T20:17:01.612Z",
+    "steering_inbox_read_at": "2026-10-29T20:17:04.062Z",
+    "steering_inbox_sha256": "7eae105f1da9d3309d2978d11e8bd1550e22d52c17d267862e19ee773fbe0944",
+    "original_policy_accepted_at": "2026-10-29T20:17:35.329Z",
+    "original_policy_matches_except_final_period": true
+  },
+  "wait_lifecycle": [
+    {
+      "event": "wait_armed",
+      "at": "2026-10-29T20:17:28.887597+00:00"
+    },
+    {
+      "event": "turn_completed",
+      "at": "2026-10-29T20:17:35.119Z"
+    },
+    {
+      "event": "previously_queued_policy_started",
+      "at": "2026-10-29T20:17:35.254Z"
+    },
+    {
+      "event": "wait_rearmed",
+      "at": "2026-10-29T20:17:51.233604+00:00"
+    },
+    {
+      "event": "turn_completed",
+      "at": "2026-10-29T20:17:53.526Z"
+    },
+    {
+      "event": "operator_research_direction_accepted",
+      "at": "2026-10-29T20:19:12.108Z"
+    }
+  ],
+  "observed_quiet_wait": {
+    "start": "2026-10-29T20:17:53.526Z",
+    "end": "2026-10-29T20:19:12.108Z",
+    "duration_seconds": 78.582,
+    "research_response_usage_records": 0,
+    "research_tool_calls": 0,
+    "clock_sleep_calls": 0,
+    "model_wait_poll_calls": 0,
+    "workers_observed_running": 10,
+    "operator_input_wake_verified": true,
+    "automatic_experiment_event_wake_verified": false
+  },
+  "pre_effective_wait_samples": {
+    "baseline": {
+      "start_inclusive": "2026-10-29T19:23:20+00:00",
+      "end_exclusive": "2026-10-29T19:33:20+00:00",
+      "models": [
+        {
+          "model": "gpt-6-astra",
+          "effort": "medium",
+          "responses": 17,
+          "estimated_usd": 4.9321625000000004,
+          "input_tokens": 3655627,
+          "cached_input_tokens": 3632465,
+          "cache_write_input_tokens": 23111,
+          "output_tokens": 20206
+        }
+      ],
+      "tools": {
+        "total_tool_calls": 17,
+        "clock_sleep_calls": 4,
+        "named_compact_poll_calls": 0,
+        "wait_registration_tool_calls": 0,
+        "compact_context_tool_calls": 0
+      }
+    },
+    "policy_not_yet_consumed": {
+      "start_inclusive": "2026-10-29T20:02:00Z",
+      "end_exclusive": "2026-10-29T20:12:00Z",
+      "models": [
+        {
+          "model": "gpt-6-astra",
+          "effort": "medium",
+          "responses": 22,
+          "estimated_usd": 9.105806999999999,
+          "input_tokens": 4543879,
+          "cached_input_tokens": 4285497,
+          "cache_write_input_tokens": 258316,
+          "output_tokens": 31814
+        }
+      ],
+      "tools": {
+        "total_tool_calls": 22,
+        "clock_sleep_calls": 0,
+        "named_compact_poll_calls": 0,
+        "wait_registration_tool_calls": 0,
+        "compact_context_tool_calls": 0
+      }
+    }
+  },
+  "limitations": [
+    "The first 78.582-second quiet interval ended on an operator research instruction. A separate later experiment-event wake, event read, decision and rearm were observed; both intervals are distinguished above.",
+    "The operator instruction and useful resumed research were preserved. The observer caused no artificial wake, model request or rearm.",
+    "The observation is short and covers only the research conversation; it does not establish an overall savings percentage, daily bill reduction, or costs for other roles.",
+    "Estimated costs use recorded response usage and standard pricing with a 30-minute cache-write assumption. Work mix and cache-write volume differ between the earlier windows.",
+    "No policy savings are attributed to time while the original message was only queued and unconsumed.",
+    "The automatic event decision used a shorter native context than the earlier samples. Its cost is one observed cycle, not a controlled cost comparison or a forecast."
+  ],
+  "automatic_event_cycle": {
+    "verified": true,
+    "wait_armed_event_at": "2026-10-29T20:22:28.612781+00:00",
+    "run_finished_event_at": "2026-10-29T20:22:32.136408+00:00",
+    "quiet_before_wake": {
+      "start_completed_turn": "2026-10-29T20:22:32.224Z",
+      "end_new_task_started": "2026-10-29T20:22:38.905Z",
+      "duration_seconds": 6.681,
+      "research_response_usage_records": 0,
+      "research_tool_calls": 0
+    },
+    "event_pointer_accepted_at": "2026-10-29T20:22:38.964Z",
+    "event_inbox_sha256": "81662c4e53907020e775099ee2628be42f0d0f99f1afcc23c696d2b597cb83f3",
+    "event_inbox_characters": 1846,
+    "event_marker_verified": true,
+    "trigger_transitions": [
+      {
+        "from": "running",
+        "to": "kept_novel"
+      },
+      {
+        "from": null,
+        "to": "running"
+      }
+    ],
+    "supervisor_agent_woken_event_at": "2026-10-29T20:22:39.942887+00:00",
+    "event_inbox_read_at": "2026-10-29T20:22:40.914Z",
+    "compact_context_read_at": "2026-10-29T20:22:43.626Z",
+    "wait_rearmed_at": "2026-10-29T20:23:12.455627+00:00",
+    "turn_completed_at": "2026-10-29T20:23:15.389Z",
+    "decision_and_rearm": {
+      "window_start": "2026-10-29T20:22:38.905Z",
+      "window_end_exclusive": "2026-10-29T20:23:15.390Z",
+      "model": "gpt-6-astra",
+      "effort": "medium",
+      "response_usage_records": 6,
+      "tool_calls": 5,
+      "clock_sleep_calls": 0,
+      "compact_context_reads": 1,
+      "wait_registrations": 1,
+      "estimated_usd": 0.727095,
+      "max_request_input_tokens": 86643,
+      "tokens": {
+        "input_tokens": 492275,
+        "cached_input_tokens": 482065,
+        "cache_write_input_tokens": 10192,
+        "output_tokens": 2349,
+        "reasoning_output_tokens": 313,
+        "total_tokens": 494624
+      }
+    },
+    "artificial_wake_performed": false,
+    "same_native_conversation_and_pid": true
+  },
+  "latest_followup_observation": {
+    "observed_at": "2026-10-29T20:24:13.978608+00:00",
+    "wait": {
+      "status": "waiting",
+      "armed_at": "2026-10-29T20:23:12.455627+00:00",
+      "deadline": "2026-10-29T20:38:12.455627+00:00",
+      "last_attempt": null
+    },
+    "latest_transcript_item": {
+      "at": "2026-10-29T20:23:15.389Z",
+      "record_type": "event_msg",
+      "kind": "task_complete"
+    },
+    "seconds_since_last_completed_turn": 58.589608,
+    "research_response_usage_records_since_completion": 0,
+    "research_tool_calls_since_completion": 0,
+    "run_status_counts": {
+      "crashed": 370,
+      "kept_novel": 274,
+      "kept_replicate": 8,
+      "running": 10,
+      "success_smoke": 46
+    },
+    "original_pid_alive": true
+  }
+}

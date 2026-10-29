@@ -10,7 +10,7 @@ at viewport/base row 79. Shrinking to 390×360 for the keyboard changed those ro
 to 101/105. The old scroll lock interpreted the resize as deliberately reading
 history, held every later frame, and stayed frozen after restoring the viewport.
 The server continued delivering updates 8→18→28 while only update 8 remained
-visible. With the fix, visible updates advance8→18→28 and viewport/base rows
+visible. With the fix, visible updates advance 8→18→28 and viewport/base rows
 stay equal. Deliberately scrolling up still preserves the reading position.
 
 The live view now bounds requests, aborts disposed streams, and refreshes after
@@ -18,6 +18,14 @@ phone resume. Plain-text fallback also updates if xterm cannot load. Chat
 recovery fetches recent saved messages after reconnect and periodically while
 visible, deduplicates server echoes, and restores chronological order without
 moving an operator who is reading older activity.
+
+The final production visual check also found missing glyphs with the GPU
+terminal renderer in headless mobile WebKit, despite a populated terminal
+buffer. The same production stream rendered legibly with the DOM renderer.
+Touch devices now use DOM rendering by default; desktop acceleration remains
+available. This was verified with mobile browser emulation, not a physical
+iPhone GPU. Failed client-error reports also consume their own network
+rejection, preventing a logging failure from recursively reporting itself.
 
 Send shows progress, waits for the backend's acceptance result, then opens the
 correct research or author terminal and follows its live output. Sending from a
@@ -43,3 +51,8 @@ keyboard resize, reading history, Send, author routing, hung requests, disposal,
 plain-text fallback, missed events, duplicate echoes, and reconnect ordering.
 Private native-CLI probes exercise the submission/queue boundary separately;
 these use synthetic content and loopback endpoints without paid inference.
+The [native Send proof](verification/iphone-send-native-e2e-2026-10-29.json)
+also exercises the real API and the default touch renderer with a real Codex
+terminal. Its [completed phone conversation](screenshots/mobile-send-confirmed.png)
+shows replies after three accepted messages without a page reload or browser
+terminal Enter.
