@@ -19,10 +19,11 @@ def _urlopen(payload, status=200):
 
 
 # ── advisor resolution ──────────────────────────────────────────────────────
-def test_advisor_only_claude_uses_claude():
+def test_advisor_missing_key_preserves_selected_provider():
     adv = tc.resolve_advisor({"claude_token": "x", "scoping_model": "gemini"})
-    assert adv["provider"] == "claude"      # NOT a gemini default
-    assert adv["warning"]                    # notes the switch
+    assert adv["provider"] == "gemini"
+    assert adv["model"] == tc.DEFAULT_MODELS["gemini"]
+    assert "gemini API key" in adv["warning"]
 
 
 def test_advisor_configured_provider_with_key_wins():
@@ -34,14 +35,31 @@ def test_advisor_configured_provider_with_key_wins():
 
 def test_advisor_none_configured_warns():
     adv = tc.resolve_advisor({"scoping_model": "gemini"})
-    assert "no advisor key" in adv["warning"]
+    assert "gemini API key" in adv["warning"]
+
+
+def test_advisor_preserves_exact_model_when_other_roles_use_same_provider():
+    adv = tc.resolve_advisor({"gemini_token": "g", "openai_token": "o",
+                              "research_agent_model": "gemini-4-argon",
+                              "scoping_model": "gemini-3.1-flash-lite"})
+    assert adv == {"provider": "gemini", "model": "gemini-3.1-flash-lite", "warning": ""}
+
+
+def test_advisor_unknown_model_never_selects_available_provider():
+    adv = tc.resolve_advisor({"claude_token": "c", "openai_token": "o",
+                              "scoping_model": "unknown-model"})
+    assert adv["model"] == "unknown-model"
+    assert adv["provider"] is None
+    assert "Unknown model" in adv["warning"]
 
 
 # ── model visibility ────────────────────────────────────────────────────────
-def test_model_visible_lenient_and_gemini_prefix():
+def test_model_visible_exact_and_gemini_prefix():
     assert tc._model_visible("gemini-2.5-pro",
                              ["models/gemini-2.5-pro", "models/gemini-2.0-flash"])
     assert not tc._model_visible("gpt-5", ["claude-opus-4-6"])
+    assert not tc._model_visible("gpt-5", ["gpt-5-mini", "gpt-5.5"])
+    assert not tc._model_visible("gemini-2.5-flash", ["models/gemini-2.5-flash-lite"])
 
 
 def test_check_claude_model_visible(monkeypatch):

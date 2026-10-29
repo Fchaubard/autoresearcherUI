@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib
 import os
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
@@ -81,6 +82,14 @@ def arui_env(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("ARUI_DATA_DIR", str(data_dir))
+    # Tests may create/kill canonical sessions such as "agent" and "author".
+    # Never inherit a developer's live tmux server, even when pytest is run
+    # without special environment variables or from inside a tmux pane.
+    # Keep the Unix socket path short even for long pytest test names.
+    tmux_dir = tmp_path.parent / ("tmux-" + uuid.uuid4().hex[:10])
+    tmux_dir.mkdir(mode=0o700)
+    monkeypatch.setenv("TMUX_TMPDIR", str(tmux_dir))
+    monkeypatch.setenv("TMUX", "")
     # Don't let the production background daemon loops (paper-runner, author
     # feed, telemetry, notify scheduler) spawn during unit tests. They are
     # `while True` daemons that outlive the test, then keep hitting whichever DB
@@ -103,7 +112,8 @@ def arui_env(tmp_path, monkeypatch):
     db.init_db()
     # Now scrub any keys council may have just loaded from keys.env so
     # unit tests never accidentally hit a real LLM.
-    for k in ("GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+    for k in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+              "OPENCODE_API_KEY", "ARUI_FLINT_API_KEY", "ARUI_FLINT_BASE_URL", "ARUI_FLINT_MODEL"):
         monkeypatch.delenv(k, raising=False)
     yield data_dir
     # Drain any short-lived worker threads a test spawned (council reviewers,
@@ -122,18 +132,14 @@ def arui_env(tmp_path, monkeypatch):
             thr.join(timeout=max(0.0, deadline - time.time()))
         except Exception:                              # noqa: BLE001
             pass
-    # A test may spawn a REAL tmux session (author_agent.start / agent start,
-    # the paper handoff). tmux sessions persist on the server and leak into the
-    # next test: a leftover "author" session makes supervisor.tick() believe
-    # paper mode has a live author and call set_phase(PAPER), which resets the
-    # remediation counter a later test just set. Kill the arui-owned sessions.
+    # Stop this test's private server so real sessions cannot leak to another
+    # test. Explicit env keeps cleanup safe even if a test changes TMUX.
     import subprocess
-    for _sess in ("author", "agent"):
-        try:
-            subprocess.run(["tmux", "kill-session", "-t", _sess],
-                           capture_output=True, timeout=5)
-        except Exception:                              # noqa: BLE001
-            pass
+    try:
+        subprocess.run(["tmux", "kill-server"], capture_output=True, timeout=5,
+                       env={**os.environ, "TMUX": "", "TMUX_TMPDIR": str(tmux_dir)})
+    except Exception:                                  # noqa: BLE001
+        pass
     _purge_backend_modules()
 
 
@@ -261,3 +267,63 @@ def no_network(monkeypatch):
         raise RuntimeError("network access blocked in unit tests")
 
     monkeypatch.setattr(urllib.request, "urlopen", boom)
+
+
+class NudgeTerminal:
+    """A tiny editable prompt model; capture reflects actual key effects."""
+    def __init__(self, success_after=2, marker="›", failed_key=None):
+        self.calls, self.draft, self.history = [], "", ""
+        self.enters, self.clears, self.busy = 0, 0, False
+        self.success_after, self.marker, self.failed_key = success_after, marker, failed_key
+        self.edit_after_enter, self.capture_failure, self.cursor_override = None, None, None
+        self.placeholder, self.placeholder_dim, self.cursor_x_override = "", True, None
+
+    def screen(self):
+        if self.busy:
+            return self.history + "Working (3s · esc to interrupt)\n"
+        return self.history + self.marker + " " + (self.draft or self.placeholder) + "\nbypass permissions on\n"
+
+    def __call__(self, cmd, **kwargs):
+        from subprocess import CompletedProcess
+        self.calls.append(cmd)
+        if cmd[:2] == ["tmux", "capture-pane"]:
+            if self.enters and self.capture_failure is not None:
+                return CompletedProcess(cmd, self.capture_failure, stdout=b"")
+            screen = self.screen()
+            if '-e' in cmd and self.placeholder and not self.draft and self.placeholder_dim:
+                screen = screen.replace(self.marker + ' ' + self.placeholder,
+                                        self.marker + ' \x1b[2m' + self.placeholder + '\x1b[0m')
+            return CompletedProcess(cmd, 0, stdout=screen.encode())
+        if cmd[:2] == ["tmux", "display-message"]:
+            if cmd[-1] == '#{pane_width} #{pane_height}':
+                return CompletedProcess(cmd, 0, stdout=b'100 35')
+            if cmd[-1] == '#{pane_current_path}':
+                return CompletedProcess(cmd, 0, stdout=str(self.workspace).encode())
+            cursor = len(self.history.splitlines()) + max(1, len(self.draft.splitlines())) - 1
+            row = cursor if self.cursor_override is None else self.cursor_override
+            column = 2 + len(self.draft.split('\n')[-1]) if self.cursor_x_override is None else self.cursor_x_override
+            value = f'{row} {column}' if '#{cursor_x}' in cmd[-1] else str(row)
+            return CompletedProcess(cmd, 0, stdout=value.encode())
+        failed = ("-l" in cmd if self.failed_key == "-l" else cmd[-1] == self.failed_key)
+        if failed:
+            return CompletedProcess(cmd, 1, stdout=b"")
+        if "-l" in cmd:
+            self.draft = cmd[-1]
+        elif cmd[-1] == "Enter":
+            self.enters += 1
+            if self.edit_after_enter is not None:
+                self.draft = self.edit_after_enter
+            elif self.success_after is not None and self.enters >= self.success_after:
+                self.draft, self.busy = "", True
+        elif cmd[-1] in {"C-c", "C-u"}:
+            self.draft = ""
+            self.clears += 1
+        return CompletedProcess(cmd, 0, stdout=b"")
+
+
+@pytest.fixture
+def nudge_terminal(tmp_path):
+    class Terminal(NudgeTerminal):
+        workspace = tmp_path / 'terminal-workspace'
+    Terminal.workspace.mkdir()
+    return Terminal

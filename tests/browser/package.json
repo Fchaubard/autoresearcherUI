@@ -1,0 +1,6 @@
+{
+  "name": "arui-browser-regressions",
+  "private": true,
+  "scripts": { "test": "playwright test", "test:mobile": "playwright test --project=webkit" },
+  "devDependencies": { "@playwright/test": "1.64.1" }
+}

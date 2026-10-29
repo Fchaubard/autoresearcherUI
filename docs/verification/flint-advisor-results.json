@@ -1,0 +1,318 @@
+{
+  "generated_at": "2026-10-28T22:35:12.333614+00:00",
+  "results": [
+    {
+      "model": "flint/local",
+      "role": "scoping",
+      "tested_at": "2026-10-28T22:31:42.754123+00:00",
+      "timeout_seconds": 120,
+      "max_output_tokens": 8192,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "flint",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "flint/local"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "flint",
+          "http_status": 200,
+          "response_model": "flint"
+        }
+      ],
+      "output_characters": 2578,
+      "output_sha256": "2ad9b7d0b4f0e2a5966d63273f75dce94622bd24c04820ca2b0c5bcc1c566da7",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 31.39,
+      "previous_attempts": [
+        {
+          "model": "flint/local",
+          "role": "scoping",
+          "tested_at": "2026-10-28T22:29:14.355512+00:00",
+          "timeout_seconds": 90,
+          "max_output_tokens": 4096,
+          "inference": "real",
+          "fallback_allowed": false,
+          "provider": "flint",
+          "status": "provider_error",
+          "requests": [
+            {
+              "endpoint": "/v1/chat/completions",
+              "requested_model": "flint",
+              "http_status": 200,
+              "response_model": "flint"
+            },
+            {
+              "requested_model": "flint/local",
+              "error_type": "RuntimeError"
+            }
+          ],
+          "dispatched_models": [
+            "flint/local"
+          ],
+          "error_type": "RuntimeError",
+          "elapsed_seconds": 36.004
+        }
+      ],
+      "configuration_revision": "Final production Flint 16384 context/8192 reply limits; tiebreaker uses concise production prompt."
+    },
+    {
+      "model": "flint/local",
+      "role": "reviewer1",
+      "tested_at": "2026-10-28T22:32:14.491290+00:00",
+      "timeout_seconds": 120,
+      "max_output_tokens": 8192,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "flint",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "flint/local"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "flint",
+          "http_status": 200,
+          "response_model": "flint"
+        }
+      ],
+      "output_characters": 830,
+      "output_sha256": "dc1a3e5dd44ffce402af7e5e67ce7b40ddd2e4100ce0b1961374e6faf385876f",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 53.225,
+      "previous_attempts": [
+        {
+          "model": "flint/local",
+          "role": "reviewer1",
+          "tested_at": "2026-10-28T22:29:50.701240+00:00",
+          "timeout_seconds": 90,
+          "max_output_tokens": 4096,
+          "inference": "real",
+          "fallback_allowed": false,
+          "provider": "flint",
+          "status": "provider_error",
+          "schema_errors": [
+            "no_parsed_object"
+          ],
+          "dispatched_models": [
+            "flint/local"
+          ],
+          "requests": [
+            {
+              "endpoint": "/v1/chat/completions",
+              "requested_model": "flint",
+              "http_status": 200,
+              "response_model": "flint"
+            },
+            {
+              "requested_model": "flint/local",
+              "error_type": "RuntimeError"
+            }
+          ],
+          "output_characters": 0,
+          "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "output_fields": [],
+          "error_type": "RuntimeError",
+          "elapsed_seconds": 37.05
+        }
+      ],
+      "configuration_revision": "Final production Flint 16384 context/8192 reply limits; tiebreaker uses concise production prompt."
+    },
+    {
+      "model": "flint/local",
+      "role": "reviewer2",
+      "tested_at": "2026-10-28T22:33:08.039230+00:00",
+      "timeout_seconds": 120,
+      "max_output_tokens": 8192,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "flint",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "flint/local"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "flint",
+          "http_status": 200,
+          "response_model": "flint"
+        }
+      ],
+      "output_characters": 722,
+      "output_sha256": "9d66f011d8baf0dc1ee2e061813d2203bc7a08ae4a29908ddd16ae5b378a7b94",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 24.647,
+      "previous_attempts": [],
+      "configuration_revision": "Final production Flint 16384 context/8192 reply limits; tiebreaker uses concise production prompt."
+    },
+    {
+      "model": "flint/local",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-28T22:36:02.339873+00:00",
+      "timeout_seconds": 120,
+      "max_output_tokens": 8192,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "flint",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "flint/local"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "flint",
+          "http_status": 200,
+          "response_model": "flint"
+        }
+      ],
+      "output_characters": 778,
+      "output_sha256": "f810e74fafadd8ef9e378c24723e6001e4f7cfd55fa314306d630d7b605f97ac",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 39.527,
+      "previous_attempts": [
+        {
+          "model": "flint/local",
+          "role": "tiebreaker",
+          "tested_at": "2026-10-28T22:33:33.069945+00:00",
+          "timeout_seconds": 120,
+          "max_output_tokens": 8192,
+          "inference": "real",
+          "fallback_allowed": false,
+          "provider": "flint",
+          "status": "provider_error",
+          "schema_errors": [
+            "no_parsed_object"
+          ],
+          "dispatched_models": [
+            "flint/local"
+          ],
+          "requests": [
+            {
+              "endpoint": "/v1/chat/completions",
+              "requested_model": "flint",
+              "http_status": 200,
+              "response_model": "flint"
+            },
+            {
+              "requested_model": "flint/local",
+              "error_type": "ModelOutputBudgetError"
+            }
+          ],
+          "output_characters": 0,
+          "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "output_fields": [],
+          "error_type": "ModelOutputBudgetError",
+          "elapsed_seconds": 70.261
+        }
+      ],
+      "configuration_revision": "Final production Flint 16384 context/8192 reply limits; tiebreaker uses concise production prompt."
+    },
+    {
+      "model": "flint/local",
+      "role": "pi",
+      "tested_at": "2026-10-28T22:34:43.761884+00:00",
+      "timeout_seconds": 120,
+      "max_output_tokens": 8192,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "flint",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "flint/local"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "flint",
+          "http_status": 200,
+          "response_model": "flint"
+        }
+      ],
+      "output_characters": 169,
+      "output_sha256": "a23aa9392afa39ab00e0cbb9d36b4cc9645419ac14a8a165d73731146f3fa0df",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 5.573,
+      "previous_attempts": [],
+      "configuration_revision": "Final production Flint 16384 context/8192 reply limits; tiebreaker uses concise production prompt."
+    },
+    {
+      "model": "flint/local",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:34:49.637025+00:00",
+      "timeout_seconds": 120,
+      "max_output_tokens": 8192,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "flint",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "flint/local"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "flint",
+          "http_status": 200,
+          "response_model": "flint"
+        }
+      ],
+      "output_characters": 492,
+      "output_sha256": "d05437fb2ba7b0b5adfc8624fddf75b791631d0337eb700ec0d271da802d35b2",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 22.599,
+      "previous_attempts": [],
+      "configuration_revision": "Final production Flint 16384 context/8192 reply limits; tiebreaker uses concise production prompt."
+    }
+  ],
+  "final_source_sha256": {
+    "backend/app/opencode_runtime.py": "bac872558f23ee421d569c711ca5d8270145f5be9687b207e583afcfb036f112",
+    "backend/app/provider_config.py": "3fd5a6d2afa4a18afd1e29d3ef94150e04e72472c0c13be53318fdf49a3691bc",
+    "backend/app/council.py": "15ba9c6b7ffcdd0d554e384042cfd8e47d68018a7f10bcab05a6ef6a99321fd4",
+    "backend/app/pi.py": "d368ab12ca6a3c080f1d1f4dd17eaa876169d215be04cc501df7048033e73856",
+    "backend/app/agent_cli.py": "a756eaf9d1e41af0bdf0b8920e49d735d7c29790aced446c373d24e2342ba5fa"
+  },
+  "strict_configuration": "App-owned config and private DB; exact provider/endpoint/package/API model and request body; all allowed agent models pinned; unpinned delegates denied.",
+  "quota_note": "After earlier successful free inference, HTTP429 free usage limit responses also blocked simple coding. Redundant retries were stopped. Captured CLI error responses exposed body only, with no Retry-After headers or reset time metadata recorded.",
+  "synthetic_validation": "35 focused tests including real installed CLI against synthetic local protocol, hostile global/project model/body/baseURL settings, readonly context permissions and rejection of unpinned custom delegates."
+}

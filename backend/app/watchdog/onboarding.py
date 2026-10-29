@@ -112,35 +112,35 @@ def review_with_council(*, force: bool = False) -> dict:
         kill=kill[:600],
         scripts_block=_scripts_block(),
     )
-    # Pick whichever reviewer is available (OpenAI / Gemini / Claude).
-    # We piggy-back on council._call_reviewer because it already handles
-    # key plumbing, retries, JSON-safe parsing.
+    # Use the first enabled logical reviewer. Missing access or a failed
+    # response must never switch this task to another selected model.
     try:
         from .. import council
-        reviewers = council._available_reviewers(council._settings())
-    except Exception as e:                                  # noqa: BLE001
-        print(f"[watchdog.onboarding] no reviewers available: {e}",
-              flush=True)
-        return {"status": "skipped", "reason": "no reviewers"}
+        cfg = council._settings()
+        reviewers = council.configured_reviewers(cfg)
+    except Exception as exc:                                # noqa: BLE001
+        from ..safe_errors import describe
+        return {"status": "error", "reason":
+                f"Cannot load the selected watchdog reviewer: {describe(exc)}"}
     if not reviewers:
         return {"status": "skipped",
-                "reason": "no council API keys configured"}
+                "reason": "no council reviewers enabled"}
 
-    out = None
-    last_err = ""
-    for r in reviewers[:2]:        # try up to two in fallback order
-        try:
-            cfg = council._settings()
-            raw = council._call_reviewer(r, SYSTEM, prompt, cfg)
-            if isinstance(raw, dict):
-                out = raw
-                break
-        except Exception as e:                              # noqa: BLE001
-            last_err = str(e)[:200]
-            continue
+    reviewer = reviewers[0]
+    model = cfg.get(f"council_{reviewer}_model") or council.DEFAULTS[f"council_{reviewer}_model"]
+    from ..provider_config import requirement_error
+    error = requirement_error(model)
+    if error:
+        return {"status": "error", "model": model, "reason": error}
+    try:
+        out = council._call_reviewer(reviewer, SYSTEM, prompt, cfg)
+    except Exception as exc:
+        from ..safe_errors import describe
+        return {"status": "error", "model": model,
+                "reason": f"Selected watchdog reviewer {model} failed: {describe(exc)}"}
     if not isinstance(out, dict):
-        return {"status": "skipped",
-                "reason": f"reviewer returned non-dict: {last_err}"}
+        return {"status": "error", "model": model,
+                "reason": f"Selected watchdog reviewer {model} returned no valid review. No other model was used."}
 
     # The reviewer's response should be a dict of overrides. Validate +
     # sanitize before persisting. We never accept top-level entries that

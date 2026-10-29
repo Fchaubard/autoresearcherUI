@@ -43,6 +43,11 @@ def is_alive(name: str) -> bool:
     """True iff a tmux session named ``name`` currently exists. Never raises."""
     if not valid_name(name):
         return False
+    try:
+        return subprocess.run(["tmux", "has-session", "-t", "=" + name],
+                              capture_output=True, timeout=5).returncode == 0
+    except Exception:                                      # noqa: BLE001
+        return False
 
 
 def pane_alive(name: str) -> bool:
@@ -55,15 +60,10 @@ def pane_alive(name: str) -> bool:
         return False
     try:
         out = subprocess.run(
-            ["tmux", "display-message", "-p", "-t", name,
+            ["tmux", "display-message", "-p", "-t", "=" + name + ":",
              "#{pane_dead}"], capture_output=True, text=True, timeout=5)
         value = out.stdout.decode() if isinstance(out.stdout, bytes) else out.stdout
         return out.returncode == 0 and (value or "").strip() == "0"
-    except Exception:                                      # noqa: BLE001
-        return False
-    try:
-        return subprocess.run(["tmux", "has-session", "-t", name],
-                              capture_output=True, timeout=5).returncode == 0
     except Exception:                                      # noqa: BLE001
         return False
 
@@ -96,7 +96,9 @@ def kill_session(name: str, *, allow_protected: bool = False) -> tuple[bool, str
     if name in PROTECTED_SESSIONS and not allow_protected:
         return False, f"'{name}' is a protected core session - refusing to kill"
     try:
-        r = subprocess.run(["tmux", "kill-session", "-t", name],
+        # '=' requires an exact name. tmux otherwise accepts a prefix and
+        # could kill another project's session when the intended one is gone.
+        r = subprocess.run(["tmux", "kill-session", "-t", "=" + name],
                            capture_output=True, text=True, timeout=5)
     except Exception as e:                                 # noqa: BLE001
         return False, f"kill failed: {e}"

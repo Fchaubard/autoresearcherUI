@@ -19,6 +19,7 @@ runs, every project uses ``DEFAULT_CONFIG``.
 from __future__ import annotations
 
 import importlib
+import math
 from typing import Any
 
 from ..db import SessionLocal
@@ -98,24 +99,43 @@ def get_config() -> dict:
     return out
 
 
+def merge_config(new: dict, current: dict, *, source: str = "operator") -> dict:
+    """Validate a partial edit before any settings are persisted."""
+    if not isinstance(new, dict):
+        raise ValueError("Watchdog configuration must be an object")
+    cfg = {k: {**v, "params": dict(v.get("params") or {})}
+           for k, v in current.items()}
+    for name, cust in new.items():
+        if not isinstance(cust, dict):
+            raise ValueError(f"Watchdog {name} must be an object")
+        if "enabled" in cust and not isinstance(cust["enabled"], bool):
+            raise ValueError(f"Watchdog {name}.enabled must be true or false")
+        params = cust.get("params", {})
+        if not isinstance(params, dict):
+            raise ValueError(f"Watchdog {name}.params must be an object")
+        defaults = DEFAULT_CONFIG.get(name, {}).get("params", {})
+        for key, value in params.items():
+            default = defaults.get(key)
+            if isinstance(default, list) and (not isinstance(value, list)
+                    or not all(isinstance(v, str) for v in value)):
+                raise ValueError(f"Watchdog {name}.{key} must be a JSON list of strings")
+            if isinstance(default, (int, float)) and (isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or value < 0):
+                raise ValueError(f"Watchdog {name}.{key} must be a non-negative number")
+        entry = cfg.get(name, {"enabled": True, "params": {}})
+        entry.update(enabled=cust.get("enabled", entry.get("enabled", True)),
+                     params={**entry.get("params", {}), **params},
+                     source=source)
+        cfg[name] = entry
+    return cfg
+
+
 def set_config(new: dict, *, source: str = "operator") -> dict:
     """Replace the watchdog.config Setting. Validates types but accepts
     unknown keys (forward-compat). Tags each touched entry with the
     given source for audit."""
-    cfg = get_config()
-    for name, cust in (new or {}).items():
-        if not isinstance(cust, dict):
-            continue
-        entry = cfg.get(name) or {"enabled": True, "params": {},
-                                    "source": source}
-        if "enabled" in cust:
-            entry["enabled"] = bool(cust["enabled"])
-        if isinstance(cust.get("params"), dict):
-            merged = dict(entry.get("params") or {})
-            merged.update(cust["params"])
-            entry["params"] = merged
-        entry["source"] = cust.get("source", source)
-        cfg[name] = entry
+    cfg = merge_config(new, get_config(), source=source)
     db = SessionLocal()
     try:
         row = (db.query(Setting)

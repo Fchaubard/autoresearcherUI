@@ -66,7 +66,18 @@ def test_kill_normal_session_shells_out(monkeypatch):
     ok, _ = ts.kill_session("pr-xyz")
     assert ok is True
     assert seen["argv"][:2] == ["tmux", "kill-session"]
-    assert seen["argv"][-1] == "pr-xyz"
+    assert seen["argv"][-1] == "=pr-xyz"
+
+
+def test_is_alive_returns_boolean_and_uses_exact_target(monkeypatch):
+    class Result:
+        returncode = 0
+    calls = []
+    monkeypatch.setattr(ts.subprocess, "run", lambda args, **kw: calls.append(args) or Result())
+    assert ts.is_alive("run") is True
+    assert calls[-1] == ["tmux", "has-session", "-t", "=run"]
+    Result.returncode = 1
+    assert ts.is_alive("run") is False
 
 
 def test_pane_alive_distinguishes_preserved_dead_pane(monkeypatch):

@@ -249,7 +249,7 @@ def chat(text: str) -> dict:
     st = state_get()
     history = list(st.get("messages") or [])
     history.append({"role": "user", "text": text, "at": _iso()})
-    _patch(messages=history, thinking=True)
+    _patch(messages=history, thinking=True, error="")
     try:
         reply = council.scope_chat(
             history, st.get("synthesis") or {}, st.get("papers") or [],
@@ -257,8 +257,10 @@ def chat(text: str) -> dict:
             st.get("seed_ideas", ""))
     except Exception as e:                                  # noqa: BLE001
         reply = f"(advisor error: {e})"
+        history.append({"role": "agent", "text": reply, "at": _iso()})
+        return _patch(messages=history, thinking=False, error=str(e))
     history.append({"role": "agent", "text": reply, "at": _iso()})
-    return _patch(messages=history, thinking=False)
+    return _patch(messages=history, thinking=False, error="")
 
 
 def finalize() -> dict:
@@ -270,7 +272,7 @@ def finalize() -> dict:
     synth = st.get("synthesis") or {}
     if not synth:
         return st
-    _patch(finalizing=True)
+    _patch(finalizing=True, error="")
     try:
         updated = council.scope_finalize(
             st.get("purpose", ""), st.get("metric", ""),
@@ -279,8 +281,8 @@ def finalize() -> dict:
     except Exception as e:                                  # noqa: BLE001
         return _patch(finalizing=False, error=f"finalize failed: {e}")
     if updated:
-        return _patch(synthesis=updated, finalizing=False)
-    return _patch(finalizing=False)
+        return _patch(synthesis=updated, finalizing=False, error="")
+    return _patch(finalizing=False, error="The selected advisor returned no updated plan. Your previous plan is preserved.")
 
 
 def _approved_ideas(st: dict, keep_user, keep_new) -> list[dict]:

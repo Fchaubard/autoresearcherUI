@@ -270,12 +270,25 @@ fresh review.
 ## Screens
 
 **Onboarding & Settings** - one form is the entire config surface. Email
-for alerts, optional GitHub creds for repo sync, optional Claude / Gemini /
-OpenAI tokens (Claude unlocks the agents; Gemini + OpenAI unlock the
-council), the *Scoping agent* model dropdown (Gemini default), the project's
+for alerts, optional GitHub creds for repo sync, provider connections for
+Claude, Gemini, OpenAI, OpenCode's free models, or a local Flint server,
+the *Scoping agent* model dropdown (Gemini default), the project's
 research question, seed ideas, validation metric, baseline, the
 dangerously-skip-permissions toggle, and the agent's raw `program.md`.
-Everything is editable later from the Settings modal.
+Everything is editable later from the Settings modal. Live model changes
+preserve the workspace and independent experiments; changes wait while the
+agent has an experiment running inside its own session or research is paused.
+See [provider setup and verification](docs/model-provider-verification.md)
+for model IDs, local Flint configuration, and provider availability limits.
+
+Model selections are strict. A missing key, unavailable model, quota error,
+or invalid response is reported against the selected model; the app never
+switches to another model or provider automatically. Required council reviewers
+must all complete before their assessment can approve an action. Gemini CLI's
+automatic model chains are restricted to the selected model as well.
+The [real model-role matrix](docs/model-role-matrix-2026-10-28.md) records
+successful inference, failures, and provider limits for every supported role.
+The [mobile audit](docs/mobile-ui-audit.md) records iPhone layouts and tests.
 
 ![Onboarding / Settings](docs/screenshots/onboarding-settings.png)
 
@@ -419,7 +432,8 @@ on yet.
 ## Configuration
 
 All config lives in the onboarding form and then the settings tab: project purpose, validation metric,
-optional API keys (Gemini, OpenAI, Anthropic), passcode gate, email recipients,
+optional API keys (Gemini, OpenAI, Anthropic, OpenCode), local Flint endpoint,
+passcode gate, email recipients,
 digest cadence, extra GPU nodes (SSH paste-in), and the raw `program.md` for
 hand-tuning the agent's setup prompt. 
 

@@ -45,7 +45,8 @@ def test_applied_when_council_returns_valid_overrides(
     from backend.app.models import Setting
     make_project(purpose="extra-long LLM eval taking 4h per validation")
 
-    monkeypatch.setattr(council, "_available_reviewers",
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic")
+    monkeypatch.setattr(council, "configured_reviewers",
                          lambda cfg: ["openai"])
     monkeypatch.setattr(council, "_settings", lambda: {})
     monkeypatch.setattr(council, "_call_reviewer",
@@ -72,7 +73,8 @@ def test_applied_with_empty_overrides_still_stamps_marker(
     from backend.app.watchdog import onboarding
     from backend.app.models import Setting
     make_project(purpose="boring vanilla MNIST classifier")
-    monkeypatch.setattr(council, "_available_reviewers",
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic")
+    monkeypatch.setattr(council, "configured_reviewers",
                          lambda cfg: ["openai"])
     monkeypatch.setattr(council, "_settings", lambda: {})
     monkeypatch.setattr(council, "_call_reviewer",
@@ -94,7 +96,8 @@ def test_force_runs_again_after_marker(arui_env, db_session, make_project,
     db_session.add(Setting(key="watchdog.reviewed_at",
                             value={"at": "2026-01-01T00:00:00Z"}))
     db_session.commit()
-    monkeypatch.setattr(council, "_available_reviewers",
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic")
+    monkeypatch.setattr(council, "configured_reviewers",
                          lambda cfg: ["openai"])
     monkeypatch.setattr(council, "_settings", lambda: {})
     monkeypatch.setattr(council, "_call_reviewer",
@@ -102,3 +105,42 @@ def test_force_runs_again_after_marker(arui_env, db_session, make_project,
     out = onboarding.review_with_council(force=True)
     assert out["status"] == "applied"
     assert "diverging" in out["overrides"]
+
+
+def test_selected_reviewer_failure_never_calls_other_model(arui_env, make_project, monkeypatch):
+    from backend.app import council
+    from backend.app.watchdog import onboarding
+    make_project(purpose="synthetic task")
+    monkeypatch.setenv("GEMINI_API_KEY", "synthetic")
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic")
+    seen = []
+    monkeypatch.setattr(council, "_call_reviewer", lambda reviewer, *args: seen.append(reviewer))
+    result = onboarding.review_with_council()
+    assert result["status"] == "error"
+    assert result["model"] == council.DEFAULTS["council_gemini_model"]
+    assert seen == ["gemini"]
+
+
+def test_missing_selected_key_never_uses_other_configured_key(arui_env, make_project, monkeypatch):
+    from backend.app import council
+    from backend.app.watchdog import onboarding
+    make_project(purpose="synthetic task")
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic")
+    monkeypatch.setattr(council, "_call_reviewer", lambda *args: pytest.fail("must not substitute the other reviewer"))
+    result = onboarding.review_with_council()
+    assert result["status"] == "error"
+    assert result["model"] == council.DEFAULTS["council_gemini_model"]
+
+
+def test_unreadable_settings_report_failure_without_selecting_defaults(arui_env, make_project, monkeypatch):
+    from backend.app import council
+    from backend.app.watchdog import onboarding
+    make_project(purpose="synthetic task")
+    def unavailable():
+        raise OSError("synthetic credential-bearing database failure")
+    monkeypatch.setattr(council, "_settings", unavailable)
+    monkeypatch.setattr(council, "_call_reviewer", lambda *args: pytest.fail("must not call a default model"))
+    result = onboarding.review_with_council()
+    assert result["status"] == "error"
+    assert "Cannot load the selected watchdog reviewer" in result["reason"]
+    assert "credential-bearing" not in result["reason"]

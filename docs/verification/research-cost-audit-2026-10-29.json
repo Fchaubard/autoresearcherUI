@@ -1,0 +1,49 @@
+{
+  "workspace": "/workspace/zoo_cartridge/autoresearcherUI/continual-learning-experiments",
+  "start_inclusive": "2026-10-28T22:50:00Z",
+  "end_exclusive": "2026-10-29T18:58:16Z",
+  "pricing_date": "2026-10-29",
+  "pricing_source": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+  "assumptions": [
+    "Standard service tier; 30-minute cache writes",
+    "Reasoning tokens are included in output, not charged twice",
+    "No invoice, discounts, regional uplifts or other API roles included",
+    "Models follow the most recent recorded turn_context",
+    "Non-Astra models are counted but unpriced"
+  ],
+  "duplicate_responses_skipped": 0,
+  "malformed_lines_skipped": 0,
+  "sessions": [
+    {
+      "file": "rollout-2026-10-28T22-51-23-01a184b6-0421-7123-9023-252ef4562164.jsonl",
+      "responses": 3628,
+      "first": "2026-10-28T22:51:27.037000+00:00",
+      "last": "2026-10-29T18:58:14.962000+00:00"
+    }
+  ],
+  "models": [
+    {
+      "model": "gpt-6-astra",
+      "effort": "xhigh",
+      "responses": 3628,
+      "tokens": {
+        "input_tokens": 532649001,
+        "cached_input_tokens": 523446580,
+        "cache_write_input_tokens": 8869544,
+        "output_tokens": 3705399,
+        "reasoning_output_tokens": 1599197,
+        "total_tokens": 536354400
+      },
+      "max_request_input": 249039,
+      "long_requests": 0,
+      "cache_hit_fraction": 0.9827232924820599,
+      "estimated_usd": {
+        "cached_input": 523.4465799999996,
+        "cache_write_30m": 110.86929999999963,
+        "uncached_input": 3.3287700000002447,
+        "output_including_reasoning": 185.26994999999994,
+        "total": 822.914600000001
+      }
+    }
+  ]
+}

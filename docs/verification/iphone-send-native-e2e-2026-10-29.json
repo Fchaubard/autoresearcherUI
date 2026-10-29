@@ -1,0 +1,220 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-10-29T20:32:19.063867+00:00",
+  "status": "passed",
+  "scope": "Real WebKit frontend \u2192 real FastAPI Send endpoint \u2192 private native Codex tmux \u2192 synthetic loopback Responses stream \u2192 real terminal output polling",
+  "browser": {
+    "engine": "WebKit",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "keyboard_viewport": {
+      "width": 390,
+      "height": 390
+    }
+  },
+  "isolation": {
+    "private_database": true,
+    "private_workspace": true,
+    "private_tmux": true,
+    "paid_model_calls": 0,
+    "remote_inference_performed": false,
+    "api_routes_mocked": false,
+    "browser_terminal_frames_mocked": false,
+    "provider": "synthetic_loopback_responses",
+    "native_cli_model": "gpt-6-astra",
+    "native_cli_effort": "xhigh",
+    "startup": "Lifespan disabled; fixture database initialized explicitly; background work disabled."
+  },
+  "cases": [
+    {
+      "case": "short_click",
+      "mode": "click",
+      "characters": 39,
+      "multiline": false,
+      "delivery": "accepted",
+      "message_id": "cm-c470bf07",
+      "canonical_message_exact": true,
+      "api_status": 200,
+      "raw_offset_before": 2850,
+      "native_at_acceptance": {
+        "queue_visible": false,
+        "busy": false,
+        "input_empty": true,
+        "dimensions": "51 5"
+      },
+      "native_after_keyboard_dismissal": {
+        "queue_visible": false,
+        "busy": true,
+        "input_empty": true,
+        "dimensions": "51 29"
+      },
+      "send_button_enabled": true,
+      "composer_blurred": true
+    },
+    {
+      "case": "long_single_line_click_while_busy",
+      "mode": "click",
+      "characters": 1415,
+      "multiline": false,
+      "delivery": "queued",
+      "message_id": "cm-053e8483",
+      "canonical_message_exact": true,
+      "api_status": 200,
+      "raw_offset_before": 14744,
+      "native_at_acceptance": {
+        "queue_visible": false,
+        "busy": false,
+        "input_empty": true,
+        "dimensions": "51 5"
+      },
+      "native_after_keyboard_dismissal": {
+        "queue_visible": true,
+        "busy": true,
+        "input_empty": true,
+        "dimensions": "51 29"
+      },
+      "send_button_enabled": true,
+      "composer_blurred": true,
+      "provider_requests_before_release": 2,
+      "reply_seen_without_reload": true,
+      "reply_visible": true,
+      "following": true,
+      "response_index": 3
+    },
+    {
+      "case": "multiline_send_handler",
+      "mode": "handler",
+      "characters": 1006,
+      "multiline": true,
+      "delivery": "submitted",
+      "message_id": "cm-6a30af82",
+      "canonical_message_exact": true,
+      "api_status": 200,
+      "raw_offset_before": 28444,
+      "native_at_acceptance": {
+        "queue_visible": false,
+        "busy": false,
+        "input_empty": true,
+        "dimensions": "51 29"
+      },
+      "native_after_keyboard_dismissal": {
+        "queue_visible": false,
+        "busy": false,
+        "input_empty": true,
+        "dimensions": "51 29"
+      },
+      "send_button_enabled": true,
+      "composer_blurred": true,
+      "reply_seen_without_reload": true,
+      "reply_visible": true,
+      "following": true,
+      "response_index": 4
+    }
+  ],
+  "renderer_selection": {
+    "coarse_pointer": true,
+    "bundled_webgl_available": true,
+    "dom_rows": 29,
+    "canvas_count": 0,
+    "renderer_override": false
+  },
+  "assertions": {
+    "chat_records_exact": true,
+    "document_requests": 1,
+    "document_requests_during_send": 0,
+    "page_identity_preserved": true,
+    "browser_terminal_key_requests": 0,
+    "send_requests": 3,
+    "raw_frames_received": 47,
+    "raw_offset_last": 31029,
+    "page_errors": [],
+    "no_interrupt_keys": true,
+    "backend_enter_count": 3,
+    "no_ctrl_l_warning": true,
+    "short_reply_visible_in_terminal": true,
+    "source_unchanged_during_proof": true
+  },
+  "backend_key_events": [
+    {
+      "kind": "literal",
+      "key": null,
+      "literal_characters": 39
+    },
+    {
+      "kind": "key",
+      "key": "Enter",
+      "literal_characters": null
+    },
+    {
+      "kind": "literal",
+      "key": null,
+      "literal_characters": 35
+    },
+    {
+      "kind": "key",
+      "key": "Enter",
+      "literal_characters": null
+    },
+    {
+      "kind": "literal",
+      "key": null,
+      "literal_characters": 35
+    },
+    {
+      "kind": "key",
+      "key": "Enter",
+      "literal_characters": null
+    }
+  ],
+  "inbox_files": [
+    {
+      "characters": 1415,
+      "sha256": "a4e07cf9e0a69ad970d01b9e2aac8ba80c77b04a52e41c42a442ea7cdfd36dd9",
+      "mode": "0o600"
+    },
+    {
+      "characters": 1006,
+      "sha256": "5a699a27bd06b48134080548bda7d58d8102e315fac9c1d3867dec2bec14d34f",
+      "mode": "0o600"
+    }
+  ],
+  "selected_model_requests": {
+    "count": 4,
+    "all_exact": true,
+    "all_loopback": "Provider base_url explicitly pinned to the private stub. No real provider credentials were supplied.",
+    "visible_queued_reply_index": 3,
+    "visible_multiline_reply_index": 4,
+    "note": "Native auxiliary requests are not assumed to create terminal messages; assertions match the request containing each submitted message."
+  },
+  "tested_source_sha256": {
+    "backend/app/static/app.js": "49f3bff22c9b1b6a38d716f146862a0162d997a751f1e9866089a64c95d7e71c",
+    "backend/app/api.py": "16cb0318d4179a325f8124b7038f2bca961e193a03a31e32a5593f0f3c0f8441",
+    "backend/app/supervisor.py": "542625a66404157b89db7662a61003f11478caae952f2cee0a222a2a985148cc",
+    "backend/app/agent_inbox.py": "9d734488bd4b4257ef1ff16bfdbdb975a898ebcc2af1e3f4275c674bef04b820"
+  },
+  "screenshots": [
+    {
+      "file": "/tmp/arui-phone-send-3ru1pxki/queued-390x844.png",
+      "sha256": "87251454eaaf46c7e22d6b9bb79d17d1c796c68a7b25054a68e1ea64409c5089"
+    },
+    {
+      "file": "/tmp/arui-phone-send-3ru1pxki/reply-live-390x844.png",
+      "sha256": "c8d6742be8eb07df3bb712d6d6b8bade968966046ac869ef9a2e966b0f13fc02",
+      "repository_copy": "docs/screenshots/mobile-send-confirmed.png"
+    }
+  ],
+  "cleanup": {
+    "private_api_stopped": true,
+    "private_tmux_stopped": true,
+    "synthetic_provider_stopped": true,
+    "remaining_owned_processes": []
+  },
+  "limitations": [
+    "WebKit mobile emulation with a resized viewport; no physical iPhone keyboard was attached.",
+    "Current input is single-line. Multiline uses the actual sendChat handler/API/native queue, not a claim that the input preserves pasted newlines.",
+    "The synthetic provider verifies delivery, queue handling, and live terminal rendering, not model intelligence or remote provider availability."
+  ],
+  "local_raw_evidence_directory": "/tmp/arui-phone-send-3ru1pxki"
+}

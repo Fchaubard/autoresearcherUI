@@ -45,18 +45,16 @@ def _load_script(name: str):
 def _page_agent(message: str) -> bool:
     """Send a structured page message into the 'agent' tmux session.
     The agent's prompt tells it to read [WATCHDOG] pages and act."""
+    from .. import agent_wait
     try:
-        # Type the literal multi-line text into the agent's REPL, then
-        # press Enter. ``tmux send-keys -l`` sends each char as itself
-        # (no special-key interpretation) which is what we want for
-        # arbitrary prose.
-        subprocess.run(["tmux", "send-keys", "-t", "agent", "-l", message],
-                       capture_output=True, timeout=5)
-        subprocess.run(["tmux", "send-keys", "-t", "agent", "Enter"],
-                       capture_output=True, timeout=5)
+        with agent_wait.delivery_lock():
+            from ..supervisor import deliver_agent_message
+            if not deliver_agent_message(message, session="agent"):
+                return False
+            agent_wait.cancel()
         return True
     except Exception as e:                                  # noqa: BLE001
-        print(f"[watchdog] page_agent failed: {e}", flush=True)
+        print(f"[watchdog] page_agent failed: {type(e).__name__}", flush=True)
         return False
 
 

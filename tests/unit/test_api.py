@@ -119,11 +119,13 @@ def test_agent_resize_calls_tmux_resize_window(client, fake_subprocess):
     body = r.json()
     assert body["ok"] is True
     assert body["cols"] == 110 and body["rows"] == 38
-    # Confirm we issued resize-window AND a Ctrl-L redraw.
+    # Confirm the requested native size, without synthetic input keys.
     cmds = [" ".join(c["args"]) for c in fake_subprocess]
     assert any("resize-window" in c and "-x 110" in c and "-y 38" in c
                for c in cmds), cmds
-    assert any("send-keys" in c and "C-l" in c for c in cmds), cmds
+    # Resizing already delivers SIGWINCH; injected keys can interrupt input
+    # or print a native CLI error while a turn is in progress.
+    assert not any("send-keys" in c for c in cmds), cmds
 
 
 def test_agent_resize_rejects_out_of_range_dimensions(client, fake_subprocess):
@@ -238,8 +240,7 @@ def test_agent_restart_never_serializes_agent_secrets(
         setup_prompt = "private research prompt"
 
     monkeypatch.setattr(api.realrun, "start_real",
-                        lambda cfg: AgentWithSecrets())
-    monkeypatch.setattr(api.subprocess, "run", lambda *args, **kwargs: None)
+                        lambda cfg, *, resume: AgentWithSecrets() if resume else None)
     response = client.post("/api/agent/restart", json={"name": "research"})
     assert response.status_code == 200
     assert response.json()["results"]["research"] == {
@@ -1016,3 +1017,23 @@ def test_sessions_create_catastrophic_failure_returns_json_not_html(
     body = r.json()
     assert body["ok"] is False
     assert "tmux" in body["error"] or "failed" in body["error"]
+
+
+@pytest.mark.parametrize('state,expected', [
+    ({'status':'busy','error':'A different review is running'},409),
+    ({'status':'error','error':'Worker could not start'},503),
+    ({'status':'pending','coalesced':True},200),
+])
+def test_completion_review_rejection_and_coalescing_do_not_emit_duplicate_declaration(client, monkeypatch, state, expected):
+    from backend.app import council
+    from backend.app.db import SessionLocal
+    from backend.app.models import Event
+    monkeypatch.setattr(council, 'review_completion_async', lambda **_: state)
+    response = client.post('/api/research/conclude', json={
+        'summary':'A bounded research result', 'answer_to_purpose':'YES_PARTIAL',
+        'evidence':['r1'], 'recommendation':'NEED_MORE_DATA',
+    })
+    assert response.status_code == expected
+    assert response.json()['ok'] is (expected == 200)
+    with SessionLocal() as db:
+        assert db.query(Event).filter(Event.type == 'research_concluded').count() == 0

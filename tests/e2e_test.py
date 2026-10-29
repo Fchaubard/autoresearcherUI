@@ -50,6 +50,21 @@ def main():
     log_path = os.path.join(data_dir, "backend.log")
     env = dict(os.environ)
     env.update(ARUI_PORT=str(port), ARUI_DATA_DIR=data_dir, ARUI_AUTORUN="1")
+    # This deterministic CPU harness has no LLM reviewers. Disable the two
+    # logical review slots explicitly before autorun; absent API credentials
+    # must not masquerade as a completed code review.
+    seed = """
+from backend.app.db import init_db, SessionLocal
+from backend.app.models import Setting
+init_db()
+with SessionLocal() as session:
+    session.add(Setting(key='onboarding', value={
+        'council_enable_gemini': False, 'council_enable_openai': False,
+        'council_enable_claude_tiebreaker': False, 'pi_agent_enabled': False}))
+    session.commit()
+"""
+    subprocess.run([sys.executable, "-c", seed], cwd=ROOT, env=env,
+                   check=True, timeout=30)
 
     print(f"\n=== autoresearcherUI e2e integration test ===")
     print(f"    port={port}  data_dir={data_dir}\n")

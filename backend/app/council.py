@@ -35,6 +35,8 @@ from .config import DATA_DIR, ROOT, WORKSPACE_DIR
 from .db import SessionLocal
 from .models import ChatMessage, Event, Gpu, Idea, Project, Run, Setting
 from .model_registry import efforts_for, provider_for
+from .provider_config import provider_ready
+from . import advisory_usage, review_cache
 
 # ── env / keys ────────────────────────────────────────────────────────────
 _KEYS_PATH = ROOT / ".deploy" / "keys.env"
@@ -109,39 +111,63 @@ def _settings() -> dict:
 
 
 # ── reviewer availability ────────────────────────────────────────────────
+def configured_reviewers(cfg: dict) -> list[str]:
+    """Enabled logical reviewers, including ones with missing credentials.
+
+    These are required participants, not interchangeable fallbacks. Readiness
+    checks may explain a failed review but must never change this selection.
+    """
+    return [slot for slot in ("gemini", "openai")
+            if cfg.get(f"council_enable_{slot}", True)]
+
+
 def _available_reviewers(cfg: dict) -> list[str]:
     rs = []
-    env_for = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY",
-               "claude": "ANTHROPIC_API_KEY"}
-    first_provider = provider_for(cfg.get("council_gemini_model") or
-                                  DEFAULTS["council_gemini_model"])
-    second_provider = provider_for(cfg.get("council_openai_model") or
-                                   DEFAULTS["council_openai_model"])
-    if (cfg.get("council_enable_gemini", True) and first_provider
-            and os.environ.get(env_for[first_provider])):
+    first_model = cfg.get("council_gemini_model") or DEFAULTS["council_gemini_model"]
+    second_model = cfg.get("council_openai_model") or DEFAULTS["council_openai_model"]
+    if cfg.get("council_enable_gemini", True) and provider_ready(first_model):
         rs.append("gemini")
-    if (cfg.get("council_enable_openai", True) and second_provider
-            and os.environ.get(env_for[second_provider])):
+    if cfg.get("council_enable_openai", True) and provider_ready(second_model):
         rs.append("openai")
     return rs
 
 
 def _claude_available(cfg: dict) -> bool:
-    provider = provider_for(cfg.get("council_claude_model") or
-                            DEFAULTS["council_claude_model"])
-    env_for = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY",
-               "claude": "ANTHROPIC_API_KEY"}
+    model = cfg.get("council_claude_model") or DEFAULTS["council_claude_model"]
     return bool(cfg.get("council_enable_claude_tiebreaker", True)
-                and provider and os.environ.get(env_for[provider]))
+                and provider_ready(model))
 
 
 def is_enabled() -> bool:
-    return bool(_available_reviewers(_settings()))
+    return bool(configured_reviewers(_settings()))
 
 
 _INFLIGHT_LOCK = threading.Lock()
 _INFLIGHT: set[str] = set()
 _FILE_LOCK = threading.Lock()           # serialize ideas.md edits
+_LAST_REVIEW_ERROR = threading.local()
+
+
+def _reviewer_failure(reviewer: str, cfg: dict, detail: str,
+                      kind: str = "call_failed") -> None:
+    model = cfg.get(f"council_{reviewer}_model") or DEFAULTS[f"council_{reviewer}_model"]
+    message = f"Selected {reviewer} reviewer model {model} failed: {detail}"
+    _LAST_REVIEW_ERROR.message = message
+    print(f"[council] {message}", flush=True)
+    _emit_token_failure_event(reviewer, kind, message)
+
+def _preflight_reviewers(cfg: dict, reviewers: list[str]) -> bool:
+    """Report missing selected configuration before scheduling any inference."""
+    from .provider_config import requirement_error
+    ready = True
+    for reviewer in reviewers:
+        model = cfg.get(f"council_{reviewer}_model") or DEFAULTS[f"council_{reviewer}_model"]
+        missing = requirement_error(model)
+        if missing:
+            _reviewer_failure(reviewer, cfg, missing, "not_configured")
+            ready = False
+    return ready
+
 
 # Global semaphore: never more than this many council reviews in flight at
 # once across the whole process. A runaway agent that finishes 300 runs/min
@@ -290,21 +316,28 @@ regressing"):
   was wrong — that's the entire point of adversarial mode."""
 
 
-TIEBREAKER_SYSTEM = """You are the tiebreaker on a senior advisory panel for
-an autonomous ML research project. Two expert reviewers disagree after 3
-rounds of debate. Read both of their final positions and the run context,
-then make the final call. Return the same JSON schema as the reviewers
-(verdict, learning, rerank_pending, new_ideas, veto).
+TIEBREAKER_SYSTEM = """You are the final scientific reviewer for an ML experiment.
+Read the supplied experiment context and both reviewers' positions, then
+resolve their disagreement using only the evidence provided. An inconclusive
+result is valid when evidence is insufficient; do not manufacture certainty.
+Use any provided tools to read the supplied context before answering.
 
-""" + _LEARNING_CONTRACT + """
-
-In "learning", follow the same HYPOTHESIS / RESULT / WHY / GENERALIZABLE
-INSIGHT / NEXT EXPERIMENT contract. Cite at least one run_id in RESULT.
-You may add a parenthetical at the end of GENERALIZABLE INSIGHT noting
-which reviewer you sided with and why — but only as a parenthetical.
-The lessons.md entry must still be research content, not a procedural
-note about the debate. Be decisive — no hedging."""
-
+Return JSON ONLY in your final answer, with no surrounding prose or markdown:
+{
+  "verdict": "kept" | "discarded" | "crashed" | "inconclusive",
+  "learning": "HYPOTHESIS: ...\nRESULT: ...\nWHY: ...\nGENERALIZABLE INSIGHT: ...\nNEXT EXPERIMENT: ...",
+  "rerank_pending": ["<existing pending idea_id>", ...],
+  "new_ideas": [{"idea_id": "<snake_case>", "what": "<concrete experiment>",
+                 "why": "<falsifiable hypothesis>"}],
+  "veto": ["<existing pending idea_id>", ...]
+}
+Include all five keys; use empty arrays when appropriate. Keep the response
+concise. In learning, use one short sentence per literal marker. RESULT must
+cite a supplied run_id and measured number; WHY must acknowledge uncertainty
+when causality is not established. Write a scientific takeaway, not process
+advice or a recap of the debate. If the supplied evidence cannot support a
+truthful learning, leave that field empty. Recommend at most one new idea;
+rerank_pending and veto may contain only supplied pending idea IDs."""
 
 STRATEGIC_SYSTEM = """You are the senior scientific advisor on an autonomous
 ML research project. The agent has just finished a BATCH of N parallel
@@ -818,7 +851,7 @@ def _build_context(run_id: str) -> dict | None:
                 "status": run.status,
                 "headline_metric": run.headline_metric,
                 "baseline_delta": run.baseline_delta,
-                "config": run.config if isinstance(run.config, dict) else {},
+                "config": review_cache.experiment_config(run.config),
             },
             "aggregate": stats,
             "all_prior_runs_count": len(others),
@@ -830,6 +863,10 @@ def _build_context(run_id: str) -> dict | None:
             "pending_total_count": len(ideas),
             "lessons_so_far": _read_lessons(max_chars=6000),
         }
+        if run.status in {"crashed", "failed"}:
+            evidence = _crash_evidence(run.id, _settings())
+            if evidence:
+                ctx["this_run"]["failure_evidence"] = evidence["text"]
         return ctx
     finally:
         db.close()
@@ -841,32 +878,47 @@ _TIMEOUT = 240
 _RETRY_DELAYS = (4, 10, 25)             # backoff for 429s
 
 
-def _post_json(url: str, body: dict, headers: dict) -> dict:
+def _post_json(url: str, body: dict, headers: dict, *, timeout: float | None = None) -> dict:
     req = urllib.request.Request(
         url, data=json.dumps(body).encode("utf-8"),
         headers={"Content-Type": "application/json", **headers})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="ignore"))
+    started = time.monotonic()
+    status, request_id = None, ""
+    try:
+        with urllib.request.urlopen(req, timeout=_TIMEOUT if timeout is None else timeout) as resp:
+            status = getattr(resp, "status", 200)
+            response_headers = getattr(resp, "headers", {})
+            request_id = response_headers.get("x-request-id", response_headers.get("request-id", ""))
+            result = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        advisory_usage.record(url, body, started=started, data=result,
+                              status=status, request_id=request_id)
+        return result
+    except Exception as exc:
+        advisory_usage.record(url, body, started=started,
+                              status=getattr(exc, "code", status), request_id=request_id,
+                              error_type=type(exc).__name__)
+        raise
 
 
-def _post_json_retry(url: str, body: dict, headers: dict) -> dict:
+def _post_json_retry(url: str, body: dict, headers: dict, *, timeout: float | None = None) -> dict:
     """POST with retry on 429 (rate limit) and 5xx (transient). Other HTTP
-    errors propagate so the caller can log and skip.
+    errors propagate so the caller records an incomplete selected-model call.
 
     Read-timeouts are NOT retried: a timeout means the request is simply
     too slow (e.g. gpt-5 at high reasoning effort on a 60k-char completion-
     review prompt exceeding the 240s limit), and re-issuing the identical
     heavy request 4x just burns ~16 minutes per reviewer — which deadlocked
     the research-completion review (no verdict ever landed, so the agent
-    polled forever). Fail fast on timeout so the worker proceeds with
-    whatever reviewer DID respond."""
+    polled forever). Fail fast on timeout so the worker marks the required
+    review incomplete instead of approving with a surviving reviewer."""
     import socket as _socket
     last_exc: Exception | None = None
     for i, d in enumerate((0,) + _RETRY_DELAYS):
         if d:
             time.sleep(d)
         try:
-            return _post_json(url, body, headers)
+            with advisory_usage.context(attempt=i + 1):
+                return _post_json(url, body, headers, **({"timeout": timeout} if timeout is not None else {}))
         except urllib.error.HTTPError as e:
             last_exc = e
             if e.code == 429 or 500 <= e.code < 600:
@@ -895,13 +947,90 @@ def _call_model(model: str, effort: str, system: str, user: str) -> str:
         return _call_openai_api(model, effort, system, user)
     if provider == "claude":
         return _call_claude_api(model, system, user)
+    if provider in {"opencode", "flint"}:
+        return _call_additional_model(model, system, user)
     raise RuntimeError(f"unknown model provider for {model!r}")
+
+
+class ModelOutputBudgetError(RuntimeError):
+    user_message = ("Flint exhausted its output budget before completing the answer; "
+                    "increase Flint's output limit within the server context limit")
+
+    def __init__(self):
+        super().__init__(self.user_message)
+
+
+def _model_error_detail(exc: BaseException) -> str:
+    """Allow controlled adapter guidance, never arbitrary provider error text."""
+    if isinstance(exc, ModelOutputBudgetError):
+        return exc.user_message
+    from .safe_errors import describe
+    status = getattr(exc, "status", None)
+    return f"HTTP {status}" if isinstance(status, int) else describe(exc)
+
+
+def _call_additional_model(model: str, system: str, user: str) -> str:
+    if provider_for(model) == "opencode":
+        from .opencode_runtime import complete
+        return complete(model, system, user, timeout=_TIMEOUT)
+    from .provider_config import flint_config, flint_limits, flint_timeout
+    url, served_model, token = flint_config()
+    body = {"model": served_model,
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+            # Respect the configured local context/output budget, including
+            # room for reasoning tokens before the visible JSON answer.
+            "max_tokens": flint_limits()[1]}
+    # Flint servers differ in structured-output support. Council/PI already
+    # parse and validate their response; do not force unsupported JSON mode.
+    data = _post_json_retry(url + "/chat/completions", body,
+                           {"Authorization": f"Bearer {token}"} if token else {},
+                           timeout=flint_timeout())
+    choice = data["choices"][0]
+    if choice.get("finish_reason") == "length":
+        raise ModelOutputBudgetError()
+    text = choice["message"].get("content")
+    if not isinstance(text, str) or not text.strip():
+        raise RuntimeError("Flint returned no assistant text")
+    return text
+
+
+
+def _call_text_model(model: str, system: str, user: str) -> str:
+    """Free-text scoping conversations must honor each slot's real provider."""
+    provider = provider_for(model)
+    if provider in {"opencode", "flint"}:
+        return _call_additional_model(model, system, user)
+    if provider == "claude":
+        return _call_claude_api(model, system, user)
+    if provider == "gemini":
+        key = os.environ["GEMINI_API_KEY"]
+        data = _post_json_retry(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            {"system_instruction": {"parts": [{"text": system}]},
+             "contents": [{"role": "user", "parts": [{"text": user}]}]},
+            {"x-goog-api-key": key})
+        return _gemini_text(data)
+    if provider == "openai":
+        return _call_openai_api(model, "low", system, user, json_mode=False)
+    raise RuntimeError(f"Unknown provider for {model}")
+
+
+def _gemini_text(data: dict) -> str:
+    """Read visible text, never a thought block preceding the JSON answer."""
+    candidates = data.get("candidates") or []
+    parts = (candidates[0].get("content") or {}).get("parts") if candidates else []
+    text = "".join(p.get("text", "") for p in (parts or [])
+                   if not p.get("thought") and isinstance(p.get("text"), str))
+    if not text.strip():
+        raise RuntimeError("Gemini returned no assistant text")
+    return text
 
 
 def _call_gemini_api(model: str, effort: str, system: str, user: str) -> str:
     key = os.environ["GEMINI_API_KEY"]
     url = ("https://generativelanguage.googleapis.com/v1beta/"
-           f"models/{model}:generateContent?key={key}")
+           f"models/{model}:generateContent")
     body = {
         "system_instruction": {"parts": [{"text": system}]},
         "contents": [{"role": "user", "parts": [{"text": user}]}],
@@ -910,24 +1039,54 @@ def _call_gemini_api(model: str, effort: str, system: str, user: str) -> str:
     }
     if effort and efforts_for(model):
         body["generationConfig"]["thinkingConfig"] = {"thinkingLevel": effort}
-    data = _post_json_retry(url, body, {})
-    return data["candidates"][0]["content"]["parts"][0]["text"]
+    data = _post_json_retry(url, body, {"x-goog-api-key": key})
+    return _gemini_text(data)
 
 
-def _call_openai_api(model: str, effort: str, system: str, user: str) -> str:
+def _call_openai_api(model: str, effort: str, system: str, user: str,
+                     *, json_mode: bool = True) -> str:
     key = os.environ["OPENAI_API_KEY"]
+    allowed = efforts_for(model)
+    if allowed and effort not in allowed:
+        effort = "medium" if "medium" in allowed else allowed[0]
+    # o3-pro and maximum reasoning require Responses. Keep the exact
+    # selected model and effort; Chat Completions rejects effort="max".
+    if model == "o3-pro" or model.startswith("o3-pro-") or effort == "max":
+        # The JSON-mode validator checks input messages for the JSON
+        # instruction. A separate instructions field was insufficient for
+        # o3-pro when the user/context message itself did not mention JSON.
+        body = {"model": model,
+                "input": [{"role": "developer", "content": system},
+                          {"role": "user", "content": user}],
+                "reasoning": {"effort": effort}}
+        if json_mode:
+            body["text"] = {"format": {"type": "json_object"}}
+        data = _post_json_retry("https://api.openai.com/v1/responses", body,
+                               {"Authorization": f"Bearer {key}"})
+        text = "".join(part.get("text", "")
+                       for item in data.get("output", [])
+                       if item.get("type") == "message"
+                       for part in item.get("content", [])
+                       if part.get("type") == "output_text")
+        if not text.strip():
+            raise RuntimeError("OpenAI Responses returned no assistant text")
+        return text
     body = {
         "model": model,
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": user}],
-        "response_format": {"type": "json_object"},
     }
+    if json_mode:
+        body["response_format"] = {"type": "json_object"}
     # gpt-5 family and o-series accept reasoning_effort
     if efforts_for(model):
         body["reasoning_effort"] = effort
     data = _post_json_retry("https://api.openai.com/v1/chat/completions", body,
                             {"Authorization": f"Bearer {key}"})
-    return data["choices"][0]["message"]["content"]
+    text = data["choices"][0]["message"].get("content")
+    if not isinstance(text, str) or not text.strip():
+        raise RuntimeError("OpenAI returned no assistant text")
+    return text
 
 
 def _call_claude_api(model: str, system: str, user: str) -> str:
@@ -941,7 +1100,11 @@ def _call_claude_api(model: str, system: str, user: str) -> str:
     data = _post_json_retry("https://api.anthropic.com/v1/messages", body,
                             {"x-api-key": key,
                              "anthropic-version": "2023-06-01"})
-    return data["content"][0]["text"]
+    text = "".join(part.get("text", "") for part in data.get("content", [])
+                   if part.get("type", "text") == "text")
+    if not text.strip():
+        raise RuntimeError("Claude returned no assistant text")
+    return text
 
 
 def _call_gemini(system: str, user: str, cfg: dict) -> str:
@@ -1027,8 +1190,8 @@ def _emit_token_failure_event(reviewer: str, kind: str, detail: str) -> None:
                        actor=reviewer,
                        message=(f"{reviewer} reviewer is failing "
                                 f"({kind}): {detail[:160]}. "
-                                "Council will run with the other reviewers "
-                                "until you fix the token / quota."),
+                                "The required review is incomplete; no "
+                                "replacement model will be selected."),
                        created_at=_dt.datetime.now(
                            _dt.timezone.utc).isoformat())
             db.add(ev)
@@ -1046,59 +1209,50 @@ def _emit_token_failure_event(reviewer: str, kind: str, detail: str) -> None:
 
 def _call_reviewer(reviewer: str, system: str, user: str, cfg: dict
                    ) -> dict | None:
-    # PAUSE / HALT GATE — single choke point for ALL external council
-    # API calls. Every other council entry point (deliberate,
-    # strategic_review, _bless_worker) eventually funnels through here
-    # so this one early-return covers the whole module. If the user has
-    # paused research (or the system has hard-halted), we must NOT fire
-    # a Gemini/GPT/Claude API call — that's the entire point of pause.
+    _LAST_REVIEW_ERROR.message = ""
     try:
         from . import notify as _notify
         if _notify.research_paused():
-            print(f"[council] {reviewer} call suppressed — "
-                  "research_paused", flush=True)
+            _reviewer_failure(reviewer, cfg, "research is paused", "paused")
             return None
         halted, _reason = _notify.research_halted()
         if halted:
-            print(f"[council] {reviewer} call suppressed — "
-                  "research_halted", flush=True)
+            _reviewer_failure(reviewer, cfg, "research is halted", "paused")
             return None
     except Exception:
-        # Best-effort: don't break the council if the gate helper
-        # malfunctions.
         pass
-    try:
-        text = _CALLERS[reviewer](system, user, cfg)
-    except urllib.error.HTTPError as e:
-        body = ""
-        try:
-            body = e.read().decode("utf-8", errors="ignore")[:300]
-        except Exception:
-            pass
-        print(f"[council] {reviewer} HTTP {e.code}: {body}", flush=True)
-        # Surface auth + rate-limit errors as Events so the user sees
-        # them in the Summary feed + digest emails.
-        if e.code in (401, 403):
-            _emit_token_failure_event(reviewer, "auth_failed",
-                                       f"HTTP {e.code} {body}")
-        elif e.code == 429:
-            _emit_token_failure_event(reviewer, "rate_limited",
-                                       f"HTTP 429 {body}")
+    model = cfg.get(f"council_{reviewer}_model") or DEFAULTS[f"council_{reviewer}_model"]
+    from .provider_config import requirement_error
+    missing = requirement_error(model)
+    if missing:
+        _reviewer_failure(reviewer, cfg, missing, "not_configured")
         return None
-    except Exception as e:                              # noqa: BLE001
-        print(f"[council] {reviewer} call failed: {e}", flush=True)
-        # A read/socket timeout is the failure that wedged us before — make it
-        # VISIBLE in the feed (and de-duped) instead of a silent return.
-        if "timed out" in str(e).lower() or e.__class__.__name__ == "timeout":
-            _emit_token_failure_event(reviewer, "timed_out",
-                                       str(e)[:200] or "read timeout")
+    try:
+        operation = ("code_bless" if system == _BLESS_SYSTEM else
+                     "completion_review" if system == _COMPLETION_REVIEW_SYSTEM else
+                     "scoping" if system == _SCOPE_SYSTEM else
+                     "strategic_review" if system == STRATEGIC_SYSTEM else "run_review")
+        role = {"gemini": "reviewer1", "openai": "reviewer2", "claude": "tiebreaker"}[reviewer]
+        if operation == "scoping":
+            role = "scoping"
+        with advisory_usage.context(role=role, operation=operation,
+                                    trigger_id=cfg.get("_usage_trigger_id", "")):
+            text = _CALLERS[reviewer](system, user, cfg)
+    except urllib.error.HTTPError as exc:
+        kind = "auth_failed" if exc.code in (401, 403) else "rate_limited" if exc.code == 429 else "call_failed"
+        _reviewer_failure(reviewer, cfg, f"HTTP {exc.code}", kind)
+        return None
+    except Exception as exc:
+        detail = _model_error_detail(exc)
+        _reviewer_failure(reviewer, cfg, detail,
+                          "timed_out" if isinstance(exc, TimeoutError) else "call_failed")
         return None
     out = _safe_parse(text)
     if not out:
-        print(f"[council] {reviewer} returned non-JSON; first 200: "
-              f"{text[:200]!r}", flush=True)
+        _reviewer_failure(reviewer, cfg, "response was not a JSON object", "invalid_response")
         return None
     out["reviewer"] = reviewer
+    out["model"] = model
     out["reviewed_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
     return out
 
@@ -1149,11 +1303,12 @@ def _ctx_text(ctx: dict) -> str:
         "===\n" + json.dumps(ctx, indent=2, default=str))
 
 
-def deliberate(run_id: str) -> dict | None:
+def deliberate(run_id: str, *, cfg: dict | None = None) -> dict | None:
     """Full debate orchestrator. Returns the final aggregate review (with
     rounds embedded under 'rounds') or None if nothing could be produced."""
-    cfg = _settings()
-    reviewers = _available_reviewers(cfg)
+    cfg = dict(_settings() if cfg is None else cfg)
+    cfg["_usage_trigger_id"] = run_id
+    reviewers = configured_reviewers(cfg)
     if not reviewers:
         return None
     ctx = _build_context(run_id)
@@ -1179,7 +1334,10 @@ def deliberate(run_id: str) -> dict | None:
     for rev in reviewers:
         if results.get(rev):
             positions[rev] = results[rev]
-    if not positions:
+    missing = [reviewer for reviewer in reviewers if reviewer not in positions]
+    if missing:
+        for reviewer in missing:
+            _reviewer_failure(reviewer, cfg, "required initial review did not complete", "incomplete")
         return None
     rounds.append({"round": 0, "positions": dict(positions)})
 
@@ -1220,10 +1378,10 @@ def deliberate(run_id: str) -> dict | None:
             for t in threads:
                 t.join()
             for rev in list(positions.keys()):
-                if results.get(rev):
-                    new_positions[rev] = results[rev]
-                else:                            # call failed -> hold position
-                    new_positions[rev] = positions[rev]
+                if not results.get(rev):
+                    _reviewer_failure(rev, cfg, "required debate turn did not complete", "incomplete")
+                    return None
+                new_positions[rev] = results[rev]
             positions = new_positions
             rounds.append({"round": n_round, "positions": dict(positions)})
 
@@ -1236,7 +1394,7 @@ def deliberate(run_id: str) -> dict | None:
                      for r in revs_sorted[1:])
 
     tiebreaker = None
-    if not agreed and _claude_available(cfg):
+    if not agreed and cfg.get("council_enable_claude_tiebreaker", True):
         user_tb = (user_initial
                    + "\n\nFINAL POSITIONS AFTER " + str(n_round)
                    + " ROUNDS OF DEBATE:\n"
@@ -1247,14 +1405,22 @@ def deliberate(run_id: str) -> dict | None:
         if tiebreaker:
             final = dict(tiebreaker)
             final["reviewer"] = "claude (tiebreaker)"
+        else:
+            _reviewer_failure("claude", cfg, "required tiebreaker did not complete", "incomplete")
+            return None
+
+    if not agreed and final is None:
+        _emit_token_failure_event("council", "incomplete",
+                                  "Selected reviewers disagree and the tiebreaker is disabled; no decision applied")
+        return None
 
     if final is None:
-        # Consensus or no tiebreaker available — pick the first reviewer's
-        # latest position as canonical (Gemini wins ties by alpha order).
+        # All selected participants completed and agree, or only one was
+        # explicitly enabled. Never substitute a surviving failed peer.
         final = dict(positions[revs_sorted[0]])
         final["reviewer"] = (
-            "+".join(revs_sorted) + (" (consensus)" if agreed else
-                                     " (no agreement, no tiebreaker)")
+            "+".join(revs_sorted) + (" (consensus)" if len(revs_sorted) > 1
+                                     else " (single configured reviewer)")
         )
 
     final["rounds"] = rounds
@@ -1292,9 +1458,11 @@ def note_run_finished(run_id: str) -> bool:
     strategic review. Returns True if a strategic review was triggered.
     Per-run reviews can be enabled separately in Settings."""
     cfg = _settings()
-    if not _available_reviewers(cfg):
+    reviewers = configured_reviewers(cfg)
+    if not reviewers or not cfg.get("strategic_review_enabled", True):
         return False
-    if not cfg.get("strategic_review_enabled", True):
+    selected = "openai" if "openai" in reviewers else "gemini"
+    if not _preflight_reviewers(cfg, [selected]):
         return False
     global _BATCH_INFLIGHT
     threshold = _strategic_threshold(cfg)
@@ -1377,7 +1545,7 @@ def _build_strategic_context(batch_run_ids: list[str]) -> dict | None:
                     "id": r.id, "name": r.run_name, "status": r.status,
                     "headline_metric": r.headline_metric,
                     "baseline_delta": r.baseline_delta,
-                    "config": r.config if isinstance(r.config, dict) else {},
+                    "config": review_cache.experiment_config(r.config),
                 }
                 for r in batch
             ],
@@ -1478,8 +1646,8 @@ def strategic_review(batch_run_ids: list[str]) -> dict | None:
     """Run ONE expert through the strategic-review prompt over a batch.
     Strategic reviews don't debate — they're already a 'reflection' call
     that asks the model to look at the whole trajectory at once. We pick
-    the highest-quality reviewer available (claude > openai > gemini)
-    since the call only fires every N runs and we want the best judgment.
+    enabled second reviewer slot, or the first if the second is disabled.
+    Missing credentials never select a different model.
 
     The orchestrator-computed strategic state (previous top directive,
     implemented?, consecutive unimplemented count) is injected into the
@@ -1487,16 +1655,13 @@ def strategic_review(batch_run_ids: list[str]) -> dict | None:
     deterministic fields rather than re-compute them.
     """
     cfg = _settings()
-    available = _available_reviewers(cfg)
-    if not available:
+    configured = configured_reviewers(cfg)
+    cfg["_usage_trigger_id"] = "batch-" + review_cache.digest(batch_run_ids)[:24]
+    if not configured:
+        _emit_token_failure_event("strategic", "not_configured", "No strategic reviewer is enabled")
         return None
-    # Prefer claude for strategic if we have it, else openai, else gemini.
-    if "claude" in available:
-        reviewer = "claude"
-    elif "openai" in available:
-        reviewer = "openai"
-    else:
-        reviewer = available[0]
+    # The enabled slot determines selection, never credential availability.
+    reviewer = "openai" if "openai" in configured else "gemini"
     ctx = _build_strategic_context(batch_run_ids)
     if not ctx:
         return None
@@ -1679,9 +1844,10 @@ def review_async(run_id: str) -> bool:
     after the strategic-review redesign); the strategic batch review does
     the heavy lifting."""
     cfg = _settings()
-    if not _available_reviewers(cfg):
+    reviewers = configured_reviewers(cfg)
+    if not reviewers or not cfg.get("council_per_run_enabled", False):
         return False
-    if not cfg.get("council_per_run_enabled", False):
+    if not _preflight_reviewers(cfg, reviewers):
         return False
     if not _worth_reviewing(run_id):
         return False
@@ -1754,11 +1920,34 @@ def _worth_reviewing(run_id: str) -> bool:
 
 def _worker(run_id: str) -> None:
     try:
-        review = deliberate(run_id)
-        if not review:
-            return
-        _persist(run_id, review)
-        _apply_to_ideas_md(review)
+        cfg = _settings()
+        key = _crash_review_key(run_id, cfg)
+        # Only evidenced, equivalent failures share a diagnosis. Successful
+        # or novel runs always retain the normal research review policy.
+        if key:
+            with review_cache.single_flight("crash:" + key):
+                cached = review_cache.get("crash", key)
+                if cached:
+                    review = dict(cached["review"])
+                    review.update(reused_from_run_id=cached["run_id"],
+                                  original_reviewed_at=review.get("reviewed_at"),
+                                  reviewed_at=_iso(), cached=True,
+                                  rerank_pending=[], veto=[], new_ideas=[])
+                    _persist(run_id, review, reused=True)
+                    return
+                review = deliberate(run_id, cfg=cfg)
+                if review:
+                    _persist(run_id, review)
+                    _apply_to_ideas_md(review)
+                    review_cache.put("crash", key, {
+                        "run_id": run_id,
+                        "review": {k: v for k, v in review.items() if k != "rounds"}})
+        else:
+            review = deliberate(run_id, cfg=cfg)
+            if not review:
+                return
+            _persist(run_id, review)
+            _apply_to_ideas_md(review)
     finally:
         with _INFLIGHT_LOCK:
             _INFLIGHT.discard(run_id)
@@ -1768,7 +1957,88 @@ def _iso() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat()
 
 
-def _persist(run_id: str, review: dict) -> None:
+def _review_policy(cfg: dict, *, tiebreaker: bool = False) -> dict:
+    slots = configured_reviewers(cfg)
+    if tiebreaker and cfg.get("council_enable_claude_tiebreaker", True):
+        slots.append("claude")
+    policy = {slot: {"model": cfg.get(f"council_{slot}_model") or DEFAULTS[f"council_{slot}_model"],
+                     "effort": cfg.get(f"council_{slot}_effort") or DEFAULTS[f"council_{slot}_effort"]}
+              for slot in slots}
+    from .provider_config import config_value
+    for selection in policy.values():
+        if selection["model"] == "flint/local":
+            # The local alias can serve different explicitly configured
+            # checkpoints/endpoints. A cache key must distinguish them.
+            selection["local_configuration"] = review_cache.digest({
+                field: config_value(field, cfg) for field in
+                ("flint_mode", "flint_base_url", "flint_model", "flint_context_tokens", "flint_max_output_tokens")})
+    return policy
+
+
+def _crash_review_key(run_id: str, cfg: dict) -> str | None:
+    """Exact source/config plus a concrete exception; never group vague exits."""
+    if not re.fullmatch(r"[A-Za-z0-9_.=\-]+", run_id):
+        return None
+    with SessionLocal() as db:
+        run = db.query(Run).filter(Run.id == run_id).first()
+        if not run or run.status not in {"crashed", "failed"}:
+            return None
+        config = review_cache.experiment_config(run.config)
+        source = config.get("source_sha256") or config.get("runner_sha256") or run.git_commit
+        # No trustworthy source identity means a fresh review. A generic
+        # process-exit code is not evidence that two bugs have the same cause.
+        if not source:
+            return None
+        project_id = run.project_id
+    failure = _crash_evidence(run_id, cfg)
+    if not failure:
+        return None
+    # Preserve numeric exception arguments, line numbers and hyperparameters;
+    # they can distinguish genuinely different failures.
+    volatile = {"gpu_index", "process_exit_at", "status_before_process_exit",
+                "output_dir", "source_snapshot", "tracking", "resumed_server",
+                "what", "name"}
+    experiment = {k: v for k, v in config.items() if k not in volatile}
+    if isinstance(experiment.get("command"), str):
+        experiment["command"] = experiment["command"].replace(run_id, "<run>")
+    return review_cache.digest({"project": project_id, "source": source,
+                                "exception": failure["signature"], "experiment": experiment,
+                                "reviewers": _review_policy(cfg, tiebreaker=True),
+                                "debate": [cfg.get("run_debate", True), cfg.get("debate_max_rounds", 3)],
+                                "prompts": [SYSTEM, DEBATE_SYSTEM, TIEBREAKER_SYSTEM]})
+
+
+def _crash_evidence(run_id: str, cfg: dict) -> dict | None:
+    """A bounded final traceback, excluding unrelated console text and secrets."""
+    if not re.fullmatch(r"[A-Za-z0-9_.=\-]+", run_id):
+        return None
+    try:
+        with (DATA_DIR / "run_logs" / f"{run_id}.log").open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            stream.seek(max(0, stream.tell() - 64000))
+            tail = stream.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    tail = re.sub(r"\x1b\[[0-9;]*m", "", tail)
+    blocks = tail.rsplit("Traceback (most recent call last):", 1)
+    matches = list(re.finditer(r"(?:^|\n)(?:[\w.]+(?:Error|Exception)|Exception): [^\n]+", blocks[-1]))
+    if not matches:
+        return None
+    final = matches[-1]
+    evidence = ("Traceback (most recent call last):" + blocks[-1][:final.end()]
+                if len(blocks) == 2 else final.group().strip())
+    from .agent_sessions import _redact
+    provider_secrets = {key: value for key, value in os.environ.items()
+                        if key in {"GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY",
+                                   "ANTHROPIC_API_KEY", "OPENCODE_API_KEY", "ARUI_FLINT_API_KEY"}}
+    evidence = _redact(evidence, {**cfg, **provider_secrets})
+    identity = evidence.replace(run_id, "<run>")
+    identity = re.sub(r"0x[0-9a-fA-F]+", "<address>", identity)
+    visible = evidence if len(evidence) <= 6000 else "[Earlier traceback frames omitted]\n" + evidence[-5960:]
+    return {"text": visible, "signature": review_cache.digest(identity)}
+
+
+def _persist(run_id: str, review: dict, *, reused: bool = False) -> None:
     """Stash the review on run.config so /api/runs returns it, mirror the
     learning onto its Idea, and emit a feed event."""
     db = SessionLocal()
@@ -1784,7 +2054,7 @@ def _persist(run_id: str, review: dict) -> None:
         cfg["review"] = {k: v for k, v in review.items() if k != "rounds"}
         cfg["reviews"] = review              # full debate history
         run.config = cfg
-        if run.idea_id:
+        if run.idea_id and not reused:
             idea = db.query(Idea).filter(Idea.id == run.idea_id).first()
             if idea and (review.get("learning") or "").strip():
                 idea.conclusion = review["learning"].strip()
@@ -1792,9 +2062,11 @@ def _persist(run_id: str, review: dict) -> None:
             f"Council reviewed {run.run_name}")
         if review.get("agreement") is False:
             msg = "[tiebreaker] " + msg
+        if reused:
+            msg = f"Reused matching crash diagnosis from {review['reused_from_run_id']}: " + msg
         db.add(Event(
             id="ev-" + os.urandom(4).hex(),
-            type="council_reviewed", severity="info",
+            type="council_review_reused" if reused else "council_reviewed", severity="info",
             actor="council:" + (review.get("reviewer") or "?"),
             run_id=run.id,
             message=msg, created_at=_iso()))
@@ -1803,10 +2075,11 @@ def _persist(run_id: str, review: dict) -> None:
         db.close()
     # Append the review's learning to lessons.md so future reviews see it.
     try:
-        _append_lesson(
-            reviewer=(review.get("reviewer") or "?"),
-            run_name=captured_run_name,
-            learning=review.get("learning") or "")
+        if not reused:
+            _append_lesson(
+                reviewer=(review.get("reviewer") or "?"),
+                run_name=captured_run_name,
+                learning=review.get("learning") or "")
     except Exception as e:                              # noqa: BLE001
         print(f"[council] _append_lesson failed: {e}", flush=True)
     try:
@@ -2259,33 +2532,11 @@ def _collect_codebase(workspace: str | os.PathLike) -> str:
     ws = Path(str(workspace))
     if not ws.exists():
         return ""
-    SKIP_DIRS = {"__pycache__", ".git", ".venv", "venv", "data", "ckpts",
-                 "checkpoints", "runs", "wandb", "node_modules"}
-    EXT = {".py", ".md", ".yaml", ".yml", ".json", ".toml", ".cfg", ".sh"}
     MAX_BYTES_PER_FILE = 64_000
     MAX_TOTAL = 320_000
     chunks: list[str] = []
     total = 0
-    for p in sorted(ws.rglob("*")):
-        if not p.is_file():
-            continue
-        # SKIP_DIRS must match only directory components RELATIVE to
-        # the workspace, not absolute-path ancestors. Every
-        # autoresearcherUI workspace lives under data/workspace/...
-        # by setup convention, so a naive `part in SKIP_DIRS for part
-        # in p.parts` skipped EVERY file because the ancestor "data"
-        # always matched. Council then saw an empty codebase and
-        # auto-rejected (the bug Francois hit on 2026-05-31, found
-        # and one-line-fixed by the research agent in-flight).
-        try:
-            rel_parts = p.relative_to(ws).parts
-        except ValueError:
-            continue                                # outside workspace
-        if any(part in SKIP_DIRS for part in rel_parts[:-1]):
-            continue
-        if p.suffix.lower() not in EXT and p.name not in (
-                "Dockerfile", "Makefile"):
-            continue
+    for p in review_cache.source_files(str(ws)):
         try:
             text = p.read_text(errors="ignore")
         except OSError:
@@ -2575,25 +2826,18 @@ def _emit_preflight_event(ev_type: str, message: str) -> None:
 
 
 def is_code_blessed() -> bool:
-    """True iff the council has approved the current codebase — OR if
-    there are no reviewers configured at all (Claude-only setups + the
-    e2e test, neither of which can sensibly produce a verdict, get the
-    gate auto-opened so they can launch runs).
+    """Only a completed real approval opens the code-review gate.
 
-    The Setting row's actual status is still authoritative once the user
-    has configured reviewers and the agent has called /api/council/bless;
-    this only short-circuits the 'no reviewers ever => infinite block'
-    failure mode."""
-    st = _bless_state_get().get("status")
-    if st == "approved":
-        return True
-    # Defensive: a half-finished setup with no reviewers should not
-    # permanently block /api/track/run. The dashboard banner still tells
-    # the user no review happened.
+    Missing credentials and legacy automatic approvals cannot stand in for
+    the selected reviewers' verdicts.
+    """
+    state = _bless_state_get()
     cfg = _settings()
-    if not _available_reviewers(cfg):
-        return True
-    return False
+    if not configured_reviewers(cfg):
+        return True  # explicit opt-out, independent of credential readiness
+    if state.get("reviewers") is not None and state["reviewers"] != _review_policy(cfg):
+        return False
+    return state.get("status") == "approved" and not state.get("auto")
 
 
 def seed_task_blockers(meta: dict | None) -> list[str]:
@@ -2639,9 +2883,49 @@ def seed_task_blockers(meta: dict | None) -> list[str]:
     return out
 
 
-def _bless_worker(workspace: str, bless_meta: dict | None = None) -> None:
+_BLESS_LOCK = threading.RLock()
+_BLESS_ACTIVE_KEY: str | None = None
+
+
+def _bless_request(workspace: str, bless_meta: dict | None = None) -> dict:
     cfg = _settings()
-    reviewers = _available_reviewers(cfg)
+    before = review_cache.source_fingerprint(workspace)
+    code = _collect_codebase(workspace)
+    source = review_cache.source_fingerprint(workspace)
+    if before != source:
+        raise RuntimeError("Source changed while preparing code review; submit again once edits finish")
+    key = review_cache.digest({"workspace": str(Path(workspace).resolve()),
+                               "source": source, "prompt": [_BLESS_SYSTEM, code],
+                               "reviewers": _review_policy(cfg), "seed_gate": bless_meta})
+    cfg["_usage_trigger_id"] = key
+    return {"key": key, "source": source, "code": code, "cfg": cfg,
+            "preflight": review_cache.digest(_preflight_state_get())}
+
+
+def _bless_worker(workspace: str, bless_meta: dict | None = None,
+                  request: dict | None = None) -> None:
+    global _BLESS_ACTIVE_KEY
+    try:
+        request = request or _bless_request(workspace, bless_meta)
+        _bless_worker_inner(workspace, bless_meta, request=request)
+        state = _bless_state_get()
+        if state.get("status") in {"approved", "rejected"} and state.get("review_key") == request["key"]:
+            review_cache.put("code_bless", request["key"], state)
+    except Exception as exc:
+        _bless_state_set({"status": "error", "incomplete": True,
+                          "error": "Code review could not complete: " + _model_error_detail(exc),
+                          "summary": "Code review did not complete; no approval was granted",
+                          "blockers": [], "suggestions": [], "verdicts": {}})
+    finally:
+        with _BLESS_LOCK:
+            if request and _BLESS_ACTIVE_KEY == request["key"]:
+                _BLESS_ACTIVE_KEY = None
+
+
+def _bless_worker_inner(workspace: str, bless_meta: dict | None = None,
+                       *, request: dict) -> None:
+    cfg = request["cfg"]
+    reviewers = configured_reviewers(cfg)
     # ─── seed-task gate (RESEARCH_IMPROVEMENT_PLAN #7) ─────────────────
     # Deterministic check — runs BEFORE the LLM call so the agent gets
     # the exact reason without burning council tokens.
@@ -2663,19 +2947,14 @@ def _bless_worker(workspace: str, bless_meta: dict | None = None) -> None:
             "seed_task_gate": True,
         })
         return
-    # If no reviewers are configured we cannot block forever; auto-approve
-    # but record the verdict honestly so the dashboard says so.
     if not reviewers:
         _bless_state_set({
-            "status": "approved",
-            "summary": ("No council reviewers configured — auto-approved. "
-                        "Add an OpenAI or Gemini key in Settings to enable "
-                        "code review before training runs."),
-            "blockers": [], "suggestions": [], "verdicts": {},
-            "auto": True,
+            "status": "skipped", "reason": "reviewers_explicitly_disabled",
+            "summary": "Code review was explicitly disabled; no review was performed",
+            "missing_reviewers": [], "blockers": [], "suggestions": [], "verdicts": {},
         })
         return
-    code = _collect_codebase(workspace)
+    code = request["code"]
     if not code:
         _bless_state_set({
             "status": "rejected", "blockers": [
@@ -2721,13 +3000,43 @@ def _bless_worker(workspace: str, bless_meta: dict | None = None) -> None:
                                   f"{reviewer}: call failed (token / quota?)"}
         else:
             verdicts[reviewer] = {
-                "approved": bool(v.get("approved")),
+                # A malformed JSON string such as "false" is truthy in
+                # Python; only an actual JSON boolean is a valid verdict.
+                "approved": v.get("approved") if isinstance(v.get("approved"), bool) else None,
                 "blockers": list(v.get("blockers") or []),
                 "suggestions": list(v.get("suggestions") or []),
                 "summary": (v.get("summary") or "")[:280],
             }
         _publish_pending()   # incremental progress for the review modal
-    # Aggregate: ALL working reviewers must approve. Any blocker from any
+    missing = [r for r in reviewers if verdicts[r].get("approved") is None]
+    if missing:
+        details = [f"{r}: {cfg.get('council_' + r + '_model') or DEFAULTS['council_' + r + '_model']}" for r in missing]
+        message = "Required code review incomplete: " + ", ".join(details)
+        _bless_state_set({"status": "error", "incomplete": True,
+                          "error": message, "summary": message,
+                          "missing_reviewers": missing, "verdicts": verdicts,
+                          "blockers": [], "suggestions": []})
+        _emit_token_failure_event("council", "incomplete", message)
+        return
+    if review_cache.source_fingerprint(workspace) != request["source"]:
+        _bless_state_set({"status": "error", "incomplete": True,
+                          "error": "Source changed during code review; submit the current code for review",
+                          "summary": "The reviewed source is no longer current; approval was not applied",
+                          "blockers": [], "suggestions": [], "verdicts": verdicts})
+        return
+    if _review_policy(_settings()) != _review_policy(cfg):
+        _bless_state_set({"status": "error", "incomplete": True,
+                          "error": "Selected reviewers changed during code review; submit again with the current settings",
+                          "summary": "Review settings changed; the old selection's approval was not applied",
+                          "blockers": [], "suggestions": [], "verdicts": verdicts})
+        return
+    if review_cache.digest(_preflight_state_get()) != request["preflight"]:
+        _bless_state_set({"status": "error", "incomplete": True,
+                          "error": "Pre-flight evidence changed during code review; submit again after checks finish",
+                          "summary": "Pre-flight evidence changed; approval was not applied",
+                          "blockers": [], "suggestions": [], "verdicts": verdicts})
+        return
+    # Aggregate: ALL configured reviewers completed. Any blocker from any
     # reviewer is included in the blocker list shown to the agent.
     working = [r for r, v in verdicts.items() if v.get("approved") is not None]
     approved = bool(working) and all(verdicts[r]["approved"] for r in working)
@@ -2747,6 +3056,8 @@ def _bless_worker(workspace: str, bless_meta: dict | None = None) -> None:
         "blockers": blockers,
         "suggestions": suggestions,
         "verdicts": verdicts,
+        "review_key": request["key"], "source_hash": request["source"],
+        "reviewers": _review_policy(cfg), "reviewed_at": _iso(), "cached": False,
     })
     # Emit an Event so it shows up in the Summary feed live.
     try:
@@ -2836,13 +3147,35 @@ def bless_async(workspace: str, bless_meta: dict | None = None) -> dict:
             "seed_task_gate": True,
         })
         return bless_status()
-    _bless_state_set({"status": "pending",
-                      "summary": "Council is reviewing the codebase…",
-                      "blockers": [], "suggestions": [], "verdicts": {}})
-    threading.Thread(target=_bless_worker,
-                     args=(workspace, bless_meta),
-                     daemon=True, name="council-bless").start()
-    return bless_status()
+    global _BLESS_ACTIVE_KEY
+    try:
+        request = _bless_request(workspace, bless_meta)
+    except (OSError, RuntimeError):
+        return {"status": "error", "error": "Source could not be read consistently; retry after edits finish"}
+    with _BLESS_LOCK:
+        if _BLESS_ACTIVE_KEY is not None:
+            if _BLESS_ACTIVE_KEY == request["key"]:
+                return {**bless_status(), "coalesced": True}
+            return {"status": "busy", "error": "A different code review is in progress; retry when it finishes"}
+        cached = review_cache.get("code_bless", request["key"])
+        if cached:
+            cached.update(cached=True, reused_at=_iso(),
+                          summary="Reused identical code review: " + cached.get("summary", ""))
+            _bless_state_set(cached)
+            return bless_status()
+        _BLESS_ACTIVE_KEY = request["key"]
+        _bless_state_set({"status": "pending",
+                          "summary": "Council is reviewing the codebase…",
+                          "review_key": request["key"],
+                          "blockers": [], "suggestions": [], "verdicts": {}})
+        try:
+            threading.Thread(target=_bless_worker,
+                             args=(workspace, bless_meta, request),
+                             daemon=True, name="council-bless").start()
+        except Exception:
+            _BLESS_ACTIVE_KEY = None
+            raise
+        return bless_status()
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -2886,6 +3219,43 @@ def bless_async(workspace: str, bless_meta: dict | None = None) -> dict:
 
 
 _RESEARCH_CONCLUSION_KEY = "research_conclusion"
+_COMPLETION_LOCK = threading.RLock()
+_COMPLETION_ACTIVE_THREAD: threading.Thread | None = None
+_COMPLETION_ACTIVE_KEY: str | None = None
+_COMPLETION_HEARTBEAT_SEC = 30
+
+
+def completion_review_active() -> bool:
+    """A slow live reviewer is not an orphan, even if a lease write failed."""
+    with _COMPLETION_LOCK:
+        return bool(_COMPLETION_ACTIVE_THREAD
+                    and _COMPLETION_ACTIVE_THREAD.is_alive())
+
+
+def _completion_claim(evidence_run_ids, summary, answer_to_purpose, recommendation):
+    return {"summary": (summary or "")[:4000],
+            "answer_to_purpose": answer_to_purpose or "",
+            "evidence": list(evidence_run_ids or [])[:200],
+            "recommendation": recommendation or ""}
+
+
+def _completion_current(review_id: str) -> bool:
+    with _COMPLETION_LOCK:
+        current = _conclusion_state_get()
+        return (current.get("review_id") == review_id
+                and current.get("status") == "pending")
+
+
+def _completion_update(review_id: str, changes: dict) -> bool:
+    """An operator rejection invalidates the worker's right to apply a verdict."""
+    with _COMPLETION_LOCK:
+        current = _conclusion_state_get()
+        if (current.get("review_id") != review_id
+                or current.get("status") != "pending"):
+            return False
+        current.update(changes)
+        _conclusion_state_set(current)
+        return True
 
 
 _COMPLETION_REVIEW_SYSTEM = (
@@ -3025,13 +3395,14 @@ def clear_conclusion(reason: str = "") -> dict:
 
     Leaves a small audit Event so the timeline shows the rejection.
     Returns the cleared state."""
-    prev = _conclusion_state_get()
-    _conclusion_state_set({"status": "none",
-                           "cleared_at":
-                               dt.datetime.now(dt.timezone.utc).isoformat(),
-                           "cleared_reason": (reason or "")[:500],
-                           "previous": prev if prev.get("status") != "none"
-                                       else None})
+    with _COMPLETION_LOCK:
+        prev = _conclusion_state_get()
+        _conclusion_state_set({"status": "none",
+                               "cleared_at":
+                                   dt.datetime.now(dt.timezone.utc).isoformat(),
+                               "cleared_reason": (reason or "")[:500],
+                               "previous": prev if prev.get("status") != "none"
+                                           else None})
     try:
         db = SessionLocal()
         try:
@@ -3093,7 +3464,7 @@ def _build_completion_review_context(evidence_run_ids: list[str],
             "headline_metric": r.headline_metric,
             "baseline_delta": r.baseline_delta,
             "final_metrics": _final_metrics(r.id),
-            "config": r.config if isinstance(r.config, dict) else {},
+            "config": review_cache.experiment_config(r.config),
         } for r in ev_runs]
         # All runs as compact one-liners (frontier-movers first, crashed
         # next) so the reviewer can sanity-check the claim.
@@ -3134,31 +3505,67 @@ def _build_completion_review_context(evidence_run_ids: list[str],
 
 def _completion_review_worker(evidence_run_ids: list[str], summary: str,
                                 answer_to_purpose: str,
-                                recommendation: str) -> None:
+                                recommendation: str, *, review_id: str | None = None,
+                                cfg: dict | None = None) -> None:
     """Resilient wrapper around the real review. Holds a lifecycle lease so the
     supervisor can tell whether this worker is alive (and re-trigger if it was
     orphaned by a crash / restart). ALWAYS writes a terminal verdict — even if
     the inner review raises — so the conclusion never stays 'pending' forever
     and the agent never polls a verdict that never comes."""
+    global _COMPLETION_ACTIVE_THREAD, _COMPLETION_ACTIVE_KEY
+    from . import lifecycle
+    owner = threading.current_thread()
+    with _COMPLETION_LOCK:
+        if (_COMPLETION_ACTIVE_THREAD is not None
+                and _COMPLETION_ACTIVE_THREAD is not owner
+                and _COMPLETION_ACTIVE_THREAD.is_alive()):
+            return
+        _COMPLETION_ACTIVE_THREAD = owner
+        if review_id is not None and not _completion_current(review_id):
+            _COMPLETION_ACTIVE_THREAD = None
+            _COMPLETION_ACTIVE_KEY = None
+            return
+        cfg = cfg if cfg is not None else _settings()
+        if review_id is None:
+            # Direct synchronous invocations use the same ownership contract.
+            review_id = os.urandom(12).hex()
+            claim = _completion_claim(evidence_run_ids, summary, answer_to_purpose, recommendation)
+            _conclusion_state_set({**claim, "status": "pending", "review_id": review_id,
+                                   "conclude_at": dt.datetime.now(dt.timezone.utc).isoformat()})
+            _COMPLETION_ACTIVE_KEY = review_cache.digest({"claim": claim, "policy": _review_policy(cfg)})
+    stop_heartbeat = threading.Event()
+
+    def heartbeat():
+        while not stop_heartbeat.wait(_COMPLETION_HEARTBEAT_SEC):
+            try:
+                with _COMPLETION_LOCK:
+                    if stop_heartbeat.is_set():
+                        return
+                    lifecycle.lease_heartbeat("completion_review")
+            except Exception:
+                # Local thread ownership still prevents duplicate inference.
+                pass
+
+    heartbeat_thread = threading.Thread(target=heartbeat, daemon=True,
+                                        name="council-completion-heartbeat")
     try:
-        from . import lifecycle
-        lifecycle.lease_acquire("completion_review")
-    except Exception:                                   # noqa: BLE001
-        pass
-    try:
-        _completion_review_worker_inner(evidence_run_ids, summary,
-                                        answer_to_purpose, recommendation)
-    except Exception as e:                              # noqa: BLE001
-        import traceback
-        traceback.print_exc()
-        print(f"[council] completion review worker crashed: {e}", flush=True)
         try:
-            existing = _conclusion_state_get()
-            existing.update({
+            lifecycle.lease_acquire("completion_review")
+            heartbeat_thread.start()
+        except Exception:
+            pass
+        _completion_review_worker_inner(evidence_run_ids, summary,
+                                        answer_to_purpose, recommendation,
+                                        review_id=review_id, cfg=cfg)
+    except Exception as e:                              # noqa: BLE001
+        detail = _model_error_detail(e)
+        print(f"[council] completion review worker crashed: {detail}", flush=True)
+        try:
+            _completion_update(review_id, {
                 "status": "needs_more",
                 "council_verdict": {
                     "verdict": "NEEDS_MORE",
-                    "reasons": [f"completion review errored ({e}); the "
+                    "reasons": [f"completion review errored ({detail}); the "
                                 "supervisor will not leave you blocked"],
                     "missing_evidence": ["the automated review failed — submit "
                                          "a tighter conclusion or run more "
@@ -3168,53 +3575,41 @@ def _completion_review_worker(evidence_run_ids: list[str], summary: str,
                     "reviewed_at":
                         dt.datetime.now(dt.timezone.utc).isoformat()},
             })
-            _conclusion_state_set(existing)
         except Exception:                               # noqa: BLE001
             pass
     finally:
-        try:
-            from . import lifecycle
-            lifecycle.lease_release("completion_review")
-        except Exception:                               # noqa: BLE001
-            pass
+        stop_heartbeat.set()
+        if heartbeat_thread.ident is not None:
+            heartbeat_thread.join(timeout=2)
+        with _COMPLETION_LOCK:
+            try:
+                lifecycle.lease_release("completion_review")
+            except Exception:                               # noqa: BLE001
+                pass
+            if _COMPLETION_ACTIVE_THREAD is owner:
+                _COMPLETION_ACTIVE_THREAD = None
+                _COMPLETION_ACTIVE_KEY = None
 
 
 def _completion_review_worker_inner(evidence_run_ids: list[str], summary: str,
                                       answer_to_purpose: str,
-                                      recommendation: str) -> None:
-    cfg = _settings()
-    reviewers = _available_reviewers(cfg)
+                                      recommendation: str, *, review_id: str,
+                                      cfg: dict) -> None:
+    if not _completion_current(review_id):
+        return
+    reviewers = configured_reviewers(cfg)
     if not reviewers:
-        # No reviewers — auto-approve so the agent isn't blocked, but
-        # record it honestly so the dashboard tells the user nothing
-        # actually got reviewed.
-        existing = _conclusion_state_get()
-        existing.update({
-            "status": "approved",
-            "council_verdict": {
-                "verdict": "APPROVED",
-                "reasons": ["no council reviewers configured — auto-approved"],
-                "missing_evidence": [],
-                "summary": ("No reviewers configured; conclusion was "
-                            "auto-approved. Add an OpenAI or Gemini key "
-                            "to enable real completion review."),
-                "verdicts": {},
-                "auto": True,
-                "reviewed_at":
-                    dt.datetime.now(dt.timezone.utc).isoformat(),
-            },
-        })
-        _conclusion_state_set(existing)
-        _emit_completion_event(
-            "research_completion_auto_approved",
-            "Research conclusion auto-approved (no reviewers).")
-        _auto_enter_paper_after_approval(recommendation, summary)
+        message = "Completion review disabled; operator can switch to paper mode"
+        if _completion_update(review_id, {
+                "status": "skipped", "reason": "reviewers_explicitly_disabled",
+                "council_verdict": {"verdict": "SKIPPED", "summary": message,
+                                    "missing_reviewers": [], "verdicts": {}}}):
+            _emit_completion_event("research_completion_skipped", message)
         return
     ctx = _build_completion_review_context(
         evidence_run_ids, summary, answer_to_purpose, recommendation)
     if ctx is None:
-        existing = _conclusion_state_get()
-        existing.update({
+        _completion_update(review_id, {
             "status": "rejected",
             "council_verdict": {
                 "verdict": "REJECTED",
@@ -3226,7 +3621,6 @@ def _completion_review_worker_inner(evidence_run_ids: list[str], summary: str,
                     dt.datetime.now(dt.timezone.utc).isoformat(),
             },
         })
-        _conclusion_state_set(existing)
         return
     user_prompt = (
         "Review the agent's claim that the project Purpose has been "
@@ -3235,6 +3629,8 @@ def _completion_review_worker_inner(evidence_run_ids: list[str], summary: str,
         + json.dumps(ctx, indent=2, default=str))[:60000]
     verdicts: dict[str, dict] = {}
     for reviewer in reviewers:
+        if not _completion_current(review_id):
+            return
         v = _call_reviewer(reviewer, _COMPLETION_REVIEW_SYSTEM,
                             user_prompt, cfg)
         if not v:
@@ -3250,7 +3646,18 @@ def _completion_review_worker_inner(evidence_run_ids: list[str], summary: str,
             "missing_evidence": list(v.get("missing_evidence") or []),
             "summary": (v.get("summary") or "")[:600],
         }
-    # Aggregate: ALL working reviewers must say APPROVED. Otherwise it's
+    missing = [r for r in reviewers
+               if verdicts[r].get("verdict") not in ("APPROVED", "REJECTED", "NEEDS_MORE")]
+    if missing:
+        details = [f"{r}: {cfg.get('council_' + r + '_model') or DEFAULTS['council_' + r + '_model']}" for r in missing]
+        message = "Required completion review incomplete: " + ", ".join(details)
+        if _completion_update(review_id, {
+                "status": "error", "incomplete": True, "error": message,
+                "council_verdict": {"verdict": "INCOMPLETE", "summary": message,
+                                    "missing_reviewers": missing, "verdicts": verdicts}}):
+            _emit_completion_event("research_completion_incomplete", message)
+        return
+    # Aggregate: ALL configured reviewers must say APPROVED. Otherwise it's
     # either REJECTED or NEEDS_MORE (worst wins).
     working = [r for r, v in verdicts.items()
                if v.get("verdict") in ("APPROVED", "REJECTED", "NEEDS_MORE")]
@@ -3274,8 +3681,7 @@ def _completion_review_worker_inner(evidence_run_ids: list[str], summary: str,
             summaries.append(f"[{r}] {v.get('summary')}")
     status_out = ("approved" if final_verdict == "APPROVED"
                   else "rejected")
-    existing = _conclusion_state_get()
-    existing.update({
+    changes = {
         "status": status_out,
         "council_verdict": {
             "verdict": final_verdict,
@@ -3285,8 +3691,7 @@ def _completion_review_worker_inner(evidence_run_ids: list[str], summary: str,
             "verdicts": verdicts,
             "reviewed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         },
-    })
-    _conclusion_state_set(existing)
+    }
     # When the council REJECTED or said NEEDS_MORE we want the agent to
     # immediately turn the missing_evidence into directives so the loop
     # restarts itself without the operator. We don't auto-upsert (that
@@ -3297,11 +3702,12 @@ def _completion_review_worker_inner(evidence_run_ids: list[str], summary: str,
            if final_verdict == "APPROVED" else
            f"Research conclusion {final_verdict} — "
            f"{len(missing_agg)} missing-evidence item(s) returned.")
-    _emit_completion_event(
-        "research_completion_reviewed", msg, severity=sev)
-    if final_verdict == "APPROVED":
-        _auto_enter_paper_after_approval(recommendation,
-                                         "\n".join(summaries))
+    with _COMPLETION_LOCK:
+        if not _completion_update(review_id, changes):
+            return
+        _emit_completion_event("research_completion_reviewed", msg, severity=sev)
+        if final_verdict == "APPROVED":
+            _auto_enter_paper_after_approval(recommendation, "\n".join(summaries))
 
 
 def _auto_enter_paper_after_approval(recommendation: str,
@@ -3366,42 +3772,55 @@ def review_completion_async(evidence_run_ids: list[str],
                               recommendation: str = "") -> dict:
     """Kick off an async council review of the agent's conclusion.
 
-    Sets ``research_conclusion`` to ``pending`` immediately and spawns a
-    background worker thread. The worker writes the verdict back into
-    the same Setting row when it's done."""
-    # Persist the agent's claim BEFORE we run the review — the dashboard
-    # shows it immediately so the user can see what the agent is
-    # asserting while the council deliberates.
-    now = dt.datetime.now(dt.timezone.utc).isoformat()
-    _conclusion_state_set({
-        "status": "pending",
-        "summary": (summary or "")[:4000],
-        "answer_to_purpose": answer_to_purpose or "",
-        "evidence": list(evidence_run_ids or [])[:200],
-        "recommendation": recommendation or "",
-        "conclude_at": now,
-    })
-    # Observability: mark the phase + announce the launch so the activity feed
-    # and emails show the council is reviewing (not a mysterious "idle").
-    try:
-        from . import lifecycle
-        lifecycle.set_phase(lifecycle.PHASE_CONCLUSION_REVIEW)
-        lifecycle.emit_event(
-            "council_launch",
-            "Council review launched: evaluating the research conclusion "
-            f"({len(evidence_run_ids or [])} runs of evidence)",
-            severity="info", actor="council")
-    except Exception:                                   # noqa: BLE001
-        pass
-    import os
-    if not os.environ.get("ARUI_DISABLE_BG"):       # unit tests: no leaked daemons
-        threading.Thread(target=_completion_review_worker,
-                         args=(list(evidence_run_ids or []),
-                               summary or "",
-                               answer_to_purpose or "",
-                               recommendation or ""),
-                         daemon=True, name="council-completion").start()
-    return conclusion_state()
+    Identical in-flight submissions share the existing review. A different
+    claim receives an explicit busy response; it never replaces work that
+    is already calling the selected reviewers. Completed claims are not
+    cached: newly submitted conclusions still receive their required review.
+    """
+    global _COMPLETION_ACTIVE_THREAD, _COMPLETION_ACTIVE_KEY
+    cfg = _settings()
+    claim = _completion_claim(evidence_run_ids, summary, answer_to_purpose, recommendation)
+    key = review_cache.digest({"claim": claim, "policy": _review_policy(cfg)})
+    with _COMPLETION_LOCK:
+        if completion_review_active():
+            current = conclusion_state()
+            if key == _COMPLETION_ACTIVE_KEY and current.get("status") == "pending":
+                return {**current, "coalesced": True}
+            return {"status": "busy",
+                    "error": "A different completion review is still running; retry when it finishes.",
+                    "active_review_id": current.get("review_id")}
+        now = dt.datetime.now(dt.timezone.utc).isoformat()
+        review_id = os.urandom(12).hex()
+        _conclusion_state_set({**claim, "status": "pending", "review_id": review_id,
+                               "conclude_at": now})
+        try:
+            from . import lifecycle
+            lifecycle.set_phase(lifecycle.PHASE_CONCLUSION_REVIEW)
+            lifecycle.emit_event(
+                "council_launch",
+                "Council review launched: evaluating the research conclusion "
+                f"({len(claim['evidence'])} runs of evidence)",
+                severity="info", actor="council")
+        except Exception:
+            pass
+        if not os.environ.get("ARUI_DISABLE_BG"):  # tests explicitly opt into workers
+            worker = threading.Thread(
+                target=_completion_review_worker,
+                args=(claim["evidence"], claim["summary"],
+                      claim["answer_to_purpose"], claim["recommendation"]),
+                kwargs={"review_id": review_id, "cfg": cfg},
+                daemon=True, name="council-completion")
+            _COMPLETION_ACTIVE_THREAD = worker
+            _COMPLETION_ACTIVE_KEY = key
+            try:
+                worker.start()
+            except Exception as exc:
+                _COMPLETION_ACTIVE_THREAD = None
+                _COMPLETION_ACTIVE_KEY = None
+                _completion_update(review_id, {
+                    "status": "error", "incomplete": True,
+                    "error": "Completion review could not start: " + _model_error_detail(exc)})
+        return conclusion_state()
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -3421,8 +3840,13 @@ def propose_next_move_async() -> dict:
     """
     global _BATCH_INFLIGHT
     cfg = _settings()
-    if not _available_reviewers(cfg):
-        return {"started": False, "reason": "no_reviewers"}
+    reviewers = configured_reviewers(cfg)
+    if not reviewers:
+        return {"started": False, "reason": "reviewers_explicitly_disabled"}
+    selected = "openai" if "openai" in reviewers else "gemini"
+    if not _preflight_reviewers(cfg, [selected]):
+        return {"started": False, "reason": "selected_model_not_configured",
+                "error": _LAST_REVIEW_ERROR.message}
     db = SessionLocal()
     try:
         n = max(_strategic_threshold(cfg), 1)
@@ -3528,29 +3952,46 @@ def _scope_papers_block(papers: list[dict], max_chars: int = 14000) -> str:
 
 
 def _scoping_order(cfg: dict) -> list[str]:
-    """Reviewer order for the scoping phase: the user's chosen `scoping_model`
-    first (onboarding dropdown; default 'gemini'), then the others as fallback.
-    Only includes providers whose keys are present."""
-    selected = (cfg.get("scoping_model") or "gemini-3.8-flash").strip().lower()
-    pref = provider_for(selected) or selected
-    if pref not in ("gemini", "openai", "claude"):
-        pref = "gemini"
-    avail = list(_available_reviewers(cfg))        # gemini / openai (with keys)
-    if _claude_available(cfg):
-        avail.append("claude")
-    return [r for r in avail if r == pref] + [r for r in avail if r != pref]
+    """Exactly one configured scoping model; no automatic provider fallback."""
+    model = (cfg.get("scoping_model") or DEFAULTS["scoping_model"]).strip()
+    from .token_check import DEFAULT_MODELS
+    model = DEFAULT_MODELS.get(model, model)
+    provider = provider_for(model)
+    slot = {"gemini": "gemini", "openai": "openai", "claude": "claude",
+            "opencode": "gemini", "flint": "gemini"}.get(provider)
+    if not slot:
+        raise RuntimeError(f"Selected scoping model {model} has an unknown provider")
+    return [slot]
+
+
+def _scope_failed(cfg: dict) -> RuntimeError:
+    model = cfg.get("scoping_model") or DEFAULTS["scoping_model"]
+    detail = getattr(_LAST_REVIEW_ERROR, "message", "") or "no valid response received"
+    return RuntimeError(f"Scoping model {model} failed: {detail}")
 
 
 def _with_scoping_model(cfg: dict) -> dict:
     """Apply the exact scoping model to its provider's logical council slot."""
     out = dict(cfg)
     model = (out.get("scoping_model") or "").strip()
+    from .token_check import DEFAULT_MODELS
+    model = DEFAULT_MODELS.get(model, model)
+    if model:
+        out["scoping_model"] = model
     provider = provider_for(model)
     field = {"gemini": "council_gemini_model",
              "openai": "council_openai_model",
-             "claude": "council_claude_model"}.get(provider)
+             "claude": "council_claude_model",
+             "opencode": "council_gemini_model",
+             "flint": "council_gemini_model"}.get(provider)
     if field:
         out[field] = model
+        # Scoping is independent of whether post-run council reviews are
+        # enabled. Selecting an advisor must not silently skip that model.
+        toggle = {"council_gemini_model": "council_enable_gemini",
+                  "council_openai_model": "council_enable_openai",
+                  "council_claude_model": "council_enable_claude_tiebreaker"}[field]
+        out[toggle] = True
     return out
 
 
@@ -3572,9 +4013,11 @@ def _validate_scope_keys(synth: dict, valid_keys: set[str]) -> dict:
 
 def scope_review(purpose: str, metric: str, seed_ideas: str,
                  papers: list[dict]) -> dict | None:
-    """Synthesize SOTA + adversarially assess the direction. Prefers the
-    flagship Claude reviewer for quality; falls back to gemini/openai.
-    Returns the parsed+citation-validated synthesis dict, or None on failure."""
+    """Synthesize a research plan using exactly the selected scoping model.
+
+    Missing credentials, provider failures and invalid model output raise a
+    visible error; no other model or provider is substituted.
+    """
     cfg = _with_scoping_model(_settings())
     user = (f"# Purpose\n{purpose}\n\n# Validation metric\n{metric}\n\n"
             f"# User's seed ideas\n{seed_ideas or '(none provided)'}\n\n"
@@ -3587,7 +4030,7 @@ def scope_review(purpose: str, metric: str, seed_ideas: str,
             out.pop("reviewed_at", None)
             valid = {p.get("key") for p in papers if p.get("key")}
             return _validate_scope_keys(out, valid)
-    return None
+    raise _scope_failed(cfg)
 
 
 def scope_finalize(purpose: str, metric: str, seed_ideas: str,
@@ -3622,7 +4065,7 @@ def scope_finalize(purpose: str, metric: str, seed_ideas: str,
             out.pop("reviewed_at", None)
             valid = {p.get("key") for p in papers if p.get("key")}
             return _validate_scope_keys(out, valid)
-    return None
+    raise _scope_failed(cfg)
 
 
 def scope_chat(history: list[dict], synthesis: dict, papers: list[dict],
@@ -3630,7 +4073,7 @@ def scope_chat(history: list[dict], synthesis: dict, papers: list[dict],
     """One conversational turn for the scoping modal — FREE TEXT (not JSON).
     Stateless reducer: caller passes the full history; we ground the model in
     the synthesis + retrieved papers and return the assistant's next reply.
-    Prefers Claude (text-mode); falls back to a text Gemini/OpenAI call."""
+    Uses the selected model in text mode and surfaces failure explicitly."""
     cfg = _with_scoping_model(_settings())
     sys = (
         "You are the same skeptical ML research advisor, now in a live "
@@ -3649,45 +4092,17 @@ def scope_chat(history: list[dict], synthesis: dict, papers: list[dict],
                         for m in history)
     user = ctx + "\n\n# Conversation so far\n" + convo + "\n\nASSISTANT:"
 
-    # FREE-TEXT (no JSON forcing) per-provider callers, tried in the user's
-    # chosen scoping-model order.
-    def _claude_text():
-        key = os.environ["ANTHROPIC_API_KEY"]
-        model = cfg.get("council_claude_model") or DEFAULTS["council_claude_model"]
-        data = _post_json_retry(
-            "https://api.anthropic.com/v1/messages",
-            {"model": model, "max_tokens": 1200, "system": sys,
-             "messages": [{"role": "user", "content": user}]},
-            {"x-api-key": key, "anthropic-version": "2023-06-01"})
-        return data["content"][0]["text"]
-
-    def _gemini_text():
-        key = os.environ["GEMINI_API_KEY"]
-        model = cfg.get("council_gemini_model") or DEFAULTS["council_gemini_model"]
-        data = _post_json_retry(
-            ("https://generativelanguage.googleapis.com/v1beta/"
-             f"models/{model}:generateContent?key={key}"),
-            {"system_instruction": {"parts": [{"text": sys}]},
-             "contents": [{"role": "user", "parts": [{"text": user}]}],
-             "generationConfig": {"temperature": 0.7}}, {})
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-
-    def _openai_text():
-        key = os.environ["OPENAI_API_KEY"]
-        model = cfg.get("council_openai_model") or DEFAULTS["council_openai_model"]
-        data = _post_json_retry(
-            "https://api.openai.com/v1/chat/completions",
-            {"model": model, "messages": [
-                {"role": "system", "content": sys},
-                {"role": "user", "content": user}]},
-            {"Authorization": f"Bearer {key}"})
-        return data["choices"][0]["message"]["content"]
-
-    _fns = {"claude": _claude_text, "gemini": _gemini_text, "openai": _openai_text}
-    for reviewer in _scoping_order(cfg):
-        try:
-            return _fns[reviewer]()
-        except Exception as e:                              # noqa: BLE001
-            print(f"[scope] {reviewer} chat failed: {e}", flush=True)
-    return ("(The advisor model is unavailable right now — check that an "
-            "Anthropic, Gemini, or OpenAI key is configured.)")
+    reviewer = _scoping_order(cfg)[0]
+    model = cfg[f"council_{reviewer}_model"]
+    from .provider_config import requirement_error
+    missing = requirement_error(model)
+    if missing:
+        raise RuntimeError(f"Scoping model {model} failed: {missing}")
+    try:
+        with advisory_usage.context(role="scoping", operation="chat"):
+            return _call_text_model(model, sys, user)
+    except Exception as exc:
+        from .safe_errors import describe
+        status = getattr(exc, "code", None) or getattr(exc, "status", None)
+        detail = f"HTTP {status}" if isinstance(status, int) else describe(exc)
+        raise RuntimeError(f"Scoping model {model} failed: {detail}") from None

@@ -8,11 +8,31 @@ const S = {
   sortKey: 'time', sortAsc: false,   // main table sort — default DESC by time (newest first)
 };
 
-const api = (p) => fetch('/api' + p).then(r => r.json());
+async function readApiResponse(response) {
+  const text = await response.text();
+  let body;
+  try { body = text ? JSON.parse(text) : {}; }
+  catch (_) {
+    const error = new Error(response.ok ? 'The server returned an invalid response. Please retry.'
+      : `Server error (${response.status}). Please retry; your edits have been kept.`);
+    error.status = response.status;
+    throw error;
+  }
+  if (!response.ok) {
+    const detail = body.detail || body.error || body.reason;
+    const error = new Error(typeof detail === 'string' ? detail
+      : response.status === 401 ? 'Your session expired. Sign in again.'
+      : `Request failed (${response.status}). Please retry.`);
+    error.status = response.status; error.body = body;
+    throw error;
+  }
+  return body;
+}
+const api = (p, options) => fetch('/api' + p, options).then(readApiResponse);
 const post = (p, b) => fetch('/api' + p, {
   method: 'POST', headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(b || {}),
-}).then(r => r.json());
+}).then(readApiResponse);
 
 /* report any client-side JS error to the backend so crashes are debuggable */
 function _report(msg, extra) {
@@ -20,7 +40,7 @@ function _report(msg, extra) {
     fetch('/api/clientlog', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(Object.assign({ msg: String(msg) }, extra || {})),
-    });
+    }).catch(() => { /* A failed report must not trigger another report. */ });
   } catch (e) { /* ignore */ }
 }
 window.addEventListener('error', e => _report(e.message,
@@ -33,6 +53,24 @@ window.addEventListener('unhandledrejection', e => _report(
 
 const el = (t, c, h) => { const n = document.createElement(t);
   if (c) n.className = c; if (h != null) n.innerHTML = h; return n; };
+
+// Safari's keyboard changes the visual viewport without changing 100vh.
+// Keep full-screen surfaces and their composers inside the visible area.
+function syncVisualViewport() {
+  const vv = window.visualViewport;
+  // Leave pinch zoom to the browser; resizing the app while zooming jumps
+  // the focused field around and makes magnification unusable.
+  if (vv && vv.scale !== 1) return;
+  const root = document.documentElement;
+  root.style.setProperty('--visible-height', `${vv ? vv.height : innerHeight}px`);
+  root.style.setProperty('--visible-top', `${vv ? vv.offsetTop : 0}px`);
+}
+window.addEventListener('resize', syncVisualViewport);
+if (window.visualViewport) {
+  visualViewport.addEventListener('resize', syncVisualViewport);
+  visualViewport.addEventListener('scroll', syncVisualViewport);
+}
+syncVisualViewport();
 // esc — HTML-entity escaper safe for BOTH element text and quoted attribute
 // values (escapes quotes too, so untrusted agent/onboarding strings can't
 // break out of a `title="..."` / `value="..."` attribute and inject markup).
@@ -651,8 +689,12 @@ function render() {
     app.append(header(), statusBar(), left(), rail(), el('button', 'fab', '✉'));
   }
   applyRailW();
-  document.querySelector('.fab').onclick = () =>
-    document.querySelector('.rail').classList.toggle('show');
+  const fab = document.querySelector('.fab');
+  fab.textContent = '✉ Agent conversation';
+  fab.setAttribute('aria-label', 'Open agent conversation');
+  fab.setAttribute('aria-controls', 'agent-rail');
+  fab.setAttribute('aria-expanded', 'false');
+  fab.onclick = () => setMobileRail(true);
   if (!isPaperView) { paintHero(); paintStats(); paintTable(); paintStatusCounts(); }
   paintRail();
   pollGpus();
@@ -1003,7 +1045,7 @@ async function pollBlessStatus() {
     if (!s) return;
     // dedupe: only repaint when state actually changes
     const pf = s.preflight || {};
-    const sig = (s.status || '') + '|' + ((s.blockers || []).length)
+    const sig = (s.status || '') + '|' + (s.summary || '') + '|' + ((s.blockers || []).length)
       + '|' + (pf.static_overfit_passed ? '1' : '0')
       + '|' + (pf.uniform_init_passed ? '1' : '0')
       + '|' + (pf.blessed ? '1' : '0');
@@ -1058,6 +1100,10 @@ function renderBlessBanner(s) {
     rejected:             { cls: 'sb-bad', icon: '✗',
       title: 'Council rejected the codebase — agent must fix before any '
         + 'run launches' },
+    error:                { cls: 'sb-bad', icon: '⚠',
+      title: s.error || s.summary || 'Required code review failed' },
+    skipped:              { cls: 'sb-warn', icon: '·',
+      title: s.summary || 'Code review is disabled; no review was performed' },
     blocked_on_preflight: { cls: 'sb-bad', icon: '⚠',
       title: 'Bless blocked — pre-flight steps 1+2 must pass before council '
         + 'review can start' },
@@ -1148,6 +1194,7 @@ async function _paintCouncilReviewModal() {
   }
   const statusLabel = ({
     pending: 'In progress', approved: 'Approved', rejected: 'Changes requested',
+    error: 'Review incomplete', skipped: 'Disabled',
     blocked_on_preflight: 'Blocked on pre-flight', not_requested: 'Not requested',
   })[s.status] || s.status;
   const doneCount = reviewers.filter(r => verdicts[r]).length;
@@ -1180,7 +1227,8 @@ async function _paintCouncilReviewModal() {
     (s.summary ? `<div class="crv-summary">${esc(s.summary)}</div>` : '') +
     `<div class="crv-revs">` +
       (reviewers.length ? reviewers.map(revRow).join('')
-        : '<div class="crv-wait">Waiting for the review to start…</div>') +
+        : (s.status === 'pending' || s.status === 'not_requested'
+          ? '<div class="crv-wait">Waiting for the review to start…</div>' : '')) +
     '</div>' +
     (rv.system_prompt
       ? `<details class="crv-prompt"><summary>Review criteria (system prompt ` +
@@ -1202,6 +1250,7 @@ function header() {
   const p = S.project || {};
   const h = el('div', 'hdr');
   const burger = el('button', 'burger', '☰');
+  burger.setAttribute('aria-label', 'Open navigation');
   burger.onclick = toggleMenu;
   h.append(burger);
   h.append(el('div', 'brand',
@@ -1333,6 +1382,10 @@ function _aruiDialog({ title, message, kind = 'confirm', danger = false,
   return new Promise(resolve => {
     const sc = el('div', 'mscrim arui-dlg-scrim');
     const m  = el('div', 'modal arui-dlg' + (danger ? ' danger' : ''));
+    const previousFocus = document.activeElement;
+    m.setAttribute('role', kind === 'alert' ? 'alertdialog' : 'dialog');
+    m.setAttribute('aria-modal', 'true');
+    m.setAttribute('aria-label', title || 'Confirm');
     const okLabel = okText || (kind === 'alert' ? 'OK'
                               : danger ? 'Delete' : 'Confirm');
     const cancelLabel = cancelText || 'Cancel';
@@ -1354,15 +1407,23 @@ function _aruiDialog({ title, message, kind = 'confirm', danger = false,
     const close = (val) => {
       document.removeEventListener('keydown', onKey);
       sc.remove();
+      if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
       resolve(val);
     };
     const onKey = e => {
       if (e.key === 'Escape') close(kind === 'prompt' ? null
                                   : kind === 'alert' ? undefined : false);
-      else if (e.key === 'Enter' && (!inp || document.activeElement === inp
-                                          || document.activeElement.tagName === 'BUTTON'))
+      // Let a focused button perform its own click. Treating every Enter
+      // as confirmation made pressing Enter on Cancel execute the action.
+      else if (e.key === 'Enter' && inp && document.activeElement === inp)
         close(kind === 'prompt' ? inp.value
              : kind === 'alert' ? undefined : true);
+      else if (e.key === 'Tab') {
+        const buttons = [...m.querySelectorAll('button,input')].filter(x => !x.disabled);
+        const first = buttons[0], last = buttons[buttons.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
     };
     document.addEventListener('keydown', onKey);
     sc.onclick = e => { if (e.target === sc) close(
@@ -1389,9 +1450,8 @@ const aruiPrompt = (msg, opts={}) =>
 
 /* ── Halt Research: durable interrupt + resume flow ─────────────────────
    Big-red-scary stop. Confirm -> hard interrupt (stops ALL runs) -> a
-   non-dismissable modal that lets you edit purpose + seeds, then choose
-   "Restart With Feedback" (re-scope, PI+council must re-approve) or
-   "Continue and Ignore Feedback" (resume the runs). */
+   result report that keeps the durable pause until the operator explicitly
+   resumes or restarts. Partial failure never claims every worker stopped. */
 async function openHaltModal() {
   // Close any modal already open (e.g. the Settings modal, when Halt is
   // triggered from the settings control) so the halt flow — and the scoping
@@ -1403,35 +1463,69 @@ async function openHaltModal() {
     'You can then update the purpose + seed ideas and relaunch.',
     { title: 'Halt Research?', danger: true, okText: 'Yes, halt everything' });
   if (!sure) return;
+  await _haltAndShowRefocus();
+}
+
+async function _haltAndShowRefocus() {
   let d;
   try { d = await post('/research/interrupt', { feedback: '' }); }
-  catch (e) { await aruiAlert('Could not halt: ' + e); return; }
+  catch (e) {
+    const body = e.body?.detail && typeof e.body.detail === 'object' ? e.body.detail : e.body;
+    if (body && ('paused' in body || 'remaining' in body)) d = body;
+    else { await aruiAlert('Could not verify that research stopped: ' + e,
+      { title: 'Halt failed' }); return; }
+  }
+  _showHaltRefocus(d || {});
+}
 
-  const sc = el('div', 'mscrim');            // NOTE: no scrim-click / Esc close
+function _showHaltRefocus(d) {
+  const remaining = Array.isArray(d.remaining) ? d.remaining : [];
+  const errors = Array.isArray(d.errors) ? d.errors : [];
+  const warnings = Array.isArray(d.warnings) ? d.warnings : [];
+  const stopped = d.ok === true && d.paused === true && !remaining.length && !errors.length;
+  const sc = el('div', 'mscrim');
   const m  = el('div', 'modal arui-dlg danger');
+  m.setAttribute('role', 'dialog');
+  m.setAttribute('aria-modal', 'true');
+  m.setAttribute('aria-label', stopped ? 'Research halted' : 'Halt needs attention');
+  const details = [
+    `${(d.killed || []).length} registered run(s) stopped`,
+    `${(d.workers_stopped || []).length} additional worker(s) stopped`,
+    `${d.discarded || 0} queued discarded`,
+    `${(d.queues_stopped || []).length} queue launcher(s) stopped`,
+  ];
+  const report = (label, items) => items.length
+    ? `<div class="halt-report"><b>${label}</b><ul>${items.map(item => `<li>${esc(typeof item === 'string' ? item : JSON.stringify(item))}</li>`).join('')}</ul></div>` : '';
   m.innerHTML =
-    `<div class="arui-dlg-hd">Research halted — ${(d.killed||[]).length} run(s) ` +
-      `stopped, ${d.discarded||0} queued discarded</div>` +
-    `<div class="arui-dlg-bd">Everything is stopped. Tighten the purpose and ` +
-      `seed ideas below if you want to steer the research, then choose how to ` +
-      `proceed. You must pick one option to continue.</div>` +
-    `<label class="halt-lbl">Purpose</label>` +
+    `<div class="arui-dlg-hd">${stopped ? 'Research halted' : 'Halt needs attention'}</div>` +
+    `<div class="arui-dlg-bd">${details.join(' · ')}.</div>` +
+    `<div class="arui-dlg-bd">${stopped
+      ? 'The stop checks passed. Research stays halted when you close this report. Edit the direction below only if you want to restart.'
+      : d.paused ? 'New research is paused, but some stop checks failed. Review the details and retry the halt before resuming.'
+      : 'The research pause could not be verified. Some work may still be running. Review the details and retry.'}</div>` +
+    report('Still running', remaining) + report('Stop errors', errors) + report('Warnings', warnings) +
+    `<label class="halt-lbl" for="halt-purpose">Purpose</label>` +
     `<textarea id="halt-purpose" class="halt-ta" rows="4">${esc(d.purpose||'')}</textarea>` +
-    `<label class="halt-lbl">Seed ideas</label>` +
+    `<label class="halt-lbl" for="halt-seeds">Seed ideas</label>` +
     `<textarea id="halt-seeds" class="halt-ta" rows="4">${esc(d.seed_ideas||'')}</textarea>` +
-    `<label class="halt-lbl">Feedback — what went wrong / the new focus</label>` +
+    `<label class="halt-lbl" for="halt-feedback">Feedback — what went wrong / the new focus</label>` +
     `<textarea id="halt-feedback" class="halt-ta" rows="3" ` +
       `placeholder="e.g. stop trying width/depth sweeps; focus on the loss ` +
       `function per the seeds"></textarea>` +
     `<div class="arui-dlg-actions" style="flex-wrap:wrap;gap:8px">` +
-      `<button id="halt-restart" class="btn pri danger">Restart With Feedback</button>` +
-      `<button id="halt-continue" class="btn">Continue and Ignore Feedback</button>` +
+      `<button id="halt-dismiss" class="btn pri">${d.paused ? 'Keep research halted' : 'Close stop report'}</button>` +
+      (!stopped ? `<button id="halt-retry" class="btn danger">Retry halt</button>` : '') +
+      `<button id="halt-restart" class="btn danger"${stopped ? '' : ' disabled'}>Restart with feedback</button>` +
+      `<button id="halt-continue" class="btn"${stopped ? '' : ' disabled'}>Resume research</button>` +
     `</div>` +
     `<div id="halt-busy" class="set-email-hint" style="margin-top:8px"></div>`;
   sc.append(m); document.body.append(sc);
   const busy = m.querySelector('#halt-busy');
   const disableAll = () => m.querySelectorAll('button,textarea')
     .forEach(x => x.disabled = true);
+  m.querySelector('#halt-dismiss').onclick = () => sc.remove();
+  const retry = m.querySelector('#halt-retry');
+  if (retry) retry.onclick = async () => { disableAll(); sc.remove(); await _haltAndShowRefocus(); };
 
   m.querySelector('#halt-restart').onclick = async () => {
     disableAll(); busy.textContent = 'Re-scoping against the updated purpose…';
@@ -1510,6 +1604,12 @@ function _watchPaperProposal(pid) {
   const poll = async () => {
     try {
       const p = await api('/paper/proposal/' + pid);
+      if (p && p.status === 'error') {
+        sc.remove();
+        await aruiAlert((p.council_responses || {})._error || 'A selected model failed. The assessment is incomplete; retry after fixing its access.');
+        try { _renderPaperProposalsHistory(); } catch (e) {}
+        return;
+      }
       if (p && p.status === 'ready') {
         sc.remove();
         _showPaperProposalResults(p);
@@ -1523,6 +1623,10 @@ function _watchPaperProposal(pid) {
 }
 
 function _showPaperProposalResults(p) {
+  if (p.status === 'error') {
+    aruiAlert((p.council_responses || {})._error || 'A selected model failed. The assessment is incomplete; retry after fixing its access.');
+    return;
+  }
   const sc = el('div', 'mscrim');
   const m = el('div', 'modal modal-proposal');
   const responses = p.council_responses || {};
@@ -1617,7 +1721,7 @@ function _showPaperProposalResults(p) {
         const r = await post('/paper/enter',
                               { meta: {}, proposal_id: p.id });
         if (r && r.status === 'already_in_paper_mode') {
-          try { await post('/paper/scaffold', {}); } catch (e) {}
+          if (!(await requestPaperScaffold())) return;
           await aruiAlert(
             'Already in paper mode — claims from this proposal have ' +
             'been re-populated.');
@@ -1815,8 +1919,9 @@ async function openRevertModal() {
   m.innerHTML =
     `<div class="modal-hd"><h2>Revert to research mode?</h2>` +
     `<button class="iconbtn" id="rvx">✕</button></div>` +
-    `<div class="modal-sub">The Author Agent stops, in-flight paper runs ` +
-    `pause, the paper draft is kept untouched. The research agent resumes. ` +
+    `<div class="modal-sub">The Author Agent stops and no new paper experiments ` +
+    `launch. Existing independent paper experiments finish naturally, and your ` +
+    `paper draft is kept. Research resumes unless it is paused or halted. ` +
     `Tell us briefly why so the snapshot is meaningful — and so the ` +
     `research agent's resume prompt knows what happened.</div>` +
     `<textarea class="onb-in" id="rv-reason" rows="4" ` +
@@ -1833,13 +1938,37 @@ async function openRevertModal() {
     if (reason.length < 5) {
       await aruiAlert('A short reason is required (1+ sentence).'); return;
     }
-    const r = await post('/paper/revert', { reason });
-    if (r.status === 'reverted') {
+    const button = m.querySelector('#rv-go');
+    button.disabled = true; button.textContent = 'Returning to research…';
+    try {
+      let r;
+      try { r = await post('/paper/revert', { reason }); }
+      catch (error) {
+        // A restart can fail after the server has already restored research
+        // mode. Preserve that result even if it arrived as an HTTP error.
+        if (error.body?.mode === 'research') r = error.body;
+        else throw error;
+      }
+      const restored = r.mode === 'research' ||
+        ['reverted', 'already_in_research'].includes(r.status);
+      if (!restored) throw new Error(r.detail || 'The project did not return to research mode.');
       sc.remove();
-      try { S.mode = await api('/mode'); } catch (e) {}
-      setView('dashboard');
-    } else {
-      await aruiAlert('Could not revert: ' + (r.detail || ''));
+      S.mode = { ...(S.mode || {}), mode: 'research' };
+      try { S.mode = await api('/mode'); } catch (_) {}
+      if (S.view === 'dashboard') render(); else setView('dashboard');
+      const partial = r.ok === false || r.status === 'partial';
+      let message = r.detail || (partial
+        ? 'Research mode was restored, but the research agent could not restart. Check its provider settings, then retry Restart agent.'
+        : r.paused ? 'Research mode restored. Research remains paused or halted.'
+        : r.research_restarted ? 'Research mode restored and the research agent restarted.'
+        : 'Research mode restored.');
+      const continuing = Number(r.paper_runs_continuing) || 0;
+      if (continuing > 0) message += `\n\n${continuing} existing paper experiment${continuing === 1 ? '' : 's'} continue${continuing === 1 ? 's' : ''} to completion.`;
+      await aruiAlert(message, { title: partial ? 'Research restart incomplete' : 'Research mode restored' });
+    } catch (error) {
+      await aruiAlert('Could not return to research: ' + error.message, { title: 'Return to research failed' });
+    } finally {
+      button.disabled = false; button.textContent = 'Revert to research';
     }
   };
 }
@@ -1991,6 +2120,14 @@ window.addEventListener('resize', () => {
 
 function rail() {
   const r = el('div', 'rail');
+  r.id = 'agent-rail';
+  const mobileHead = el('div', 'rail-mobile-head');
+  mobileHead.append(el('span', '', 'Agent conversation'));
+  const close = el('button', 'iconbtn rail-close', '✕');
+  close.setAttribute('aria-label', 'Close agent conversation');
+  close.onclick = () => setMobileRail(false);
+  mobileHead.append(close);
+  r.append(mobileHead);
   const grip = el('div', 'rail-grip');
   grip.title = 'Drag to resize';
   mountRailResize(grip);
@@ -2028,13 +2165,33 @@ function rail() {
   comp.append(chips);
   const row = el('div', 'row');
   const inp = el('input'); inp.id = 'chatin';
-  inp.placeholder = 'Message the agent — typed into its session…';
-  inp.onkeydown = e => { if (e.key === 'Enter') sendChat(inp.value); };
+  inp.setAttribute('aria-label', 'Message the agent');
+  inp.placeholder = 'Message the agent…';
+  inp.onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) sendChat(inp.value); };
   const snd = el('button', '', 'Send'); snd.onclick = () => sendChat(inp.value);
   row.append(inp, snd); comp.append(row);
+  const status = el('div', 'composer-status'); status.id = 'chat-send-status';
+  status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
+  comp.append(status);
   r.append(comp);
   return r;
 }
+
+function setMobileRail(open) {
+  const r = document.querySelector('.rail');
+  if (!r) return;
+  r.classList.toggle('show', open);
+  const fab = document.querySelector('.fab');
+  if (fab) fab.setAttribute('aria-expanded', String(open));
+  // Close lives in the panel header, so the launcher never covers Send.
+  if (open) r.querySelector('.rail-close')?.focus({ preventScroll: true });
+  else fab?.focus({ preventScroll: true });
+  window.dispatchEvent(new Event('resize'));
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && innerWidth <= 880 &&
+      !document.querySelector('.mscrim, .arui-modal-back')) setMobileRail(false);
+});
 
 /* ── painters ─────────────────────────────────────────────────────────── */
 let HERO;
@@ -2065,6 +2222,7 @@ function paintStats() {
   const fail = runs.filter(r => isCrashed(r.status)).length;
   const best = p.best_metric, base = p.baseline_metric;
   const delta = (best != null && base != null) ? base - best : null;
+  const activeGpus = (S.gpus || []).filter(g => (g.util_pct || 0) > 5 || (g.vram_used_mb || 0) > 600).length;
   const cards = [
     ['baseline', base == null ? '—' : fmt(base, 3), '', ''],
     ['incumbent', best == null ? '—' : fmt(best, 3), 'up',
@@ -2075,7 +2233,8 @@ function paintStats() {
     ['experiments', String(done.length + fail), '', `of ${S.ideas.length} ideas`],
     ['failures', String(fail), fail ? 'down' : '',
       done.length + fail ? Math.round(fail / (done.length + fail) * 100) + '% rate' : ''],
-    ['running', String(runs.filter(r => r.status === 'running').length), '', 'GPUs active'],
+    ['GPUs active', S.gpus?.length ? String(activeGpus) : '—', '',
+      `${runs.filter(r => r.status === 'running').length} tracked runs`],
   ];
   const st = document.getElementById('stats'); st.innerHTML = '';
   cards.forEach(([k, v, d, sub]) => {
@@ -2372,15 +2531,44 @@ function paintRail() {
 function createRailTerm(session) {
   const container = el('div', 'xterm-wrap');
   container.dataset.session = session;
+  // Safari can suspend a request while backgrounded or changing networks.
+  // Bound each request and abort it on disposal so one hung fetch cannot stop
+  // every subsequent frame, or leave a hidden terminal polling indefinitely.
+  let _stopped = false, _inflight = null;
+  const fetchFrame = async (path) => {
+    const controller = new AbortController(); _inflight = controller;
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    try { return await api(path, {signal: controller.signal, cache: 'no-store'}); }
+    finally { clearTimeout(timeout); if (_inflight === controller) _inflight = null; }
+  };
   if (!window.Terminal) {
     container.innerHTML =
       '<pre class="term" data-fallback="1">loading terminal…</pre>';
     const pre = container.firstChild;
+    let timer = null, started = false;
+    const tick = async () => {
+      if (_stopped || _inflight) return;
+      try {
+        const d = await fetchFrame('/agent/raw?session=' + encodeURIComponent(session) + '&offset=0&seed=1');
+        if (!_stopped && d.chunk) {
+          const bytes = Uint8Array.from(atob(d.chunk), c => c.charCodeAt(0));
+          pre.textContent = new TextDecoder().decode(bytes)
+            .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').slice(-32000);
+          pre.scrollTop = pre.scrollHeight;
+        }
+      } catch (_) { /* retry after connection recovery */ }
+      if (!_stopped) timer = setTimeout(tick, 2000);
+    };
+    const refresh = () => { if (!_stopped && !_inflight) { clearTimeout(timer); tick(); } };
+    const visible = () => { if (!document.hidden) refresh(); };
+    document.addEventListener('visibilitychange', visible);
+    window.addEventListener('pageshow', visible);
+    const stop = () => { _stopped = true; clearTimeout(timer); _inflight?.abort(); };
     return { container, fallback: true,
-             startStream: () => {},
-             stopStream: () => {},
+             startStream: () => { if (!started) { started = true; tick(); } },
+             stopStream: stop, resumeLive: refresh,
              writeText: (t) => { pre.textContent = t || ''; },
-             dispose: () => {} };
+             dispose: () => { stop(); document.removeEventListener('visibilitychange', visible); window.removeEventListener('pageshow', visible); } };
   }
   const t = new window.Terminal({
     // Raw mode: backend pipes the program's actual bytes (ANSI codes
@@ -2414,13 +2602,14 @@ function createRailTerm(session) {
   if (WebLinksAddon) t.loadAddon(new WebLinksAddon((e, uri) =>
     window.open(uri, '_blank', 'noopener')));
   t.open(container);
-  // GPU-accelerated renderer — dramatically smoother than the default DOM
-  // renderer for Claude Code's constant full-screen repaints (the cause of the
-  // "laggy scroll" feel). Guarded: if WebGL is unavailable or its context is
-  // lost, dispose the addon and fall back to the DOM renderer automatically.
+  // Keep the DOM renderer on touch devices: mobile WebKit testing showed
+  // missing WebGL glyphs before and after keyboard resizing. Fine-pointer
+  // desktops keep acceleration for frequent full-screen repaints. If WebGL
+  // is unavailable or loses its context, the DOM renderer remains available.
   try {
     const Webgl = window.WebglAddon && window.WebglAddon.WebglAddon;
-    if (Webgl) {
+    const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches;
+    if (Webgl && !coarsePointer) {
       const gl = new Webgl();
       gl.onContextLoss(() => { try { gl.dispose(); } catch (e) {} });
       t.loadAddon(gl);
@@ -2452,11 +2641,26 @@ function createRailTerm(session) {
       ev.stopPropagation();
     } catch (e) {}
   }, { passive: false, capture: true });
-  const refit = () => { try { fitAddon && fitAddon.fit(); } catch (e) {} };
-  setTimeout(refit, 50);
+  let _following = true, _fitting = false, _fitFrame = null;
+  const refit = () => {
+    // A keyboard resize changes baseY/viewportY even when the user never
+    // scrolled. Preserve their follow/read choice across the resize instead
+    // of treating that geometry change as a request to freeze the stream.
+    if (_stopped) return;
+    const following = _following; _fitting = true;
+    try { fitAddon && fitAddon.fit(); if (following) t.scrollToBottom(); }
+    catch (_) {} finally { _fitting = false; _following = following; }
+  };
+  const scheduleFit = () => {
+    if (_stopped || _fitFrame !== null) return;
+    // FitAddon changes DOM geometry. Run after observer delivery so fitting
+    // cannot feed layout changes back into the same ResizeObserver cycle.
+    _fitFrame = requestAnimationFrame(() => { _fitFrame = null; refit(); });
+  };
+  const initialFit = setTimeout(scheduleFit, 50);
   let ro = null;
   try {
-    ro = new ResizeObserver(refit);
+    ro = new ResizeObserver(scheduleFit);
     ro.observe(container);
   } catch (e) { /* not all browsers */ }
 
@@ -2468,9 +2672,10 @@ function createRailTerm(session) {
      xterm fires onResize after FitAddon.fit() with the new (cols,
      rows). We debounce by 200ms so a drag-resize doesn't fire 60
      POSTs/sec, and POST to /api/agent/resize which calls
-     `tmux resize-window` + sends Ctrl-L so Claude redraws clean. */
+     `tmux resize-window`; its native resize signal redraws the CLI. */
   let _resizeTimer = null, _lastSize = '';
   const pushSize = (cols, rows) => {
+    if (_stopped) return;
     const key = cols + 'x' + rows;
     if (key === _lastSize) return;
     _lastSize = key;
@@ -2482,9 +2687,9 @@ function createRailTerm(session) {
   };
   t.onResize(({ cols, rows }) => pushSize(cols, rows));
   // After the initial fit (which fires onResize), Claude may already
-  // have drawn at the old size. Force one more push + Ctrl-L just to
+  // have drawn at the old size. Force one more size push just to
   // be sure the dimensions match before the user looks at the term.
-  setTimeout(() => {
+  const initialSize = setTimeout(() => {
     if (t.cols && t.rows) pushSize(t.cols, t.rows);
   }, 600);
 
@@ -2623,7 +2828,11 @@ function createRailTerm(session) {
     const q = _pending; _pending = [];
     for (const b of q) { try { t.write(b); } catch (e) {} }
   };
-  try { t.onScroll(() => { if (_atBottom()) _flushPending(); }); } catch (e) {}
+  try { t.onScroll(() => {
+    if (_fitting) return;
+    _following = _atBottom();
+    if (_following) _flushPending();
+  }); } catch (e) {}
   // STRIP the control sequences that make the LIVE Claude TUI hostile to a
   // browser terminal:
   //   - alt-screen enter/leave (?1049/?1047/?47): keeps xterm in the NORMAL
@@ -2655,15 +2864,19 @@ function createRailTerm(session) {
   const _writeOrHold = (bytes) => {
     const out = _filter(bytes);
     if (!out.length) return;
-    if (_atBottom()) t.write(out); else _pending.push(out);
+    if (_following) t.write(out); else _pending.push(out);
   };
+  let _refreshRequested = false, _started = false;
   const tick = async () => {
+    if (_stopped || _inflight) return;
     try {
-      const d = await api(
+      const d = await fetchFrame(
         '/agent/raw?session=' + encodeURIComponent(session)
         + '&offset=' + _offset);
+      if (_stopped) return;
       if (d.rotated) {
         t.reset();
+        _following = true;
         _offset = 0;
         _pending = [];                   // drop held bytes from the old session
         delete _PANE_CACHE[session];     // stale history — start fresh
@@ -2693,10 +2906,14 @@ function createRailTerm(session) {
         _idleMs = more ? 0 : Math.min(_idleMs * 1.5, 2000);
       }
     } catch (e) { _idleMs = Math.min(_idleMs * 1.5, 2000); }
-    _streamTimer = setTimeout(tick, _idleMs);
+    if (!_stopped) {
+      _streamTimer = setTimeout(tick, _refreshRequested ? 0 : _idleMs);
+      _refreshRequested = false;
+    }
   };
   const start = async () => {
-    if (_streamTimer) return;
+    if (_started || _stopped) return;
+    _started = true;
     // Repaint cached history instantly, then resume from the last offset so
     // only net-new bytes are fetched (no slow "buffer in from the top").
     const c = _PANE_CACHE[session];
@@ -2711,32 +2928,49 @@ function createRailTerm(session) {
     // real scrollback, so the history was never useful — only the current
     // frame is. This is what makes the load near-instant.
     try {
-      const d = await api('/agent/raw?session=' + encodeURIComponent(session)
+      const d = await fetchFrame('/agent/raw?session=' + encodeURIComponent(session)
         + '&offset=0&seed=1');
+      if (_stopped) return;
       if (d && d.seeded) {
         try { t.reset(); } catch (e) {}
         const bytes = b64ToBytes(d.chunk);
-        if (bytes.length) { t.write(_filter(bytes)); _cacheAppend(bytes); }
         _offset = d.offset || 0;
+        if (bytes.length) { t.write(_filter(bytes)); _cacheAppend(bytes); }
       }
     } catch (e) { /* no seed → tick() replays from 0 as a fallback */ }
     if (_stopped) return;          // disposed/stopped during the seed fetch
     tick();
   };
-  let _stopped = false;
   const stop  = () => {
     _stopped = true;
+    _inflight?.abort();
     if (_streamTimer) { clearTimeout(_streamTimer); _streamTimer = null; }
   };
+  const refresh = () => {
+    if (_stopped) return;
+    _refreshRequested = true;
+    if (_inflight) return;
+    clearTimeout(_streamTimer); tick();
+  };
+  const visible = () => { if (!document.hidden) { scheduleFit(); refresh(); } };
+  document.addEventListener('visibilitychange', visible);
+  window.addEventListener('pageshow', visible);
 
   return {
     container, fallback: false,
     startStream: start,
     stopStream:  stop,
+    resumeLive() {
+      _following = true; t.scrollToBottom(); _flushPending(); refresh();
+    },
     // Escape hatch — e.g. fallback message when stream is offline.
     writeText(text) { t.write(text || ''); },
     dispose() {
       stop();
+      clearTimeout(initialFit); clearTimeout(initialSize); clearTimeout(_resizeTimer);
+      if (_fitFrame !== null) { cancelAnimationFrame(_fitFrame); _fitFrame = null; }
+      document.removeEventListener('visibilitychange', visible);
+      window.removeEventListener('pageshow', visible);
       try { ro && ro.disconnect(); } catch (e) {}
       try { t.dispose(); } catch (e) {}
     },
@@ -3070,8 +3304,13 @@ function renderSessions(c) {
    events from the backend and prepends them. */
 
 function feedItemEl(it) {
+  const stamp = row => {
+    row.dataset.at = it.t || '';
+    row.dataset.itemId = String(it.d.id || '');
+    return row;
+  };
   if (it.kind === 'chat') {
-    return el('div', 'bub ' + it.d.role, esc(it.d.content));
+    return stamp(el('div', 'bub ' + it.d.role, esc(it.d.content)));
   }
   const e = it.d;
   const ic = e.type === 'breakthrough' ? ['win', '★']
@@ -3083,7 +3322,7 @@ function feedItemEl(it) {
   row.innerHTML = `<div class="ev-ic ${ic[0]}">${ic[1]}</div>` +
     `<div class="ev-bd"><div class="ev-msg">${esc(e.message)}</div>` +
     `<div class="ev-tm">${esc(e.actor)} · ${ago(e.created_at)}</div></div>`;
-  return row;
+  return stamp(row);
 }
 
 function updateBrief() {
@@ -3133,7 +3372,8 @@ function updateBrief() {
     const rs = document.getElementById('brief-rescaffold');
     if (rs) rs.onclick = async (e) => {
       e.preventDefault();
-      const r = await post('/paper/scaffold', {});
+      const r = await requestPaperScaffold(rs);
+      if (!r) return;
       aruiAlert(`Patched & re-queued ${r.requeued_crashed || 0} crashed runs ` +
                 `(${r.backfilled_cmd || 0} cmds backfilled).`,
                 { title: 'Re-queued' });
@@ -3164,8 +3404,14 @@ function appendFeedItem(it) {
   const feed = document.getElementById('feed');
   if (!feed) return;
   const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
-  feed.append(feedItemEl(it));
+  const anchor = [...feed.children].find(row => row.getBoundingClientRect().bottom > feed.getBoundingClientRect().top);
+  const anchorTop = anchor?.getBoundingClientRect().top;
+  feed.querySelector('.feed-empty')?.remove();
+  const time = Date.parse(it.t) || 0;
+  const after = [...feed.children].find(row => (Date.parse(row.dataset.at) || 0) > time);
+  feed.insertBefore(feedItemEl(it), after || null);
   if (atBottom) feed.scrollTop = feed.scrollHeight;
+  else if (anchor?.isConnected) feed.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
 }
 
 async function loadOlderEvents() {
@@ -3490,7 +3736,10 @@ function paintGpus() {
 
 function pollGpus() {
   const tick = async () => {
-    try { S.gpus = await api('/gpus'); paintGpus(); } catch (e) { /* keep */ }
+    try {
+      S.gpus = await api('/gpus'); paintGpus();
+      if (document.getElementById('stats')) paintStats();
+    } catch (e) { /* keep */ }
   };
   tick();
   addTimer(setInterval(tick, 4000));
@@ -3737,66 +3986,64 @@ function closeDrawer() {
 
 /* ── chat ─────────────────────────────────────────────────────────────── */
 async function sendChat(text) {
-  text = (text || '').trim(); if (!text) return;
+  text = (text || '').trim(); if (!text || S._sendingChat) return;
+  S._sendingChat = true;
+  const view = S.view, isAuthor = view === 'latex';
   const inp = document.getElementById('chatin'); if (inp) inp.value = '';
-  // Route to the Author Agent when the rail is on its tab; otherwise to
-  // the research agent (existing behavior).
-  if (S.railTab === 'author') {
-    const r = await post('/paper/author/send', { text });
-    if (r && r.ok === false) {
-      aruiAlert('Could not deliver to Author Agent: ' + (r.detail || 'unknown'),
-        { title: 'Author Agent unreachable' });
+  inp?.blur();
+  const button = document.querySelector('.composer .row button');
+  const status = document.getElementById('chat-send-status');
+  if (button) { button.disabled = true; button.textContent = 'Sending…'; }
+  if (status) status.textContent = 'Waiting for the agent to accept your message…';
+  try {
+    const r = await post(isAuthor ? '/paper/author/send' : '/agent/send', { text });
+    if (r && r.ok === false) throw new Error(r.detail || r.error || 'No agent session is available.');
+    if (r.message || !isAuthor) acceptChatMessage(r.message || {
+      id: 'tmp-' + Date.now(), role: 'researcher',
+      content: text, created_at: new Date().toISOString() });
+    if (status?.isConnected) status.textContent = r.delivery === 'queued'
+      ? 'Queued for the agent.' : 'Message accepted by the agent.';
+    // Show the actual answer stream and release any scroll lock left from
+    // reading history. This does not focus the terminal or open the keyboard.
+    if (S.view === view && inp?.isConnected) {
+      inp.blur(); S.railTab = isAuthor ? 'author' : 'live'; paintRail();
+      _termHost?.resumeLive?.();
     }
-    return;
+  } catch (e) {
+    // Keep an unsent draft recoverable, including HTTP and network failures.
+    if (inp && !inp.value) inp.value = text;
+    if (status?.isConnected) status.textContent = 'Message not sent. Your draft has been kept.';
+    aruiAlert('Your message was not delivered: ' + e.message,
+      { title: 'Could not send message' });
+  } finally {
+    S._sendingChat = false;
+    if (button?.isConnected) { button.disabled = false; button.textContent = 'Send'; }
   }
-  // Show the user's message in the conversation panel IMMEDIATELY — don't
-  // wait for the SSE round-trip — so the user gets confirmation it went.
-  const userMsg = { id: 'tmp-' + Date.now(), role: 'researcher',
-    content: text, created_at: new Date().toISOString() };
-  S.chat.push(userMsg);
-  paintConvo();
-  const r = await post('/agent/send', { text });
-  if (r && r.ok === false) {
-    S.chat.push({ role: 'agent', created_at: new Date().toISOString(),
-      content: '⚠ could not deliver — ' + (r.error || 'no agent session') +
-      ' · click "Restart agent" above to relaunch the Claude Code session.' });
-    paintConvo();
-    return;
-  }
-  // Watch the research agent's tmux output for ~30s after the send and
-  // surface the next non-trivial line(s) as a synthesised agent bubble.
-  watchAgentForReply();
 }
 
-// Capture an "agent reply" by diffing the tmux output before/after the send.
-let _agentReplyTimer = null;
-async function watchAgentForReply() {
-  if (_agentReplyTimer) return;          // already watching
-  const before = (await api('/agent/terminal').catch(() => ({}))).text || '';
-  let elapsed = 0;
-  _agentReplyTimer = setInterval(async () => {
-    elapsed += 2200;
-    let d;
-    try { d = await api('/agent/terminal'); } catch (e) { return; }
-    const after = (d && d.text) || '';
-    if (after.length > before.length) {
-      const fresh = after.slice(before.length).trim();
-      // grab the last few content lines (skip blank + box-drawing decoration)
-      const lines = fresh.split('\n').map(l => l.replace(/\s+$/, ''))
-        .filter(l => l && !/^[─━│┃┌┐└┘├┤┬┴┼ ▶▸>›·•]+$/.test(l));
-      if (lines.length) {
-        const reply = lines.slice(-6).join('\n').slice(0, 800);
-        S.chat.push({ role: 'agent', created_at: new Date().toISOString(),
-          content: reply });
-        paintConvo();
-        clearInterval(_agentReplyTimer); _agentReplyTimer = null;
-        return;
-      }
-    }
-    if (elapsed > 30000) {
-      clearInterval(_agentReplyTimer); _agentReplyTimer = null;
-    }
-  }, 2200);
+function acceptChatMessage(msg) {
+  if (!msg || (msg.id && S.chat.some(x => x.id === msg.id))) return;
+  const tmpIdx = S.chat.findIndex(x => typeof x.id === 'string'
+    && x.id.startsWith('tmp-') && x.role === msg.role && x.content === msg.content);
+  if (tmpIdx >= 0) S.chat[tmpIdx] = msg;
+  else {
+    S.chat.push(msg);
+    appendFeedItem({ t: msg.created_at, kind: 'chat', d: msg });
+  }
+  S.chat.sort((a, b) => (Date.parse(a.created_at) || 0) - (Date.parse(b.created_at) || 0)
+    || String(a.id || '').localeCompare(String(b.id || '')));
+  paintConvo();
+}
+
+let _chatRefresh = null;
+function refreshChatLive() {
+  if (_chatRefresh) return _chatRefresh;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  _chatRefresh = api('/chat?limit=100', {signal: controller.signal, cache: 'no-store'})
+    .then(messages => { if (Array.isArray(messages)) messages.forEach(acceptChatMessage); })
+    .catch(() => {}).finally(() => { clearTimeout(timeout); _chatRefresh = null; });
+  return _chatRefresh;
 }
 
 function paintConvo() {
@@ -3901,18 +4148,9 @@ function streams() {
   });
   const ch = new EventSource('/api/stream/chat');
   ch.addEventListener('chat', e => {
-    const msg = JSON.parse(e.data);
-    // Skip if we already showed this (e.g., user message echoed back via SSE
-    // after we already added it locally).
-    if (msg.id && S.chat.some(x => x.id === msg.id)) return;
-    // Replace any temp message with the canonical server copy if content matches.
-    const tmpIdx = S.chat.findIndex(x =>
-      x.id && x.id.startsWith('tmp-') && x.content === msg.content);
-    if (tmpIdx >= 0) S.chat[tmpIdx] = msg;
-    else S.chat.push(msg);
-    paintConvo();
-    appendFeedItem({ t: msg.created_at, kind: 'chat', d: msg });
+    acceptChatMessage(JSON.parse(e.data));
   });
+  ch.addEventListener('open', refreshChatLive);
 
   // ──────────────────────────────────────────────────────────────────────
   // POLLING FALLBACK — covers every case where SSE silently fails:
@@ -3931,10 +4169,14 @@ function streams() {
     _pollHidden = (document.visibilityState === 'hidden');
     // On regaining visibility, do an immediate refresh — the user has
     // probably been away for a while and wants the latest state NOW.
-    if (!_pollHidden) refreshDashboardLive('visible');
+    if (!_pollHidden) { refreshDashboardLive('visible'); refreshChatLive(); }
+  });
+  window.addEventListener('pageshow', () => {
+    if (!document.hidden) { refreshDashboardLive('pageshow'); refreshChatLive(); }
   });
   setInterval(() => {
     if (_pollHidden) return;                 // don't poll backgrounded tabs
+    refreshChatLive();
     if (Date.now() - _lastRunsRefreshAt < STALE_THRESHOLD_MS) return;
     refreshDashboardLive('poll');
   }, POLL_INTERVAL_MS);
@@ -3965,6 +4207,12 @@ const OB_FIELDS = [
   ['claude_token', 'Claude API token', 'password', 'sk-ant-…'],
   ['gemini_token', 'Gemini token (optional)', 'password', ''],
   ['openai_token', 'OpenAI token (optional)', 'password', ''],
+  ['opencode_token', 'OpenCode key (optional for free models)', 'password', ''],
+  ['flint_mode', 'Local Flint setup', 'select', 'managed|external'],
+  ['flint_device', 'Flint hardware', 'select', 'auto|cpu'],
+  ['flint_base_url', 'External Flint server URL', 'text', 'http://127.0.0.1:8080/v1'],
+  ['flint_model', 'External server model name', 'text', 'flint'],
+  ['flint_token', 'External server token (if required)', 'password', ''],
   // Which model runs the SCOPING phase (the pre-research literature review +
   // plan critique + the back-and-forth chat). Gemini is the default — it's
   // fast, which matters because the plan re-synthesizes after every message.
@@ -4096,18 +4344,20 @@ const OB_FIELDS = [
   ['gmail_app_pw', 'Gmail app password (for the sender email above)',
     'password', ''],
   ['sec', 'Access'],
-  ['passcode', 'Dashboard passcode (blank = open)', 'text', ''],
+  ['passcode', 'Dashboard passcode (blank keeps the current passcode)', 'password', ''],
 ];
 
 /* Shared form-builder used by both onboarding() and openSettings(). Returns
    {form, inp} where inp is a map of field-key -> input element. Pre-fills
    from /api/onboarding/defaults and (optionally) overrides from `initial`. */
 function buildSettingsForm({ initial = {}, hideFields = [] } = {}) {
+  initial = { ...initial, flint_mode: initial.flint_mode || (initial.flint_base_url ? 'external' : 'managed') };
   const hide = new Set(hideFields);
   const form = el('div', 'onb-card');
   const inp = {};
   OB_FIELDS.forEach(f => {
     if (f[0] === 'sec') { form.append(el('div', 'onb-sec', f[1])); return; }
+    if (f[0] === 'help') { form.append(el('div', 'onb-help', f[2])); return; }
     const [k, label, type, extra] = f;
     if (hide.has(k)) return;
     if (type === 'help') {
@@ -4120,6 +4370,7 @@ function buildSettingsForm({ initial = {}, hideFields = [] } = {}) {
     const row = el('div', 'onb-field');
     if (type === 'check') {
       const cb = el('input'); cb.type = 'checkbox'; cb.checked = true;
+      cb.name = k; cb.id = 'setting-' + k;
       inp[k] = cb;
       const lab = el('label', 'onb-check');
       lab.append(cb, document.createTextNode(' ' + label));
@@ -4165,6 +4416,10 @@ function buildSettingsForm({ initial = {}, hideFields = [] } = {}) {
         x.setAttribute('autocomplete', 'off');
       }
       inp[k] = x; row.append(x);
+      x.name = k;
+      x.id = 'setting-' + k;
+      const fieldLabel = row.querySelector('label');
+      if (fieldLabel) fieldLabel.htmlFor = x.id;
     }
     form.append(row);
   });
@@ -4174,22 +4429,28 @@ function buildSettingsForm({ initial = {}, hideFields = [] } = {}) {
     if (inp[k].type === 'checkbox') {
       inp[k].checked = !!v && v !== 'false' && v !== 'False';
     } else if (v !== undefined && v !== null) {
+      if (inp[k].tagName === 'SELECT' && !Array.from(inp[k].options).some(o => o.value === String(v))) {
+        const option = document.createElement('option');
+        option.value = String(v); option.textContent = String(v);
+        inp[k].append(option);
+      }
       inp[k].value = v;
     }
   });
+  attachManagedFlint(form, inp);
   // Replace fallback lists with the server's canonical model registry. Keep
   // the selected value (including custom/legacy IDs) when rebuilding.
   api('/models').then(cat => {
     const models = (cat && cat.models) || [];
     const fill = (key, providers, agentOnly = false) => {
       const x = inp[key]; if (!x) return;
-      const selected = x.value;
+      const selected = x.value || initial[key];
       const choices = models.filter(m => providers.includes(m.provider)
         && (!agentOnly || m.agent_cli));
       x.innerHTML = '';
       choices.forEach(m => {
         const op = document.createElement('option');
-        op.value = m.id; op.textContent = m.label || m.id; x.append(op);
+        op.value = m.id; op.textContent = (m.label || m.id) + (m.free ? ' · Free' : ''); x.append(op);
       });
       if (selected && !choices.some(m => m.id === selected)) {
         const op = document.createElement('option');
@@ -4198,15 +4459,95 @@ function buildSettingsForm({ initial = {}, hideFields = [] } = {}) {
       }
       if (selected) x.value = selected;
     };
-    fill('research_agent_model', ['gemini', 'openai', 'claude'], true);
-    fill('author_agent_model', ['gemini', 'openai', 'claude'], true);
-    fill('scoping_model', ['gemini', 'openai', 'claude']);
-    fill('council_gemini_model', ['gemini', 'openai', 'claude']);
-    fill('council_openai_model', ['gemini', 'openai', 'claude']);
-    fill('council_claude_model', ['gemini', 'openai', 'claude']);
-    fill('pi_agent_model', ['gemini', 'openai', 'claude']);
+    const providers = ['gemini', 'openai', 'claude', 'opencode', 'flint'];
+    fill('research_agent_model', providers, true);
+    fill('author_agent_model', providers, true);
+    ['scoping_model', 'council_gemini_model', 'council_openai_model',
+      'council_claude_model', 'pi_agent_model'].forEach(key => fill(key, providers));
+    Object.keys(inp).filter(key => key.endsWith('_model')).forEach(key => {
+      const effort = inp[key.replace(/_model$/, '_effort')];
+      if (!effort) return;
+      const refreshEffort = () => {
+        const model = models.find(m => m.id === inp[key].value);
+        if (!model) return;
+        const selected = effort.value;
+        effort.replaceChildren();
+        const values = model.efforts && model.efforts.length ? model.efforts : [''];
+        values.forEach(value => {
+          const op = document.createElement('option');
+          op.value = value; op.textContent = value || 'Model default'; effort.append(op);
+        });
+        effort.disabled = !model.efforts || !model.efforts.length;
+        effort.value = values.includes(selected) ? selected : values[0];
+      };
+      inp[key].addEventListener('change', refreshEffort);
+      refreshEffort();
+    });
   }).catch(() => {});
   return { form, inp };
+}
+
+const FLINT_ROLE_FIELDS = ['research_agent_model', 'author_agent_model', 'scoping_model',
+  'council_gemini_model', 'council_openai_model', 'council_claude_model', 'pi_agent_model'];
+function usesManagedFlint(cfg) {
+  return cfg.flint_mode !== 'external' && FLINT_ROLE_FIELDS.some(key => cfg[key] === 'flint/local');
+}
+function attachManagedFlint(form, inp) {
+  if (!inp.flint_mode) return;
+  inp.flint_mode.options[0].textContent = 'Automatic local setup';
+  inp.flint_mode.options[1].textContent = 'Use an external server (advanced)';
+  inp.flint_device.options[0].textContent = 'Idle GPU when available, otherwise CPU';
+  inp.flint_device.options[1].textContent = 'CPU only — keep GPUs for experiments';
+  const card = el('div', 'flint-setup');
+  card.append(el('strong', '', 'Local Flint'));
+  card.append(el('p', 'muted', 'Select Flint in any model dropdown to install and start it. The app manages its server and reuses the 26 GB download. Running experiments stay in place.'));
+  const status = el('div', 'flint-setup-status', 'Checking local setup…');
+  status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
+  const progress = document.createElement('progress'); progress.max = 1; progress.hidden = true;
+  const actions = el('div', 'flint-setup-actions');
+  const start = el('button', 'btn xs', 'Prepare Flint'); start.type = 'button';
+  const stop = el('button', 'btn xs', 'Stop Flint'); stop.type = 'button'; stop.hidden = true;
+  actions.append(start, stop); card.append(status, progress, actions);
+  inp.flint_mode.closest('.onb-field').after(card);
+  let timer, busy = false;
+  const cfg = () => Object.fromEntries(Object.entries(inp).map(([key, value]) => [key, value.value]));
+  const render = state => {
+    status.textContent = state.detail || 'Local setup status is unavailable.';
+    const working = ['checking', 'downloading', 'verifying', 'building', 'starting', 'stopping', 'waiting_for_resources'].includes(state.status);
+    progress.hidden = !working;
+    if (typeof state.progress === 'number') progress.value = state.progress; else progress.removeAttribute('value');
+    start.disabled = busy || working || state.status === 'ready';
+    start.textContent = state.status === 'error' ? 'Retry setup' : state.status === 'ready' ? 'Flint ready' : 'Prepare Flint';
+    stop.hidden = !working && state.status !== 'ready';
+    stop.disabled = busy;
+    clearTimeout(timer);
+    if (working || state.status === 'ready') timer = setTimeout(() => { if (form.isConnected) refresh(); }, 3000);
+  };
+  const refresh = async () => {
+    try { render(await api('/flint/status')); }
+    catch (error) { status.textContent = 'Could not read Flint status: ' + error.message; }
+  };
+  const prepare = async () => {
+    if (busy || inp.flint_mode.value === 'external') return;
+    busy = true; start.disabled = true;
+    try { const state = await post('/flint/prepare', { device: inp.flint_device.value }); busy = false; render(state); }
+    catch (error) { busy = false; start.disabled = false; status.textContent = 'Flint setup failed: ' + error.message; }
+  };
+  start.onclick = prepare;
+  stop.onclick = async () => {
+    busy = true; stop.disabled = true;
+    try { const state = await post('/flint/stop', {}); busy = false; render(state); }
+    catch (error) { busy = false; stop.disabled = false; status.textContent = 'Could not stop Flint: ' + error.message; }
+  };
+  const visibility = () => {
+    const external = inp.flint_mode.value === 'external';
+    card.hidden = external;
+    inp.flint_device.closest('.onb-field').hidden = external;
+    ['flint_base_url', 'flint_model', 'flint_token'].forEach(key => inp[key].closest('.onb-field').hidden = !external);
+  };
+  inp.flint_mode.addEventListener('change', () => { visibility(); if (usesManagedFlint(cfg())) prepare(); });
+  FLINT_ROLE_FIELDS.forEach(key => inp[key]?.addEventListener('change', () => { if (usesManagedFlint(cfg())) prepare(); }));
+  visibility(); refresh();
 }
 
 function onboarding(initial = {}) {
@@ -4407,10 +4748,8 @@ PASSCODE=`;
 
   const foot = el('div', 'onb-foot');
   foot.append(el('div', 'onb-note',
-    'This saves your project config — it does not show any demo data. The ' +
-    'autonomous agent that researches your project (a real Claude Code agent ' +
-    'on your GPUs) is the next milestone; until it is built the dashboard ' +
-    'stays empty.'));
+    'Review a research plan first, then start your selected research agent. ' +
+    'Experiments and results appear as the agent runs them.'));
   const start = el('button', 'btn pri onb-start', 'Start research →');
   start.type = 'button';
   foot.append(start); wrap.append(foot);
@@ -4436,20 +4775,38 @@ PASSCODE=`;
     // wrong-format, placeholder) before we waste 30 s of boot time only to
     // discover the token can't authenticate.
     const selectedModel = (cfg.research_agent_model || '').trim();
-    const requiredProvider = selectedModel.startsWith('claude-') ? 'claude'
+    const requiredProvider = selectedModel.startsWith('opencode/') ? 'opencode'
+      : selectedModel.startsWith('flint/') ? 'flint'
+      : selectedModel.startsWith('claude-') ? 'claude'
       : selectedModel.startsWith('gemini-') ? 'gemini' : 'openai';
     const tokenField = { claude: 'claude_token', openai: 'openai_token',
                          gemini: 'gemini_token' }[requiredProvider];
     const tok = (cfg[tokenField] || '').trim();
     const malformedClaude = requiredProvider === 'claude'
       && (!/^sk-ant-/i.test(tok) || tok.length < 25);
-    if (!tok || /replace_?me/i.test(tok) || malformedClaude) {
+    if (tokenField && (!tok || /replace_?me/i.test(tok) || malformedClaude)) {
       aruiAlert(
         `The selected ${requiredProvider} research model needs its full ` +
         'provider API token (not a placeholder).',
         { title: `${requiredProvider} token looks invalid` });
       inp[tokenField]?.focus();
       return;
+    }
+    if (requiredProvider === 'flint' && cfg.flint_mode === 'external' && !/^https?:\/\//i.test(cfg.flint_base_url || '')) {
+      await aruiAlert('Enter the URL of your running Flint server before starting.',
+        { title: 'Flint server required' });
+      inp.flint_base_url?.focus(); return;
+    }
+    if (usesManagedFlint(cfg)) {
+      try {
+        const state = await post('/flint/prepare', { device: cfg.flint_device || 'auto' });
+        if (state.status !== 'ready') {
+          await aruiAlert((state.detail || 'Flint is starting.') + ' Continue when Local Flint shows ready.', { title: 'Local Flint setup' });
+          return;
+        }
+      } catch (error) {
+        await aruiAlert('Could not prepare Flint: ' + error.message, { title: 'Local Flint setup' }); return;
+      }
     }
     // PRE-FLIGHT TOKEN VALIDATION. Probe every configured provider in
     // parallel and report results back. Required tokens (Claude) that
@@ -4461,7 +4818,10 @@ PASSCODE=`;
     try {
       results = await post('/onboarding/validate_tokens', cfg);
     } catch (e) {
-      results = null;       // network blip → skip and proceed
+      await aruiAlert('Could not check model access: ' + e.message,
+        { title: 'Model check failed' });
+      start.disabled = false; start.textContent = 'Start research →';
+      return;
     }
     if (results) {
       const proceed = await showTokenCheckResults(results, requiredProvider);
@@ -4516,6 +4876,8 @@ function showTokenCheckResults(results, requiredProvider = 'claude') {
       const labelMap = { claude: 'Claude API token',
                          openai: 'OpenAI API token',
                          gemini: 'Gemini API token',
+                         opencode: 'OpenCode model access',
+                         flint: 'Local Flint server',
                          github: 'GitHub token',
                          gmail:  'Gmail app password' };
       const optional = name !== requiredProvider;
@@ -4536,13 +4898,13 @@ function showTokenCheckResults(results, requiredProvider = 'claude') {
     }).join('');
     m.innerHTML =
       '<div class="modal-hd"><h2>' +
-      (requiredBad ? `${requiredProvider} token failed — fix it before continuing`
+      (requiredBad ? `${requiredProvider} access failed — fix it before continuing`
                  : 'Some optional tokens failed') +
       '</h2><button class="iconbtn" id="tc-x">✕</button></div>' +
       '<p class="modal-sub">' +
       (requiredBad
-        ? `The Research Agent needs a working ${requiredProvider} API token to start. ` +
-          'Fix the token and try again.'
+        ? `The Research Agent needs working ${requiredProvider} access to start. ` +
+          'Check the details above and try again.'
         : `The required ${requiredProvider} token is good — but some optional providers ` +
           'failed. You can continue and those features (council reviews / ' +
           'emails / lit search) will be silently disabled, or fix them now.') +
@@ -4582,7 +4944,7 @@ function showScopingModal() {
   const app = document.getElementById('app');
   app.className = 'onb';
   app.innerHTML =
-    '<div class="scope-wrap">' +
+    '<div class="scope-wrap" data-mobile-panel="plan">' +
       '<div class="scope-head">' +
         '<div class="boot-brand">autoresearcher<span>UI</span></div>' +
         '<div class="scope-head-r">' +
@@ -4591,6 +4953,11 @@ function showScopingModal() {
           '← Back to onboarding</button>' +
         '</div>' +
       '</div>' +
+      '<nav class="scope-mobile-tabs" aria-label="Research direction">' +
+        '<button type="button" data-scope-panel="plan" class="on" aria-pressed="true">Research plan</button>' +
+        '<button type="button" data-scope-panel="context" aria-pressed="false">Review status</button>' +
+        '<button type="button" data-scope-panel="chat" aria-pressed="false" disabled>Discuss</button>' +
+      '</nav>' +
       '<div class="scope-body">' +
         '<div class="scope-side">' +
           '<div class="scope-sec-h">Literature review</div>' +
@@ -4627,6 +4994,15 @@ function showScopingModal() {
   const ScopeUI = { polling: true, rendered: false, kept: {}, exited: false,
                     finalizing: false, finalizePending: false,
                     finalEdited: false };
+  app.querySelectorAll('[data-scope-panel]').forEach(button => {
+    button.onclick = () => {
+      app.querySelector('.scope-wrap').dataset.mobilePanel = button.dataset.scopePanel;
+      app.querySelectorAll('[data-scope-panel]').forEach(tab => {
+        tab.classList.toggle('on', tab === button);
+        tab.setAttribute('aria-pressed', String(tab === button));
+      });
+    };
+  });
 
   // Escape hatch: bail out of scoping back to the onboarding form (pre-filled
   // with the saved config) so the user can edit and re-submit. Available at
@@ -4765,6 +5141,8 @@ function showScopingModal() {
     // Reveal the conversation panel now that there's a plan to discuss.
     const cc = document.getElementById('scope-chatcol');
     if (cc) cc.style.display = '';
+    const discuss = app.querySelector('[data-scope-panel="chat"]');
+    if (discuss) discuss.disabled = false;
   }
   // Re-render ONLY the plan sections + update the commit textarea IN PLACE
   // (so edits/handlers survive), leaving the chat + in-progress typing alone.
@@ -4790,11 +5168,24 @@ function showScopingModal() {
     if (ScopeUI.finalizing) { ScopeUI.finalizePending = true; return; }
     ScopeUI.finalizing = true;
     const sync = document.getElementById('scope-sync');
-    if (sync) sync.style.display = '';
+    if (sync) {
+      sync.style.display = '';
+      sync.textContent = 'Updating plan…';
+      sync.removeAttribute('role');
+    }
     let d;
-    try { d = await post('/scope/finalize', {}); } catch (e) { d = null; }
+    try { d = await post('/scope/finalize', {}); } catch (e) { d = { error: e.message }; }
     ScopeUI.finalizing = false;
-    if (sync) sync.style.display = 'none';
+    if (d && d.error) {
+      if (sync) {
+        sync.style.display = '';
+        sync.textContent = 'Plan update failed: ' + d.error + ' Your previous plan is preserved.';
+        sync.setAttribute('role', 'alert');
+      }
+      ScopeUI.finalizePending = false;
+      return;
+    }
+    if (sync) { sync.style.display = 'none'; sync.removeAttribute('role'); }
     if (d && d.synthesis) applyPlanUpdate(d);
     if (ScopeUI.finalizePending) { ScopeUI.finalizePending = false; autoFinalize(); }
   }
@@ -4811,16 +5202,22 @@ function showScopingModal() {
     if (!text) return;
     inp.value = ''; inp.disabled = true;
     const c = document.getElementById('scope-chat');
+    const previous = c ? c.innerHTML : '';
     if (c) { c.innerHTML += '<div class="scope-msg user">' + esc(text) + '</div>' +
       '<div class="scope-msg agent scope-thinking">thinking…</div>';
       c.scrollTop = c.scrollHeight; }
     let d;
     try { d = await post('/scope/chat', { text }); }
-    catch (e) { d = null; }
+    catch (e) {
+      d = null; inp.value = text;
+      if (c) c.innerHTML = previous + '<div class="scope-msg agent" role="alert">' +
+        esc('Could not send: ' + e.message + '. Your draft is preserved; please retry.') + '</div>';
+    }
     inp.disabled = false; inp.focus();
     if (d && d.messages) {
       renderChat(d.messages);
-      autoFinalize();        // re-sync the plan in the background, no blocking
+      if (d.error) inp.value = text;
+      else autoFinalize();  // only re-synthesize after a successful model turn
     }
   }
   function keptIdx(kind, n) {
@@ -5262,8 +5659,9 @@ async function openSettings() {
   m.append(el('p', 'modal-sub',
     'Every field from onboarding is editable here. Tokens and passwords show ' +
     'as •••• — leave them blank to keep the saved value, or paste a new value ' +
-    'to replace it. Most changes take effect on the next council / PI cycle; ' +
-    'changes to the Research-agent model only apply on the next research run.'));
+    'to replace it. Agent model changes restart the affected agent using its ' +
+    'existing workspace; training processes keep running. Paused agents use ' +
+    'the new model when resumed. Council and PI changes apply on their next call.'));
   m.append(form);
 
   /* ── Pause / Resume all emails ─────────────────────────────────────
@@ -5299,18 +5697,14 @@ async function openSettings() {
     try {
       await post(wasPaused ? '/emails/resume' : '/emails/pause', {});
       await refreshEmailBtn();
+    } catch (e) {
+      emailHint.textContent = 'Could not change email delivery: ' + e.message;
     } finally { emailBtn.disabled = false; }
   };
   refreshEmailBtn();
   m.append(emailBar);
 
-  /* ── Pause / Resume research loop ─────────────────────────────────
-     Same pattern as the emails bar above. State is stored on the
-     onboarding row (research_paused: bool) and read by:
-       - the orchestrator (skips launching new runs while paused)
-       - the PI agent (skips nudging while paused)
-       - /api/track/run (returns HTTP 423 while paused)
-     In-flight runs keep going; use /api/reset for a hard stop. */
+  /* Open the same verified halt/resume controls used by the dashboard. */
   const resBar = el('div', 'set-email-bar');
   const resLbl = el('div', 'set-email-lbl', 'Autonomous research loop');
   const resBtn = el('button', 'btn xs halt-btn', 'Halt Research');
@@ -5319,23 +5713,15 @@ async function openSettings() {
   const refreshResBtn = async () => {
     try {
       const d = await api('/research/status');
-      if (d.paused) {
-        resBtn.textContent = '▶ Resume research';
-        resBtn.classList.add('pri');
-        resHint.textContent =
-          'Paused — orchestrator + PI are idle; new runs return 423. ' +
-          'In-flight runs are unaffected.';
-      } else {
-        resBtn.textContent = '⏸ Pause research';
-        resBtn.classList.remove('pri');
-        resHint.textContent =
-          'Active — orchestrator launches runs and the PI agent nudges ' +
-          'on schedule.';
-      }
-    } catch (e) { /* keep last */ }
+      resBtn.textContent = d.paused || d.halted ? 'Research controls' : 'Halt Research';
+      resHint.textContent = d.paused || d.halted
+        ? 'Research is paused. Open controls to verify stopped processes or resume.'
+        : 'Halt stops this project’s experiments and queues before offering resume.';
+    } catch (e) { resHint.textContent = 'Could not read research status: ' + e.message; }
   };
   resBtn.onclick = openHaltModal;   // same durable interrupt flow as the
                                     // experiments-table Halt button
+  refreshResBtn();
   m.append(resBar);
 
   /* ── Watchdog config panel (PR 5 of state-control rewrite) ─────────
@@ -5430,14 +5816,14 @@ async function openSettings() {
   const save = el('button', 'btn pri', 'Save settings');
   save.onclick = async () => {
     save.disabled = true; save.textContent = 'Saving…';
+    status.textContent = '';
     const upd = {};
     Object.entries(inp).forEach(([k, x]) => {
       upd[k] = x.type === 'checkbox' ? x.checked : x.value;
     });
-    // Collect watchdog edits — group by script, coerce numerics, persist
-    // before saving the regular onboarding settings so a failure on
-    // either is independently visible.
+    // Save settings and watchdog edits together; never swallow a partial save.
     const wdUpdate = {};
+    let validationError = '';
     wdHost.querySelectorAll('input').forEach(x => {
       const sc = x.dataset.script;
       const kind = x.dataset.kind;
@@ -5447,39 +5833,64 @@ async function openSettings() {
         wdUpdate[sc].enabled = x.checked;
       } else if (kind === 'param') {
         let v = x.value;
-        if (x.type === 'number') v = Number(v);
+        if (x.type === 'number') {
+          v = Number(v);
+          if (x.value.trim() === '' || !Number.isFinite(v) || v < 0)
+            validationError = `${sc}: ${x.dataset.param} must be a non-negative number.`;
+        }
         try { if (typeof v === 'string' && (v.startsWith('[') || v.startsWith('{')))
           v = JSON.parse(v);
-        } catch (e) { /* keep as string */ }
+        } catch (e) { validationError = `${sc}: ${x.dataset.param} must contain valid JSON.`; }
         wdUpdate[sc].params[x.dataset.param] = v;
       }
     });
-    try {
-      if (Object.keys(wdUpdate).length) {
-        await post('/watchdog/config',
-                   { config: wdUpdate, source: 'operator' });
-      }
-    } catch (e) { /* swallowed; main settings save still runs */ }
+    if (validationError) {
+      status.textContent = validationError;
+      save.disabled = false; save.textContent = 'Save settings'; return;
+    }
     try {
       const r = await fetch('/api/settings', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(upd),
-      }).then(r => r.json());
+        body: JSON.stringify({ settings: upd, watchdog: wdUpdate }),
+      }).then(readApiResponse);
       if (r && r.status === 'ok') {
-        status.textContent = 'Saved ✓';
+        status.textContent = settingsSaveMessage(r);
         save.textContent = 'Saved ✓';
-        setTimeout(() => sc.remove(), 800);
+        save.disabled = false;
+        if (S.project) {
+          api('/project').then(project => { S.project = project; }).catch(() => {});
+        }
+      } else if (r && r.saved) {
+        status.textContent = settingsSaveMessage(r) + ' ' + (r.warnings || []).join(' ');
+        save.disabled = false; save.textContent = 'Retry applying settings';
       } else {
         status.textContent = 'Save failed: ' + ((r && r.detail) || '?');
         save.disabled = false; save.textContent = 'Save settings';
       }
     } catch (e) {
-      status.textContent = 'Save failed: ' + e;
+      status.textContent = 'Save failed: ' + e.message;
       save.disabled = false; save.textContent = 'Save settings';
     }
   };
   actions.append(save, status);
   m.append(actions);
+}
+
+function settingsSaveMessage(result) {
+  const messages = ['Saved.'];
+  (result.applied_agents || []).forEach(role => {
+    const label = role === 'author' ? 'Author' : 'Research';
+    messages.push(result.context_preservation?.[role] === 'native_conversation'
+      ? `${label} conversation resumed.` : `${label} continued from saved project state.`);
+  });
+  const reasons = new Set(Object.values(result.pending_reasons || {}));
+  if (reasons.has('conversation_unavailable')) messages.push('The original agent is still running because its conversation could not be verified. The effort change remains pending.');
+  if (reasons.has('model_starting')) messages.push('Flint is preparing. The current agent stays running until the local model is ready.');
+  if (reasons.has('model_unavailable')) messages.push('Flint is not ready. The current agent stays running; check Local Flint setup and retry.');
+  if (reasons.has('active_experiments')) messages.push('Model changes will apply automatically when the agent’s current experiments finish.');
+  if (reasons.has('research_paused')) messages.push('Pending model changes will apply when research resumes.');
+  if (result.pending_agents?.length && !reasons.size) messages.push('Agent changes are pending.');
+  return messages.join(' ');
 }
 
 /* ── archive ──────────────────────────────────────────────────────────── */
@@ -5913,7 +6324,12 @@ function _updateSaveBar() {
   const save = document.getElementById('files-save');
   if (edpath) edpath.textContent =
     (FilesState.file || 'No file open') + (FilesState.dirty ? '  •' : '');
-  if (save) save.disabled = !FilesState.file || !FilesState.dirty;
+  if (save) {
+    const tab = FilesState.tabs.find(t => t.path === FilesState.file);
+    save.disabled = !FilesState.file || !FilesState.dirty || !!tab?.saving;
+    save.textContent = tab?.saving ? 'Saving…'
+      : !tab?.dirty && tab?.savedAt && Date.now() - tab.savedAt < 1200 ? 'Saved ✓' : 'Save';
+  }
 }
 async function newFileFlow() {
   const dir = FilesState.cwd || '';
@@ -5926,9 +6342,9 @@ async function newFileFlow() {
   try {
     const r = await fetch('/api/files/write', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path, content: '' }),
+      body: JSON.stringify({ path, content: '', create_only: true }),
     });
-    const d = await r.json();
+    const d = await readApiResponse(r);
     if (!d || !d.ok) {
       aruiAlert('Could not create file: ' + ((d && d.error) || 'unknown') +
         '. (The folder must exist; pick a name in the current folder.)',
@@ -5944,33 +6360,36 @@ async function newFileFlow() {
 }
 async function saveCurrentFile() {
   if (!FilesState.file || !FilesState.editor) return;
-  const save = document.getElementById('files-save');
-  if (save) { save.disabled = true; save.textContent = 'Saving…'; }
+  const path = FilesState.file;
+  const tab = FilesState.tabs.find(t => t.path === path);
+  if (!tab || tab.saving) return;
+  const model = tab.model;
+  const version = model.getVersionId();
+  const content = model.getValue();
+  tab.saving = true;
+  _updateSaveBar();
   try {
-    const r = await fetch('/api/files/write', {
+    const d = await fetch('/api/files/write', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: FilesState.file,
-                             content: FilesState.editor.getValue() }),
-    });
-    const d = await r.json();
-    if (d && d.ok) {
-      FilesState.dirty = false;
-      const tab = FilesState.tabs.find(t => t.path === FilesState.file);
-      if (tab) tab.dirty = false;
-      _paintTabs();
-      if (save) save.textContent = 'Saved ✓';
-      setTimeout(() => { const s = document.getElementById('files-save');
-        if (s) s.textContent = 'Save'; _updateSaveBar(); }, 1200);
-    } else {
-      if (save) save.textContent = 'Save';
-      aruiAlert('Save failed: ' + ((d && d.error) || 'unknown'),
-        { title: 'Save failed' });
+      body: JSON.stringify({ path, content }),
+    }).then(readApiResponse);
+    if (!d || !d.ok) throw new Error(d?.detail || d?.error || 'Unknown save failure');
+    // A tab can be switched, edited, closed, or reopened while the write is
+    // in flight. Only the exact model version written to disk is now clean.
+    if (FilesState.tabs.includes(tab) && !model.isDisposed()
+        && model.getVersionId() === version) {
+      tab.dirty = false; tab.savedAt = Date.now();
+      if (FilesState.file === path) FilesState.dirty = false;
+      setTimeout(_updateSaveBar, 1200);
     }
   } catch (e) {
-    if (save) save.textContent = 'Save';
-    aruiAlert('Save failed: ' + String(e), { title: 'Save failed' });
+    aruiAlert('Could not save ' + path + ': ' + e.message,
+      { title: 'Save failed — edits preserved' });
+  } finally {
+    tab.saving = false;
+    _paintTabs();
+    _updateSaveBar();
   }
-  _updateSaveBar();
 }
 
 /* ── Lessons (the council's running notebook, parsed from lessons.md) ─── */
@@ -6762,6 +7181,20 @@ function paintPaperTab(c) {
 }
 
 /* ── Today view (the heartbeat) ──────────────────────────────────────── */
+async function requestPaperScaffold(button) {
+  const label = button?.textContent;
+  if (button) { button.disabled = true; button.textContent = 'Scaffolding…'; }
+  try {
+    const result = await post('/paper/scaffold', {});
+    if (!result || result.ok === false) throw new Error(result?.detail || result?.error || 'Scaffolding failed');
+    return result;
+  } catch (error) {
+    await aruiAlert('Could not scaffold the paper: ' + error.message, { title: 'Scaffold failed' });
+    return null;
+  } finally {
+    if (button?.isConnected) { button.disabled = false; button.textContent = label; }
+  }
+}
 function paintToday(b) {
   const t = PaperState.today || {};
   const st = PaperState.state || {};
@@ -6884,8 +7317,8 @@ function paintToday(b) {
   // Inline "Scaffold now" CTA if there are no claims.
   const sb = b.querySelector('#td-scaffold-now');
   if (sb) sb.onclick = async () => {
-    sb.disabled = true; sb.textContent = 'scaffolding…';
-    const r = await post('/paper/scaffold', {});
+    const r = await requestPaperScaffold(sb);
+    if (!r) return;
     await loadPaperState();
     paintPaperTab(document.querySelector('.paper-wrap').parentElement);
     aruiAlert(`Scaffold: +${r.claims_added} claims, +${r.runs_added} runs queued.`,
@@ -7067,7 +7500,7 @@ function paintCoverage(b) {
         <th>strength</th></tr></thead>
       <tbody>${claims.map(c => {
         const e = evidenceFor(c.id);
-        return `<tr><td><button class="cov-star ${c.ready?'on':''}" data-cid="${esc(c.id)}">★</button></td>` +
+        return `<tr><td><button class="cov-star ${c.ready?'on':''}" data-cid="${esc(c.id)}" aria-pressed="${!!c.ready}" aria-label="${esc('Mark claim ' + (c.title || c.id) + (c.ready ? ' not ready' : ' ready'))}">★</button></td>` +
           `<td><div class="cov-title">${esc(c.title || c.id)}</div>` +
           `<div class="cov-summary">${esc(c.summary_md || '')}</div></td>` +
           `<td>${cell(e.mainDone, e.main || 1)}</td>` +
@@ -7080,6 +7513,25 @@ function paintCoverage(b) {
           `</tr>`;
       }).join('')}</tbody>
     </table>`;
+  b.querySelectorAll('.cov-star').forEach(button => {
+    button.onclick = async () => {
+      const claim = claims.find(c => c.id === button.dataset.cid);
+      if (!claim) return;
+      const ready = !claim.ready;
+      button.disabled = true;
+      try {
+        const result = await fetch('/api/paper/claims/' + encodeURIComponent(claim.id) + '/update', {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ready }),
+        }).then(readApiResponse);
+        if (result.ok === false) throw new Error(result.detail || 'Claim update failed');
+        claim.ready = ready;
+        paintCoverage(b);
+      } catch (error) {
+        button.disabled = false;
+        aruiAlert('Could not update the claim: ' + error.message, { title: 'Claim unchanged' });
+      }
+    };
+  });
 }
 
 /* ── Paper Plan (ordered ablation checklist, grouped by claim) ───────── */
@@ -7098,7 +7550,8 @@ function paintPlan(b) {
       '</div>' +
       '<button class="btn pri" id="plan-scaffold">⚡ Scaffold now</button>';
     b.querySelector('#plan-scaffold').onclick = async () => {
-      const r = await post('/paper/scaffold', {});
+      const r = await requestPaperScaffold(b.querySelector('#plan-scaffold'));
+      if (!r) return;
       await loadPaperState();
       paintPaperTab(document.querySelector('.paper-wrap').parentElement);
       aruiAlert(`Scaffold complete — ${r.claims_added} new claims, ` +
@@ -7181,7 +7634,8 @@ function paintPlan(b) {
     </div>
     ${groupHTML}`;
   b.querySelector('#plan-rescaffold').onclick = async () => {
-    const r = await post('/paper/scaffold', {});
+    const r = await requestPaperScaffold(b.querySelector('#plan-rescaffold'));
+    if (!r) return;
     await loadPaperState();
     paintPaperTab(document.querySelector('.paper-wrap').parentElement);
     aruiAlert(`Scaffold: +${r.claims_added} claims, +${r.runs_added} runs queued.`,
@@ -7189,7 +7643,7 @@ function paintPlan(b) {
   };
   b.querySelectorAll('.plan-queue').forEach(btn => {
     btn.onclick = async () => {
-      await post('/paper/scaffold', {});
+      if (!(await requestPaperScaffold(btn))) return;
       await loadPaperState();
       paintPaperTab(document.querySelector('.paper-wrap').parentElement);
     };
@@ -7757,6 +8211,7 @@ function citationCard(c, approved) {
 
 
 /* ── Related Work ──────────────────────────────────────────────────────── */
+const citationDrafts = new Map();
 function paintRelatedWork(b) {
   const st = PaperState.state || {};
   const cites = st.citations || [];
@@ -7797,20 +8252,64 @@ function paintRelatedWork(b) {
           <tr>
             <td><b>${esc((c.title || c.key || '').slice(0,80))}</b><br>
                 <span style="color:var(--muted);font-size:11px">${esc(c.authors || '')} · ${esc(c.year||'')}</span></td>
-            <td><textarea class="diff-cell" data-key="${esc(c.key)}" data-fld="same" placeholder="(empty)">${esc(c.same_md||'')}</textarea></td>
-            <td><textarea class="diff-cell" data-key="${esc(c.key)}" data-fld="diff" placeholder="(empty)">${esc(c.diff_md||'')}</textarea></td>
+            <td><textarea class="diff-cell" data-key="${esc(c.key)}" data-fld="same" aria-label="${esc('Similarities: ' + c.title)}" placeholder="(empty)">${esc((citationDrafts.get(c.key) || c).same_md||'')}</textarea></td>
+            <td><textarea class="diff-cell" data-key="${esc(c.key)}" data-fld="diff" aria-label="${esc('Differences: ' + c.title)}" placeholder="(empty)">${esc((citationDrafts.get(c.key) || c).diff_md||'')}</textarea></td>
           </tr>`).join('')}
         </tbody>
       </table>
+      <div class="citation-save-row"><button class="btn pri" id="citation-save"${citationDrafts.size ? '' : ' disabled'}>Save notes</button>
+      <span id="citation-save-status" role="status">${citationDrafts.size ? 'Unsaved notes' : ''}</span></div>
     ` : '<div class="empty2">Approve some citations first to populate the matrix.</div>'}
   `;
+  const save = b.querySelector('#citation-save');
+  const status = b.querySelector('#citation-save-status');
+  b.querySelectorAll('.diff-cell').forEach(input => {
+    input.oninput = () => {
+      const citation = cites.find(c => c.key === input.dataset.key) || {};
+      const draft = citationDrafts.get(input.dataset.key) || {
+        same_md: citation.same_md || '', diff_md: citation.diff_md || '',
+      };
+      draft[input.dataset.fld + '_md'] = input.value;
+      citationDrafts.set(input.dataset.key, draft);
+      save.disabled = false; status.textContent = 'Unsaved notes';
+    };
+  });
+  if (save) save.onclick = async () => {
+    save.disabled = true; status.textContent = 'Saving notes…';
+    b.querySelectorAll('.diff-cell').forEach(input => input.disabled = true);
+    try {
+      for (const [key, draft] of [...citationDrafts]) {
+        const result = await fetch('/api/paper/citations/' + encodeURIComponent(key) + '/update', {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draft),
+        }).then(readApiResponse);
+        if (result.ok === false) throw new Error(result.detail || 'Citation update failed');
+        const citation = cites.find(c => c.key === key);
+        if (citation) Object.assign(citation, draft);
+        citationDrafts.delete(key);
+      }
+      status.textContent = 'Notes saved';
+    } catch (error) {
+      status.textContent = 'Could not save: ' + error.message + '. Your unsaved notes are preserved.';
+    } finally {
+      save.disabled = citationDrafts.size === 0;
+      b.querySelectorAll('.diff-cell').forEach(input => input.disabled = false);
+    }
+  };
   // Wire per-citation Approve / Ignore.
   b.querySelectorAll('.rw-approve').forEach(btn => {
     btn.onclick = async () => {
+      const label = btn.textContent;
       btn.disabled = true; btn.textContent = '…';
-      await post('/paper/citations/' + encodeURIComponent(btn.dataset.key) + '/approve', {});
-      await loadPaperState();
-      paintPaperTab(document.querySelector('.paper-wrap').parentElement);
+      try {
+        const result = await post('/paper/citations/' + encodeURIComponent(btn.dataset.key) + '/approve', {});
+        if (result.ok === false) throw new Error(result.detail || 'Citation approval failed');
+        await loadPaperState();
+        paintPaperTab(document.querySelector('.paper-wrap').parentElement);
+      } catch (error) {
+        aruiAlert('Could not approve the citation: ' + error.message, { title: 'Citation unchanged' });
+      } finally {
+        if (btn.isConnected) { btn.disabled = false; btn.textContent = label; }
+      }
     };
   });
   b.querySelectorAll('.rw-toggle').forEach(btn => {
@@ -7868,9 +8367,18 @@ function paintVersions(b) {
       'Tag this version with a label (e.g. v0-draft, v1-internal, v2-submitted)',
       { title: 'Pin a paper version', defaultValue: 'v0-draft' });
     if (!label) return;
-    await post('/paper/versions/pin', { label });
-    await loadPaperState();
-    paintPaperTab(document.querySelector('.paper-wrap').parentElement);
+    const button = b.querySelector('#ver-pin');
+    button.disabled = true;
+    try {
+      const result = await post('/paper/versions/pin', { label });
+      if (result.ok === false || !result.id) throw new Error(result.detail || 'Version was not pinned');
+      await loadPaperState();
+      paintPaperTab(document.querySelector('.paper-wrap').parentElement);
+    } catch (error) {
+      await aruiAlert('Could not pin this version: ' + error.message, {title: 'Version not pinned'});
+    } finally {
+      if (button.isConnected) button.disabled = false;
+    }
   };
   b.querySelector('#ver-revsim').onclick = async () => {
     const ok = await aruiConfirm(
@@ -7880,11 +8388,19 @@ function paintVersions(b) {
       'an approvable add_ablation decision in your queue. Takes ~5 min.',
       { title: 'Run reviewer simulation?', okText: 'Run simulation' });
     if (!ok) return;
-    const r = await post('/paper/reviewer_sim/run', {});
-    document.getElementById('ver-revsim-result').innerHTML =
-      '<div class="empty2" style="margin-top:14px">Reviewer simulation started. ' +
-      'Results will appear in the Decision Queue as add_ablation rows over the ' +
-      'next 2-5 minutes.</div>';
+    const button = b.querySelector('#ver-revsim');
+    const result = b.querySelector('#ver-revsim-result');
+    button.disabled = true;
+    result.textContent = 'Starting reviewer simulation…';
+    try {
+      const response = await post('/paper/reviewer_sim/run', {});
+      if (response.ok === false) throw new Error(response.detail || 'Reviewer simulation did not start');
+      result.textContent = 'Reviewer simulation started. Results will appear in the Decision Queue over the next 2–5 minutes.';
+    } catch (error) {
+      result.textContent = 'Could not start reviewer simulation: ' + error.message;
+    } finally {
+      button.disabled = false;
+    }
   };
   b.querySelector('#ver-submit').onclick = openSubmitHelper;
   // Wire per-row diff buttons.
@@ -7897,9 +8413,6 @@ function paintVersions(b) {
 async function openVersionDiffModal(vid, allVersions) {
   // Pick the "against" version.
   const others = allVersions.filter(v => v.id !== vid);
-  if (!others.length) {
-    return aruiAlert('Need at least 2 pinned versions to diff. Pin another version first.');
-  }
   const sc = el('div', 'mscrim');
   const m = el('div', 'modal modal-wide');
   m.innerHTML =
@@ -7907,8 +8420,9 @@ async function openVersionDiffModal(vid, allVersions) {
     `<button class="iconbtn" id="vdx">✕</button></div>` +
     `<div class="modal-sub">A: <b>${esc(allVersions.find(v=>v.id===vid)?.label||vid)}</b>  vs.  ` +
     `B: <select id="vd-against" style="margin-left:6px">` +
+    `<option value="">Latest committed version (HEAD)</option>` +
     others.map(o => `<option value="${esc(o.id)}">${esc(o.label)}</option>`).join('') +
-    `</select> <span style="color:var(--muted);font-size:11px;margin-left:6px">(or HEAD if nothing selected)</span>` +
+    `</select>` +
     `<button class="btn xs" id="vd-go" style="margin-left:10px">Diff</button></div>` +
     `<div id="vd-out" class="vd-out"><div class="empty2">Pick a version, then Diff.</div></div>` +
     `<div class="modal-actions"><button class="btn" id="vd-close">Close</button></div>`;
@@ -7918,19 +8432,27 @@ async function openVersionDiffModal(vid, allVersions) {
   m.querySelector('#vd-close').onclick = () => sc.remove();
   m.querySelector('#vd-go').onclick = async () => {
     const out = m.querySelector('#vd-out');
+    const button = m.querySelector('#vd-go');
+    button.disabled = true;
     out.innerHTML = '<div class="empty2">computing diff…</div>';
     const against = m.querySelector('#vd-against').value;
-    const r = await api(`/paper/versions/${vid}/diff?against=${against}`);
-    if (!r.ok) { out.innerHTML = `<div class="empty2">Diff failed: ${esc(r.detail||'?')}</div>`; return; }
-    if (!r.files.length) { out.innerHTML = '<div class="empty2">No changes between these versions.</div>'; return; }
-    out.innerHTML = r.files.map(f =>
-      `<div class="vd-file"><div class="vd-file-h">${esc(f.path)}</div>` +
-      `<pre class="vd-file-body">${esc(f.diff).split('\n').map(ln => {
-        const col = ln.startsWith('+') ? 'var(--ok)'
-                    : ln.startsWith('-') ? 'var(--bad)'
-                    : ln.startsWith('@@') ? 'var(--accent)' : 'var(--text-2)';
-        return `<span style="color:${col}">${ln}</span>`;
-      }).join('\n')}</pre></div>`).join('');
+    try {
+      const r = await api(`/paper/versions/${encodeURIComponent(vid)}/diff?against=${encodeURIComponent(against)}`);
+      if (!r.ok) throw new Error(r.detail || 'Unknown diff error');
+      if (!r.files.length) { out.innerHTML = '<div class="empty2">No changes between these versions.</div>'; return; }
+      out.innerHTML = r.files.map(f =>
+        `<div class="vd-file"><div class="vd-file-h">${esc(f.path)}</div>` +
+        `<pre class="vd-file-body">${esc(f.diff).split('\n').map(ln => {
+          const col = ln.startsWith('+') ? 'var(--ok)'
+                      : ln.startsWith('-') ? 'var(--bad)'
+                      : ln.startsWith('@@') ? 'var(--accent)' : 'var(--text-2)';
+          return `<span style="color:${col}">${ln}</span>`;
+        }).join('\n')}</pre></div>`).join('');
+    } catch (error) {
+      out.textContent = 'Diff failed: ' + error.message;
+    } finally {
+      button.disabled = false;
+    }
   };
 }
 
@@ -8017,29 +8539,47 @@ async function paintShare(b) {
     <div id="share-status" class="empty2" style="margin-top:10px"></div>
   `;
   b.querySelector('#share-gen').onclick = async () => {
-    const r = await post('/paper/share/token', {});
-    if (r.token) {
+    const button = b.querySelector('#share-gen'); button.disabled = true;
+    try {
+      const r = await post('/paper/share/token', {});
+      if (!r.token) throw new Error(r.detail || 'The server did not return a share token');
       const full = window.location.origin + r.url;
       b.querySelector('#share-url').value = full;
       b.querySelector('#share-status').innerHTML =
         `<span style="color:var(--ok)">✓ token generated. Share this URL.</span>`;
+    } catch (error) {
+      b.querySelector('#share-status').textContent = 'Could not generate a link: ' + error.message;
+    } finally {
+      button.disabled = false;
     }
   };
-  b.querySelector('#share-copy').onclick = () => {
+  b.querySelector('#share-copy').onclick = async () => {
     const u = b.querySelector('#share-url').value;
     if (!u || u.startsWith('(')) { aruiAlert('Generate a token first.'); return; }
-    navigator.clipboard.writeText(u);
-    b.querySelector('#share-status').innerHTML =
-      `<span style="color:var(--ok)">✓ copied to clipboard.</span>`;
+    try {
+      if (!navigator.clipboard) throw new Error('Clipboard access is unavailable');
+      await navigator.clipboard.writeText(u);
+      b.querySelector('#share-status').textContent = 'Copied to clipboard.';
+    } catch (error) {
+      b.querySelector('#share-url').select();
+      b.querySelector('#share-status').textContent = 'Could not copy automatically. Select and copy the link above.';
+    }
   };
   b.querySelector('#share-revoke').onclick = async () => {
     const ok = await aruiConfirm('Revoke the share link? Existing URL will stop working.',
       { title: 'Revoke share token', danger: true });
     if (!ok) return;
-    await fetch('/api/paper/share/token', { method: 'DELETE' });
-    b.querySelector('#share-url').value = '(no token yet)';
-    b.querySelector('#share-status').innerHTML =
-      `<span style="color:var(--muted)">Token revoked.</span>`;
+    const button = b.querySelector('#share-revoke'); button.disabled = true;
+    try {
+      const result = await fetch('/api/paper/share/token', { method: 'DELETE' }).then(readApiResponse);
+      if (result.ok === false) throw new Error(result.detail || 'Revoke failed');
+      b.querySelector('#share-url').value = '(no token yet)';
+      b.querySelector('#share-status').textContent = 'Token revoked.';
+    } catch (error) {
+      b.querySelector('#share-status').textContent = 'Could not revoke the link: ' + error.message + '. The existing link may still be active.';
+    } finally {
+      button.disabled = false;
+    }
   };
 }
 
@@ -8464,18 +9004,24 @@ function renderAuthkeys(c) {
       '<textarea class="ak-add" placeholder="ssh-ed25519 AAAA… you@host">' +
       '</textarea><button class="btn ak-addbtn">Add key</button>' +
       '<span class="ak-status"></span>';
+    const copyKeyText = async (button, value, label) => {
+      button.disabled = true;
+      try {
+        if (!value) throw new Error('The requested key text is unavailable');
+        if (!navigator.clipboard) throw new Error('Clipboard access is unavailable');
+        await navigator.clipboard.writeText(value);
+        button.textContent = 'Copied ✓';
+        setTimeout(() => button.textContent = label, 1400);
+      } catch (error) {
+        button.textContent = label;
+        aruiAlert('Could not copy: ' + error.message + '. Select and copy the public key above.',
+          { title: 'Clipboard unavailable' });
+      } finally { button.disabled = false; }
+    };
     const cpb = c.querySelector('.ak-copy-pub');
-    if (cpb) cpb.onclick = () => {
-      navigator.clipboard?.writeText(pk.pubkey);
-      cpb.textContent = 'Copied ✓';
-      setTimeout(() => cpb.textContent = 'Copy public key', 1400);
-    };
+    if (cpb) cpb.onclick = () => copyKeyText(cpb, pk.pubkey, 'Copy public key');
     const cob = c.querySelector('.ak-copy-oneliner');
-    if (cob) cob.onclick = () => {
-      navigator.clipboard?.writeText(pk.install_one_liner || '');
-      cob.textContent = 'Copied ✓';
-      setTimeout(() => cob.textContent = 'Copy install one-liner', 1400);
-    };
+    if (cob) cob.onclick = () => copyKeyText(cob, pk.install_one_liner, 'Copy install one-liner');
     c.querySelectorAll('.ak-del').forEach(b => {
       b.onclick = async () => {
         const ok = await aruiConfirm(
@@ -9133,6 +9679,8 @@ async function renderAnalysis(c) {
           <div class="anav2-bar-l">
             <button class="anav2-add">+ Add panel</button>
             <button class="anav2-reset">Reset to defaults</button>
+            <span class="anav2-save-status" role="status"></span>
+            <button class="btn anav2-save-retry" hidden>Retry save</button>
             <span class="anav2-baseline-tag" style="display:none">
               <span class="anav2-base-dot">★</span>
               <span class="anav2-base-name"></span>
@@ -9161,6 +9709,7 @@ async function renderAnalysis(c) {
     syncUrl();
   };
   c.querySelector('.anav2-add').onclick = () => openAddPanelModal(c);
+  c.querySelector('.anav2-save-retry').onclick = () => persistAnalysisPanels();
   c.querySelector('.anav2-reset').onclick = async () => {
     const ok = await aruiConfirm(
       'This replaces your current panel set with the project-aware ' +
@@ -9168,17 +9717,26 @@ async function renderAnalysis(c) {
       'learning rate, time per step).',
       { title: 'Reset panels to defaults?', okText: 'Reset panels' });
     if (!ok) return;
-    AnaState.panels = [];
-    // Pull defaults from the backend (which provides them when saved is empty)
+    if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
+    ++_panelSaveVersion;
+    const controls = [...c.querySelectorAll('.anav2-panel button,.anav2-panel input,.anav2-add,.anav2-reset')]
+      .map(control => [control, control.disabled]);
+    controls.forEach(([control]) => control.disabled = true);
+    setAnalysisSaveState('Restoring default panels…');
     try {
-      await fetch('/api/analysis/panels', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ panels: [] }),
-      });
+      // An intentionally empty layout is saved as []; reset is explicit.
+      await queuePanelWrite({ reset: true });
       const p = await api('/analysis/panels');
+      if (!Array.isArray(p?.panels)) throw new Error('The server did not return default panels');
       AnaState.panels = (p && p.panels) || [];
-    } catch (e) { /* keep empty */ }
-    renderAnaPanels(c);
+      AnaState.expandedPanel = null;
+      renderAnaPanels(c);
+      setAnalysisSaveState('Default layout restored');
+    } catch (e) {
+      setAnalysisSaveState('Could not reset layout: ' + e.message + '. Your current panels remain visible.', true);
+    } finally {
+      controls.forEach(([control, disabled]) => { if (control.isConnected) control.disabled = disabled; });
+    }
   };
   // Load keys + panels + initial selection from URL
   try {
@@ -9201,6 +9759,7 @@ async function renderAnalysis(c) {
   renderAnaBaselineTag(c);
   renderAnaTable(c);
   renderAnaPanels(c);
+  if (AnaState.saveState) setAnalysisSaveState(AnaState.saveState.text, AnaState.saveState.error);
 }
 
 function renderAnaBaselineTag(c) {
@@ -9232,7 +9791,8 @@ function _runFieldValue(r, field) {
 function _matchesClause(r, clause) {
   const v = _runFieldValue(r, clause.field);
   const tv = (clause.value || '').toString().toLowerCase();
-  const num = parseFloat(clause.value);
+  const comparable = clause.field === 'started_at' ? Date.parse(v) : v;
+  const num = clause.field === 'started_at' ? Date.parse(clause.value) : parseFloat(clause.value);
   switch (clause.op) {
     case '=':   return String(v).toLowerCase() === tv;
     case '!=':  return String(v).toLowerCase() !== tv;
@@ -9240,10 +9800,10 @@ function _matchesClause(r, clause) {
       return String(v).toLowerCase().includes(tv);
     case '!contains':
       return !String(v).toLowerCase().includes(tv);
-    case '>':   return typeof v === 'number' && v > num;
-    case '<':   return typeof v === 'number' && v < num;
-    case '>=':  return typeof v === 'number' && v >= num;
-    case '<=':  return typeof v === 'number' && v <= num;
+    case '>':   return typeof comparable === 'number' && comparable > num;
+    case '<':   return typeof comparable === 'number' && comparable < num;
+    case '>=':  return typeof comparable === 'number' && comparable >= num;
+    case '<=':  return typeof comparable === 'number' && comparable <= num;
     default: return true;
   }
 }
@@ -9446,10 +10006,11 @@ function openFilterModal(c) {
   };
   m.querySelector('#fm-clear').onclick = () => {
     rows.length = 0; paint();
+    m.querySelector('#fm-hide-crashed').checked = false;
   };
   m.querySelector('#fm-apply').onclick = () => {
     AnaState.filters = rows.filter(r =>
-      r.field && r.op && (r.value !== '' || r.field === 'status'));
+      r.field && r.op && String(r.value ?? '').trim() !== '');
     AnaState.hideCrashed = m.querySelector('#fm-hide-crashed').checked;
     sc.remove();
     renderAnaTable(c);
@@ -9457,6 +10018,17 @@ function openFilterModal(c) {
 }
 
 // === Sort menu ===========================================================
+function placeAnalysisPopover(pop, anchor) {
+  const r = anchor.getBoundingClientRect();
+  const vv = window.visualViewport;
+  const top = vv ? vv.offsetTop : 0, height = vv ? vv.height : innerHeight;
+  pop.style.maxHeight = Math.max(80, height - 16) + 'px';
+  pop.style.overflowY = 'auto';
+  document.body.append(pop);
+  const bounds = pop.getBoundingClientRect();
+  pop.style.left = Math.max(8, Math.min(r.left, innerWidth - bounds.width - 8)) + 'px';
+  pop.style.top = Math.max(top + 8, Math.min(r.bottom + 4, top + height - bounds.height - 8)) + 'px';
+}
 function openSortMenu(c, anchor) {
   document.querySelectorAll('.anav2-popover').forEach(p => p.remove());
   const pop = el('div', 'anav2-popover');
@@ -9470,10 +10042,7 @@ function openSortMenu(c, anchor) {
   ).join('') +
     `<div class="anav2-pop-sep"></div>` +
     `<button class="anav2-pop-it" data-dir>${AnaState.sortAsc?'ascending':'descending'}</button>`;
-  const r = anchor.getBoundingClientRect();
-  pop.style.left = r.left + 'px';
-  pop.style.top = (r.bottom + 4) + 'px';
-  document.body.append(pop);
+  placeAnalysisPopover(pop, anchor);
   setTimeout(() => {
     const off = (e) => {
       if (pop.contains(e.target)) return;
@@ -9529,10 +10098,7 @@ function openBulkMenu(c, anchor) {
       `Add top-5 by metric (best on frontier)</button>` +
     `<button class="anav2-pop-it" data-a="add-recent">` +
       `Add 5 most-recent kept</button>`;
-  const r = anchor.getBoundingClientRect();
-  pop.style.left = r.left + 'px';
-  pop.style.top = (r.bottom + 4) + 'px';
-  document.body.append(pop);
+  placeAnalysisPopover(pop, anchor);
   setTimeout(() => {
     const off = (e) => {
       if (pop.contains(e.target)) return;
@@ -9866,16 +10432,43 @@ function scheduleLiveRefresh(run_id) {
 }
 
 let _saveTimer = null;
+let _panelSaveVersion = 0;
+let _panelWrites = Promise.resolve();
+function queuePanelWrite(body) {
+  const request = _panelWrites.catch(() => {}).then(async () => {
+    const result = await fetch('/api/analysis/panels', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    }).then(readApiResponse);
+    if (result.ok === false) throw new Error(result.detail || 'Layout save failed');
+    return result;
+  });
+  _panelWrites = request;
+  return request;
+}
+function setAnalysisSaveState(text, error = false) {
+  AnaState.saveState = { text, error };
+  const c = AnaState.container;
+  const status = c?.querySelector('.anav2-save-status');
+  if (status) { status.textContent = text; status.classList.toggle('error', error); }
+  const retry = c?.querySelector('.anav2-save-retry');
+  if (retry) retry.hidden = !error;
+}
+async function persistAnalysisPanels(version = _panelSaveVersion) {
+  if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
+  const panels = JSON.parse(JSON.stringify(AnaState.panels));
+  setAnalysisSaveState('Saving layout…');
+  try {
+    await queuePanelWrite({ panels });
+    if (version === _panelSaveVersion) setAnalysisSaveState('Layout saved');
+  } catch (e) {
+    if (version === _panelSaveVersion) setAnalysisSaveState('Layout not saved: ' + e.message, true);
+  }
+}
 function savePanelsDebounced() {
   if (_saveTimer) clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(async () => {
-    try {
-      await fetch('/api/analysis/panels', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ panels: AnaState.panels }),
-      });
-    } catch (e) { /* ignore */ }
-  }, 500);
+  const version = ++_panelSaveVersion;
+  setAnalysisSaveState('Unsaved layout changes');
+  _saveTimer = setTimeout(() => persistAnalysisPanels(version), 500);
 }
 
 function syncUrl() {

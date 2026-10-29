@@ -1,0 +1,21 @@
+{
+  "checked_at": "2026-10-29T19:03:28.679673+00:00",
+  "endpoint": "https://generativelanguage.googleapis.com/v1beta/models",
+  "credential_present": true,
+  "pages": 1,
+  "carbon_matches": [],
+  "gemini_4_matches": [
+    {
+      "name": "models/gemini-4-argon",
+      "displayName": "Gemini 4 Argon",
+      "supportedGenerationMethods": [
+        "generateContent",
+        "countTokens",
+        "batchGenerateContent"
+      ]
+    }
+  ],
+  "status": "complete",
+  "http_status": 200,
+  "model_count": 60
+}

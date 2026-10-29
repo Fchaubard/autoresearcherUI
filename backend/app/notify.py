@@ -27,6 +27,7 @@ import urllib.request
 from email.message import EmailMessage
 
 from .config import DATA_DIR, WORKSPACE_DIR
+from .safe_errors import describe as _safe_error
 from .db import SessionLocal
 from .models import Event, Project, Run, Setting
 
@@ -315,7 +316,9 @@ def emails_paused() -> bool:
         cfg = _cfg() or {}
         return bool(cfg.get("emails_paused"))
     except Exception:                                       # noqa: BLE001
-        return False
+        # A broken settings store must never turn a user's pause into an
+        # opt-in. In particular, do not send while SQLite is unavailable.
+        return True
 
 
 def research_paused() -> bool:
@@ -330,11 +333,15 @@ def research_paused() -> bool:
     configured. Gate is intentionally co-located with `emails_paused`
     because both are pause flags on the onboarding settings row read by
     multiple subsystems."""
+    from . import research_control
+    if research_control.read().get("paused"):
+        return True
     try:
         cfg = _cfg() or {}
+        research_control.remember_workspace(cfg)
         return bool(cfg.get("research_paused"))
     except Exception:                                       # noqa: BLE001
-        return False
+        return True  # DB outage must not resume queued research.
 
 
 # ───────────────────── tmux interrupt helpers (Pause robustness) ─────────────
@@ -347,6 +354,40 @@ def research_paused() -> bool:
 # with a literal message so the next user-typed input shows the human's intent.
 
 _AGENT_TMUX_SESSIONS = ("agent", "author")
+
+
+def _pause_draft_path(session: str):
+    if session not in _AGENT_TMUX_SESSIONS:
+        raise ValueError("Unknown agent session")
+    return DATA_DIR / f"pause-draft-{session}.json"
+
+
+def _pause_pane_identity(session: str) -> str:
+    import subprocess as _sp
+    result = _sp.run(["tmux", "display-message", "-p", "-t", f"={session}:",
+                      "#{pane_id} #{pane_pid}"], capture_output=True, text=True, timeout=4)
+    value = result.stdout.decode() if isinstance(result.stdout, bytes) else result.stdout
+    if result.returncode or not value or len(value.split()) != 2:
+        raise OSError("Agent pane identity is unavailable")
+    return value.strip()
+
+
+def _record_pause_draft(session: str, text: str, identity: str) -> None:
+    import tempfile
+    path = _pause_draft_path(session)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=DATA_DIR,
+                                         prefix=".pause-draft-", delete=False) as handle:
+            temporary = handle.name
+            os.fchmod(handle.fileno(), 0o600)
+            json.dump({"text": text, "pane": identity}, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def _tmux_session_alive(session: str) -> bool:
@@ -375,23 +416,31 @@ def _tmux_interrupt_agent(session: str, message: str) -> bool:
     net and must NEVER raise into the pause endpoint."""
     try:
         import subprocess as _sp
-        if not _tmux_session_alive(session):
-            return False
-        # Double Ctrl-C halts Claude Code's current tool call + clears the
-        # input. A small sleep between them lets the REPL register the
-        # first signal before the second arrives.
-        _sp.run(["tmux", "send-keys", "-t", session, "C-c"],
-                capture_output=True)
-        time.sleep(0.15)
-        _sp.run(["tmux", "send-keys", "-t", session, "C-c"],
-                capture_output=True)
-        time.sleep(0.15)
-        # Type the message literally (no Enter) so it shows in the prompt
-        # buffer as a status line for the next operator.
-        if message:
-            _sp.run(["tmux", "send-keys", "-t", session, "-l", message],
-                    capture_output=True)
-        return True
+        from . import agent_wait, supervisor
+        with agent_wait.delivery_lock():
+            if not _tmux_session_alive(session):
+                return False
+            _pause_draft_path(session).unlink(missing_ok=True)
+            target = f"={session}:"
+            # Pause is an intentional interruption; ordinary Send/Resume
+            # never sends these cancellation keys.
+            for _ in range(2):
+                interrupted = _sp.run(["tmux", "send-keys", "-t", target, "C-c"],
+                                      capture_output=True, timeout=4)
+                if interrupted.returncode:
+                    return False
+                time.sleep(0.15)
+            pane = supervisor._nudge_pane(target)
+            if message and pane is not None and supervisor._nudge_input_empty(target, pane):
+                # Keep the status marker fully visible on phones. The reason
+                # remains in the persisted pause/halt state and dashboard.
+                marker = "[ARUI paused " + os.urandom(4).hex() + "]"
+                _record_pause_draft(session, marker, _pause_pane_identity(session))
+                written = _sp.run(["tmux", "send-keys", "-t", target, "-l", marker],
+                                  capture_output=True, timeout=4)
+                if written.returncode:
+                    _pause_draft_path(session).unlink(missing_ok=True)
+            return True
     except Exception as e:                                  # noqa: BLE001
         print(f"[notify] tmux interrupt failed for {session}: {e}",
               flush=True)
@@ -403,15 +452,29 @@ def _tmux_resume_agent(session: str, message: str) -> bool:
     the agent's tmux pane + presses Enter so the agent's next REPL turn
     picks it up. Best-effort, never raises."""
     try:
-        import subprocess as _sp
-        if not _tmux_session_alive(session):
-            return False
-        if message:
-            _sp.run(["tmux", "send-keys", "-t", session, "-l", message],
-                    capture_output=True)
-            _sp.run(["tmux", "send-keys", "-t", session, "Enter"],
-                    capture_output=True)
-        return True
+        from . import agent_wait, supervisor
+        with agent_wait.delivery_lock():
+            if not message or not _tmux_session_alive(session):
+                return False
+            target = f"={session}:"
+            path = _pause_draft_path(session)
+            if path.exists():
+                # A legacy, edited, or replacement-pane draft is never owned
+                # merely because it resembles a pause notice in scrollback.
+                if path.is_symlink() or path.stat().st_size > 1024:
+                    return False
+                record = json.loads(path.read_text(encoding="utf-8"))
+                pane = supervisor._nudge_pane(target)
+                if (record.get("pane") == _pause_pane_identity(session) and pane is not None
+                        and supervisor._owns_nudge_draft(target, pane, record.get("text", ""), allow_busy=True)):
+                    supervisor._clear_failed_nudge(target, record["text"], allow_busy=True)
+            delivered = supervisor.deliver_agent_message(message, session=session)
+            if not delivered:
+                return False
+            path.unlink(missing_ok=True)
+            if session == "agent":
+                agent_wait.cancel()
+            return True
     except Exception as e:                                  # noqa: BLE001
         print(f"[notify] tmux resume failed for {session}: {e}", flush=True)
         return False
@@ -436,15 +499,20 @@ def _apply_pause_to_agent_tmux(reason: str = "") -> list[str]:
     return hit
 
 
-def _apply_resume_to_agent_tmux() -> list[str]:
+def _apply_resume_to_agent_tmux() -> dict:
     """Type a resume message into every live agent tmux session. Called
     by set_research_paused(False) and set_research_halted(False)."""
     msg = ("@arui: research is UNPAUSED — resume the directive queue.")
     hit: list[str] = []
+    failed: list[str] = []
     for sess in _AGENT_TMUX_SESSIONS:
+        if not _tmux_session_alive(sess):
+            continue
         if _tmux_resume_agent(sess, msg):
             hit.append(sess)
-    return hit
+        else:
+            failed.append(sess)
+    return {"resumed": hit, "failed": failed}
 
 
 def set_research_paused(paused: bool) -> dict:
@@ -469,7 +537,23 @@ def set_research_paused(paused: bool) -> dict:
     from sqlalchemy.orm.attributes import flag_modified
     from .db import SessionLocal
     from .models import Setting
+    from . import research_control
     sessions_hit: list[str] = []
+    errors: list[str] = []
+    warnings: list[str] = []
+    if not paused:
+        halted, reason = research_halted()
+        from . import directives
+        if halted or directives.open_halt():
+            return {"ok": False, "blocked": True, "paused": research_paused(),
+                    "reason": "research_halted" if halted else "halt_directive",
+                    "errors": [reason or "Resolve the HALT directive before resuming"],
+                    "sessions_interrupted": []}
+    if paused:
+        try:
+            research_control.write(paused=True)
+        except Exception as exc:
+            errors.append(f"Cannot persist pause gate: {_safe_error(exc)}")
     try:
         db = SessionLocal()
         try:
@@ -479,14 +563,18 @@ def set_research_paused(paused: bool) -> dict:
                 row = Setting(key="onboarding", value={})
                 db.add(row)
             cur = dict(row.value) if isinstance(row.value, dict) else {}
+            research_control.remember_workspace(cur)
             cur["research_paused"] = bool(paused)
             row.value = cur
             flag_modified(row, "value")
             db.commit()
+            if not paused:
+                research_control.write(paused=False, stop_all=False)
         finally:
             db.close()
     except Exception as e:                                  # noqa: BLE001
-        print(f"[notify] set_research_paused DB write failed: {e}",
+        errors.append(f"Cannot persist research pause state: {_safe_error(e)}")
+        print(f"[notify] set_research_paused DB write failed: {_safe_error(e)}",
               flush=True)
     # Then reach into tmux. We do this AFTER the DB write so any code
     # that polls `research_paused()` while we're in the middle of the
@@ -494,13 +582,20 @@ def set_research_paused(paused: bool) -> dict:
     try:
         if paused:
             sessions_hit = _apply_pause_to_agent_tmux()
-        else:
-            sessions_hit = _apply_resume_to_agent_tmux()
+        elif not errors:
+            from . import runtime_settings
+            applied = runtime_settings.apply_pending()
+            warnings.extend(applied.get("warnings", []))
+            resumed = _apply_resume_to_agent_tmux()
+            sessions_hit = resumed["resumed"]
+            errors.extend(f"Resume was not accepted by {session}; its existing terminal input was preserved. Inspect the terminal and retry."
+                          for session in resumed["failed"])
     except Exception as e:                                  # noqa: BLE001
-        print(f"[notify] set_research_paused tmux side-effect failed: {e}",
+        errors.append(f"Cannot update agent pause state: {_safe_error(e)}")
+        print(f"[notify] set_research_paused tmux side-effect failed: {_safe_error(e)}",
               flush=True)
-    return {"paused": bool(paused),
-            "sessions_interrupted": sessions_hit}
+    return {"ok": not errors, "paused": research_paused(),
+            "sessions_interrupted": sessions_hit, "errors": errors, "warnings": warnings}
 
 
 def research_halted() -> tuple[bool, str]:
@@ -515,6 +610,10 @@ def research_halted() -> tuple[bool, str]:
 
     Stored on the onboarding row as a small dict
     ``research_halted: {at: iso, reason: str}`` (truthy iff halted)."""
+    from . import research_control
+    local = research_control.read()
+    if local.get("halted"):
+        return True, str(local.get("reason") or "")
     try:
         from .db import SessionLocal
         from .models import Setting
@@ -524,6 +623,7 @@ def research_halted() -> tuple[bool, str]:
                    .filter(Setting.key == "onboarding").first())
             if not row or not isinstance(row.value, dict):
                 return False, ""
+            research_control.remember_workspace(row.value)
             v = row.value.get("research_halted")
             if not v:
                 return False, ""
@@ -534,10 +634,10 @@ def research_halted() -> tuple[bool, str]:
         finally:
             db.close()
     except Exception:                                       # noqa: BLE001
-        return False, ""
+        return True, "Research settings unavailable; launches are blocked until storage recovers."
 
 
-def set_research_halted(halted: bool, reason: str = "") -> None:
+def set_research_halted(halted: bool, reason: str = "") -> dict:
     """Set / clear the hard-halt state. Called by the strategic council
     when verdict==ESCALATION_HALT, by the PI agent when it sees an
     escalation event in the last hour, and by the dashboard's Resume
@@ -548,6 +648,23 @@ def set_research_halted(halted: bool, reason: str = "") -> None:
     Claude Code REPL drops its in-flight tool call and stops generating
     tokens. The pause and halt paths share
     :func:`_apply_pause_to_agent_tmux` for that reason."""
+    from . import research_control
+    errors: list[str] = []
+    sessions_hit: list[str] = []
+    warnings: list[str] = []
+    if not halted:
+        from . import directives
+        if directives.open_halt():
+            actual, actual_reason = research_halted()
+            return {"ok": False, "blocked": True, "halted": actual,
+                    "reason": "halt_directive", "sessions_interrupted": [],
+                    "errors": [actual_reason or "Resolve the HALT directive before resuming"],
+                    "warnings": []}
+    if halted:
+        try:
+            research_control.write(halted=True, reason=reason)
+        except Exception as exc:
+            errors.append(f"Cannot persist halt gate: {_safe_error(exc)}")
     try:
         import datetime as _dt
         import os as _os
@@ -563,6 +680,7 @@ def set_research_halted(halted: bool, reason: str = "") -> None:
                 row = Setting(key="onboarding", value={})
                 db.add(row)
             cur = dict(row.value) if isinstance(row.value, dict) else {}
+            research_control.remember_workspace(cur)
             if halted:
                 cur["research_halted"] = {
                     "at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
@@ -584,6 +702,8 @@ def set_research_halted(halted: bool, reason: str = "") -> None:
                            _dt.timezone.utc).isoformat())
             db.add(ev)
             db.commit()
+            if not halted:
+                research_control.write(halted=False, reason="")
             try:
                 _bus.publish("events", "event", ev.dict())
             except Exception:
@@ -591,18 +711,29 @@ def set_research_halted(halted: bool, reason: str = "") -> None:
         finally:
             db.close()
     except Exception as e:                                  # noqa: BLE001
-        print(f"[notify] set_research_halted failed: {e}", flush=True)
+        errors.append(f"Cannot persist research halt state: {_safe_error(e)}")
+        print(f"[notify] set_research_halted failed: {_safe_error(e)}", flush=True)
     # Also stop the running agent/author REPLs so they STOP generating
     # tokens. Halt is stricter than pause; we share the tmux side-effect
     # so both buttons have the same effect on real spend.
     try:
         if halted:
-            _apply_pause_to_agent_tmux(reason=reason or "ESCALATION_HALT")
-        else:
-            _apply_resume_to_agent_tmux()
+            sessions_hit = _apply_pause_to_agent_tmux(reason=reason or "ESCALATION_HALT")
+        elif not errors and not research_paused():
+            from . import runtime_settings
+            applied = runtime_settings.apply_pending()
+            warnings.extend(applied.get("warnings", []))
+            resumed = _apply_resume_to_agent_tmux()
+            sessions_hit = resumed["resumed"]
+            errors.extend(f"Resume was not accepted by {session}; its existing terminal input was preserved. Inspect the terminal and retry."
+                          for session in resumed["failed"])
     except Exception as e:                                  # noqa: BLE001
-        print(f"[notify] set_research_halted tmux interrupt failed: {e}",
+        print(f"[notify] set_research_halted tmux interrupt failed: {_safe_error(e)}",
               flush=True)
+        errors.append(f"Cannot interrupt agent: {_safe_error(e)}")
+    actual, actual_reason = research_halted()
+    return {"ok": not errors, "halted": actual, "reason": actual_reason,
+            "sessions_interrupted": sessions_hit, "errors": errors, "warnings": warnings}
 
 
 def reassert_pause_on_boot() -> None:
@@ -1831,50 +1962,84 @@ _lock = threading.Lock()
 
 
 _TUNNEL_URL_KEY = "tunnel_url_state"
+_TUNNEL_EMAIL_COOLDOWN_SEC = 3600
+_TUNNEL_EMAIL_RETRY_SEC = 900
+
+
+def _claim_tunnel_notice(cur: str, paused: bool) -> tuple[str, dict] | None:
+    """Persist a reservation BEFORE delivery, serializing competing workers.
+
+    A reserved URL counts as handled even if the process dies during SMTP or
+    the later status update fails. SMTP has no exactly-once guarantee: an
+    ambiguous delivery must not be retried every scheduler tick. Only a
+    recorded delivery failure is eligible for a bounded retry.
+    """
+    from sqlalchemy import text
+
+    now = dt.datetime.now(dt.timezone.utc)
+    db = SessionLocal()
+    try:
+        db.execute(text("BEGIN IMMEDIATE"))
+        row = db.query(Setting).filter(Setting.key == _TUNNEL_URL_KEY).first()
+        state = dict(row.value) if row and isinstance(row.value, dict) else {}
+        prev = state.get("url", "")
+        # Observing a URL while email is paused does not deliver it. Keep it
+        # eligible for one durable claim when notifications resume; a
+        # reserved/sent URL must still be deduplicated across restarts.
+        if prev == cur and state.get("status") not in {"failed", "paused"}:
+            return None
+        if paused and prev == cur and state.get("status") == "paused":
+            return None
+        last_attempt = _parse_iso(state.get("attempted_at") or state.get("at"))
+        if paused:
+            claimed = {**state, "url": cur, "status": "paused"}
+        else:
+            interval = (_TUNNEL_EMAIL_RETRY_SEC if state.get("status") == "failed"
+                        else _TUNNEL_EMAIL_COOLDOWN_SEC)
+            if last_attempt and (now - last_attempt).total_seconds() < interval:
+                return None
+            claimed = {"url": cur, "at": now.isoformat(),
+                       "attempted_at": now.isoformat(), "status": "reserved"}
+        if row:
+            row.value = claimed
+        else:
+            db.add(Setting(key=_TUNNEL_URL_KEY, value=claimed))
+        db.commit()  # If this fails, the caller MUST NOT send anything.
+        return None if paused else (prev, claimed)
+    finally:
+        db.close()
+
+
+def _finish_tunnel_notice(claimed: dict, ok: bool) -> None:
+    from sqlalchemy import text
+
+    db = SessionLocal()
+    try:
+        db.execute(text("BEGIN IMMEDIATE"))
+        row = db.query(Setting).filter(Setting.key == _TUNNEL_URL_KEY).first()
+        if row and row.value == claimed:
+            row.value = {**claimed, "status": "sent" if ok else "failed"}
+            db.commit()
+    finally:
+        db.close()
 
 
 def maybe_email_tunnel_change() -> bool:
-    """Email the operator whenever the public dashboard URL changes.
+    """Notify about URL changes, with durable deduplication and rate limits.
 
-    The cloudflare quick-tunnel rotates its hostname on every reconnect, so a
-    bookmarked link keeps dying. Rather than chase an (impossible, sign-up-free)
-    stable URL, we simply WATCH the live URL and email the new one the moment it
-    changes — so the current link is always one click away in the inbox. Polled
-    from the 60s digest loop. Returns True iff an email was sent. Never raises.
+    Polled every minute. Coalesce rotations to the latest URL, at most once
+    per hour; retry recorded failures after 15 minutes. If durable state is
+    unavailable, send nothing. Returns True iff an email was sent.
     """
     try:
-        cur = _live_tunnel_url()
+        cur = _dashboard_url(_cfg())
         if not cur:
             return False
-        db = SessionLocal()
-        try:
-            row = (db.query(Setting)
-                   .filter(Setting.key == _TUNNEL_URL_KEY).first())
-            prev = ((row.value or {}).get("url")
-                    if row and isinstance(row.value, dict) else "")
-        finally:
-            db.close()
-        if prev == cur:
+        claim = _claim_tunnel_notice(cur, emails_paused())
+        if claim is None:
             return False
+        prev, claimed = claim
         first = not prev
-
-        def _commit_baseline():
-            d2 = SessionLocal()
-            try:
-                r2 = (d2.query(Setting)
-                      .filter(Setting.key == _TUNNEL_URL_KEY).first())
-                if r2:
-                    r2.value = {"url": cur, "at": _dt_now_iso()}
-                else:
-                    d2.add(Setting(key=_TUNNEL_URL_KEY,
-                                   value={"url": cur, "at": _dt_now_iso()}))
-                d2.commit()
-            finally:
-                d2.close()
-
-        if emails_paused():
-            _commit_baseline()      # track silently; don't email while paused
-            return False
         subject = ("[autoresearcherUI] dashboard URL"
                    if first else
                    "[autoresearcherUI] dashboard URL changed")
@@ -1883,17 +2048,18 @@ def maybe_email_tunnel_change() -> bool:
                     "Heads up: the dashboard's public URL just changed.")
         bullets = [f"New URL: {cur}"]
         if not first:
-            bullets.append("The previous link stopped working — cloudflare's "
-                           "quick-tunnel rotated its hostname on reconnect.")
-        bullets.append("Bookmark this one; I'll email again if it ever rotates.")
+            bullets.append("The public dashboard address has changed. "
+                           "Use the current link below.")
+        bullets.append("URL updates are limited to one per hour while "
+                       "notifications are enabled.")
         ok = send_alert(subject, headline, bullets=bullets,
                         action_text="Open the dashboard with the button "
                                     "below.", severity="info")
-        # Only commit the new baseline once the email actually went out — a
-        # failed send (SMTP hiccup) then retries on the next tick instead of
-        # silently swallowing the notification.
-        if ok:
-            _commit_baseline()
+        try:
+            _finish_tunnel_notice(claimed, ok)
+        except Exception as e:                              # noqa: BLE001
+            # The durable reservation still prevents duplicate delivery.
+            print(f"[notify] tunnel notice status update failed: {e}", flush=True)
         return ok
     except Exception as e:                                  # noqa: BLE001
         print(f"[notify] tunnel-change check failed: {e}", flush=True)

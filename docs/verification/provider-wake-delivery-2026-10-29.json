@@ -1,0 +1,133 @@
+{
+  "recorded_at": "2026-10-29T20:11:57.343237+00:00",
+  "scope": "Actual installed interactive CLI delivery behavior in private tmux sessions; no production sessions touched.",
+  "method": {
+    "tmux_dimensions": {
+      "columns": 140,
+      "rows": 40
+    },
+    "environment": "Private workspace/configuration/session database; dummy credentials; model endpoints redirected to local HTTP server that rejects inference.",
+    "capture": "Plain and styled terminal captures plus cursor position; no prompt text retained in this receipt.",
+    "delivery": "Current production supervisor sender with tmux routed to private socket; multiline messages use a private inbox reference. Enter commands were reported successful without reaching the CLI, reproducing lost-Enter delivery.",
+    "requests_to_loopback": 0,
+    "remote_inference_performed": false,
+    "paid_calls": 0
+  },
+  "results": [
+    {
+      "provider": "opencode",
+      "cli_version": "2.0.29",
+      "ui_mode": "mini --standalone",
+      "status": "passed",
+      "empty_input_recognized": true,
+      "matching_placeholder_typed_as_operator_draft": {
+        "home_key_pressed": true,
+        "classified_empty": false,
+        "sender_returned": false,
+        "keys_sent": 0,
+        "draft_preserved": true
+      },
+      "multiline_event_with_two_lost_enter_keys": {
+        "sender_returned": false,
+        "enter_attempts": 2,
+        "cleanup_key": "Ctrl-U",
+        "input_empty_after_cleanup": true,
+        "cli_alive_after_cleanup": true,
+        "delivery_text": "Single-line private inbox reference preserving the full message."
+      },
+      "subsequent_delivery_attempt_after_cleanup": {
+        "attempted": true,
+        "enter_keys_deliberately_lost_again": 2,
+        "sender_returned": false,
+        "input_empty_after_cleanup": true,
+        "cli_alive_after_cleanup": true,
+        "cleanup_key": "Ctrl-U"
+      }
+    },
+    {
+      "provider": "gemini",
+      "cli_version": "0.66.0",
+      "ui_mode": "--screen-reader --approval-mode=yolo",
+      "status": "passed",
+      "empty_input_recognized": true,
+      "matching_placeholder_typed_as_operator_draft": {
+        "home_key_pressed": true,
+        "classified_empty": false,
+        "sender_returned": false,
+        "keys_sent": 0,
+        "draft_preserved": true
+      },
+      "multiline_event_with_two_lost_enter_keys": {
+        "sender_returned": false,
+        "enter_attempts": 2,
+        "cleanup_key": "Ctrl-U",
+        "input_empty_after_cleanup": true,
+        "cli_alive_after_cleanup": true,
+        "delivery_text": "Single-line private inbox reference preserving the full message."
+      },
+      "subsequent_delivery_attempt_after_cleanup": {
+        "attempted": true,
+        "enter_keys_deliberately_lost_again": 2,
+        "sender_returned": false,
+        "input_empty_after_cleanup": true,
+        "cli_alive_after_cleanup": true,
+        "cleanup_key": "Ctrl-U"
+      }
+    },
+    {
+      "provider": "claude",
+      "cli_version": "2.1.259",
+      "ui_mode": "native interactive CLI, Haiku 4.5 selected, private configuration",
+      "status": "passed",
+      "empty_input_recognized": true,
+      "painted_placeholder_present": false,
+      "placeholder_style_operator_draft": {
+        "text_form": "Try followed by quoted text",
+        "home_key_pressed": true,
+        "classified_empty": false,
+        "sender_returned": false,
+        "keys_sent": 0,
+        "draft_preserved": true
+      },
+      "source_sha256": {
+        "backend/app/supervisor.py": "542625a66404157b89db7662a61003f11478caae952f2cee0a222a2a985148cc",
+        "backend/app/agent_inbox.py": "9d734488bd4b4257ef1ff16bfdbdb975a898ebcc2af1e3f4275c674bef04b820"
+      },
+      "source_unchanged_during_probe": true,
+      "requests_to_loopback": 0,
+      "remote_inference_performed": false,
+      "multiline_event_with_two_lost_enter_keys": {
+        "sender_returned": false,
+        "enter_attempts": 2,
+        "cleanup_key": "Ctrl-U",
+        "input_empty_after_cleanup": true,
+        "cli_alive_after_cleanup": true,
+        "delivery_text": "Single-line private inbox reference preserving the full message."
+      },
+      "subsequent_delivery_attempt_after_cleanup": {
+        "sender_returned": false,
+        "enter_attempts": 2,
+        "cleanup_key": "Ctrl-U",
+        "input_empty_after_cleanup": true,
+        "cli_alive_after_cleanup": true,
+        "delivery_text": "Single-line private inbox reference preserving the full message."
+      },
+      "home_pressed_during_failed_delivery": {
+        "sender_returned": false,
+        "cleanup_key_sent": false,
+        "draft_preserved": true,
+        "cli_alive": true
+      }
+    }
+  ],
+  "limitations": [
+    "Lost-Enter recovery and operator-draft preservation were tested against real terminal UIs. Successful model inference was intentionally not part of this offline delivery check.",
+    "CLI formatting is version dependent; unknown input formats remain conservative failures.",
+    "The Claude startup in this check showed a truly blank composer. Placeholder-style typed text was tested as an operator draft, but no painted Claude Try hint was present in this run."
+  ],
+  "source_sha256": {
+    "backend/app/supervisor.py": "596b5949c3fc52b837296681f850a0e824e87bcfb274ea9142bd152910f1dcb6",
+    "backend/app/agent_inbox.py": "b6b8cd684449e1f106a5f0dfbcda7bb209d05ac6fe9c8533b46bb45a8af37a9c"
+  },
+  "source_hash_note": "Top-level hashes identify the original Gemini/OpenCode run. Claude records its own later source hashes; historical tested hashes are preserved."
+}

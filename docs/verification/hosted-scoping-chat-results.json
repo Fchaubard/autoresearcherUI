@@ -1,0 +1,904 @@
+{
+  "generated_at": "2026-10-28T22:32:59.121302+00:00",
+  "results": [
+    {
+      "model": "gpt-6-astra",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:30:10.565019+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-6-astra"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-6-astra",
+          "http_status": 200,
+          "response_model": "gpt-6-astra"
+        }
+      ],
+      "output_characters": 299,
+      "output_sha256": "4e5a095bdf11bd7ab0fdc77713cf882b178d40c37bb552efb4cb95798f050e9e",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 4.919
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:30:10.572994+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.6-sol"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.6-sol",
+          "http_status": 200,
+          "response_model": "gpt-5.6-sol"
+        }
+      ],
+      "output_characters": 266,
+      "output_sha256": "6df0eb8048ccd46bcecc92ff72b3146fcf3f61cb217ca64d4cf3a064378db280",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 5.581
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:30:16.522385+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.6-luna"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.6-luna",
+          "http_status": 200,
+          "response_model": "gpt-5.6-luna"
+        }
+      ],
+      "output_characters": 446,
+      "output_sha256": "45970450535ae77b6af38fd6b61651daca4ff7857447a06278e32372134d0a5b",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 4.256
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:30:15.782483+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.6-terra"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.6-terra",
+          "http_status": 200,
+          "response_model": "gpt-5.6-terra"
+        }
+      ],
+      "output_characters": 213,
+      "output_sha256": "fe233cc8b41b1f3f52d7ce8a6174ed5732320c942ad0211b67fa5b9caf7a9644",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 5.689
+    },
+    {
+      "model": "gpt-5.5",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:30:21.167709+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.5",
+          "http_status": 200,
+          "response_model": "gpt-5.5-2026-04-23"
+        }
+      ],
+      "output_characters": 668,
+      "output_sha256": "d7bc7f9bad344c449a5b774da507086eb9b55593ef88bcada49ad86d513d9c6a",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 6.344
+    },
+    {
+      "model": "gpt-5.2",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:30:21.876650+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.2"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.2",
+          "http_status": 200,
+          "response_model": "gpt-5.2-2025-12-11"
+        }
+      ],
+      "output_characters": 1397,
+      "output_sha256": "108c17bb7f60408b0bb77a0b95aa94ce579ee5841fb47750296193b1e29195c8",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 9.683
+    },
+    {
+      "model": "gpt-5.1",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:30:27.856828+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5.1"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5.1",
+          "http_status": 200,
+          "response_model": "gpt-5.1-2025-11-13"
+        }
+      ],
+      "output_characters": 1236,
+      "output_sha256": "d2c53cc1babc12d9209990f02446f5e4e42837ac4f8c0aba1dfb1ad01ceb91e1",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 9.895
+    },
+    {
+      "model": "gpt-5-mini",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:30:38.083579+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5-mini"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5-mini",
+          "http_status": 200,
+          "response_model": "gpt-5-mini-2025-08-07"
+        }
+      ],
+      "output_characters": 1272,
+      "output_sha256": "d1d0e6502d9f19d5e3bfd7a1a029d3f8956eb8e866cec3f746e781a390d78256",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 9.673
+    },
+    {
+      "model": "gpt-5",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:30:31.932546+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5",
+          "http_status": 200,
+          "response_model": "gpt-5-2025-08-07"
+        }
+      ],
+      "output_characters": 625,
+      "output_sha256": "be25570775c3bd186d85e909bfd76dbf894900cbe2a8b04e62e21cad3d553bc0",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 22.253
+    },
+    {
+      "model": "gpt-5-nano",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:30:48.153561+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gpt-5-nano"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "gpt-5-nano",
+          "http_status": 200,
+          "response_model": "gpt-5-nano-2025-08-07"
+        }
+      ],
+      "output_characters": 319,
+      "output_sha256": "3063263a505b8f9c260489a06eeed7233aac56e71c830f668035b8769eb59844",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 8.568
+    },
+    {
+      "model": "o3",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:30:54.576649+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "o3"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "o3",
+          "http_status": 200,
+          "response_model": "o3-2025-04-16"
+        }
+      ],
+      "output_characters": 498,
+      "output_sha256": "5839a476252fbbdc83915b9709c503d9c3f0380d0b34066453b265a80c71efcb",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 5.606
+    },
+    {
+      "model": "o3-pro",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:30:57.159919+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "openai",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "o3-pro"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/responses",
+          "requested_model": "o3-pro",
+          "http_status": 200,
+          "response_model": "o3-pro-2025-06-10"
+        }
+      ],
+      "output_characters": 552,
+      "output_sha256": "a45dc29a41cda7ac1cdbfcca9691475f3421bbf468a5f409b100bba8913ba49d",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 14.612
+    },
+    {
+      "model": "gemini-3.1-flash-lite",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:31:12.220145+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.1-flash-lite"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.1-flash-lite:generateContent",
+          "requested_model": "gemini-3.1-flash-lite",
+          "http_status": 200,
+          "response_model": "gemini-3.1-flash-lite"
+        }
+      ],
+      "output_characters": 1019,
+      "output_sha256": "a2c71f1ec9dd270c899780a20e353a23678cc8a082fcd8e891ae2af077303367",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 4.367
+    },
+    {
+      "model": "gemini-4-argon",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:31:00.526181+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-4-argon"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-4-argon:generateContent",
+          "requested_model": "gemini-4-argon",
+          "http_status": 200,
+          "response_model": "gemini-4-argon"
+        }
+      ],
+      "output_characters": 1102,
+      "output_sha256": "35ab90e391600b377db47ff63960f601c385f310fe3b70be3cf67c31e1821a9e",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 17.436
+    },
+    {
+      "model": "gemini-3.8-flash",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:31:17.072375+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.8-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.8-flash:generateContent",
+          "requested_model": "gemini-3.8-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.8-flash"
+        }
+      ],
+      "output_characters": 802,
+      "output_sha256": "6d49e410566de52daa1fe821d78557d29b5164dda0d911f835081aa30cc3e637",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 11.824
+    },
+    {
+      "model": "gemini-3.7-flash",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:31:18.453267+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.7-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.7-flash:generateContent",
+          "requested_model": "gemini-3.7-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.8-flash"
+        }
+      ],
+      "output_characters": 907,
+      "output_sha256": "0cc36e7cce33c9e5e01a5a5730061066c01280884f47b1a01e3acf80f63b7b9f",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 11.849
+    },
+    {
+      "model": "gemini-3.6-flash",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:31:29.337182+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.6-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.6-flash:generateContent",
+          "requested_model": "gemini-3.6-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.6-flash"
+        }
+      ],
+      "output_characters": 743,
+      "output_sha256": "f8ffe94148ccd45d415e47cd1935f147993433fdb9db4e14a17ae84140d8bf68",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 7.42
+    },
+    {
+      "model": "gemini-3.5-flash",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:31:30.700903+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.5-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.5-flash:generateContent",
+          "requested_model": "gemini-3.5-flash",
+          "http_status": 200,
+          "response_model": "gemini-3.6-flash"
+        }
+      ],
+      "output_characters": 572,
+      "output_sha256": "2c36862d09e103b1772e6db368cfdc22b7e698aec518aef7a35100932a196631",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 7.305
+    },
+    {
+      "model": "gemini-3.5-flash-lite",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:31:37.193543+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.5-flash-lite"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.5-flash-lite:generateContent",
+          "requested_model": "gemini-3.5-flash-lite",
+          "http_status": 200,
+          "response_model": "gemini-3.5-flash-lite"
+        }
+      ],
+      "output_characters": 703,
+      "output_sha256": "3310337fc415c660fc3009bcb3ca4016def4a6a2fa9f1aaf1c8075e4ec73cb84",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 4.115
+    },
+    {
+      "model": "gemini-3.1-pro-preview",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:31:38.441925+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-3.1-pro-preview"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-3.1-pro-preview:generateContent",
+          "requested_model": "gemini-3.1-pro-preview",
+          "http_status": 200,
+          "response_model": "gemini-3.1-pro-preview"
+        }
+      ],
+      "output_characters": 1018,
+      "output_sha256": "5ff9ae99fe8fe51f42beb5e55e8c13b1497b062d7c905c185c1f75bb45b7ab79",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 11.911
+    },
+    {
+      "model": "gemini-2.5-flash",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:31:50.665640+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-2.5-flash"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-2.5-flash:generateContent",
+          "requested_model": "gemini-2.5-flash",
+          "http_status": 200,
+          "response_model": "gemini-2.5-flash"
+        }
+      ],
+      "output_characters": 592,
+      "output_sha256": "a1990e659c2acec2ade15cd79c9d5a960cf2e619198aa5558e55b3b33eaf28f2",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 6.122
+    },
+    {
+      "model": "gemini-2.5-pro",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:31:41.761005+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "gemini",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "gemini-2.5-pro"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1beta/models/gemini-2.5-pro:generateContent",
+          "requested_model": "gemini-2.5-pro",
+          "http_status": 200,
+          "response_model": "gemini-2.5-pro"
+        }
+      ],
+      "output_characters": 920,
+      "output_sha256": "f92ecb3b3ba5232d904fcdbd97da7ce9dbf8b22fbecbbf5f979a2123253e1d9a",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 19.541
+    },
+    {
+      "model": "claude-fable-5-1",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:31:57.135146+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-fable-5-1"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-fable-5-1",
+          "http_status": 200,
+          "response_model": "claude-fable-5-1"
+        }
+      ],
+      "output_characters": 1709,
+      "output_sha256": "886ee7019c18fda477305d34c8de31773587e898485c44be234665889a6af991",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 18.635
+    },
+    {
+      "model": "claude-opus-5",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:32:01.663404+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-5",
+          "http_status": 200,
+          "response_model": "claude-opus-5"
+        }
+      ],
+      "output_characters": 1763,
+      "output_sha256": "e209f85cd8fa6b5f8489e1166fe75c5bcb69ce0ab68746e730cdf6719ed4a5bd",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 19.407
+    },
+    {
+      "model": "claude-sonnet-5",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:32:16.194390+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-sonnet-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-sonnet-5",
+          "http_status": 200,
+          "response_model": "claude-sonnet-5"
+        }
+      ],
+      "output_characters": 1748,
+      "output_sha256": "c6266a9f257d975de69c1be635bf682bc032aced602ea5c6ad81d179c973f5e4",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 17.687
+    },
+    {
+      "model": "claude-fable-5",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:32:21.456661+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-fable-5"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-fable-5",
+          "http_status": 200,
+          "response_model": "claude-fable-5"
+        }
+      ],
+      "output_characters": 1673,
+      "output_sha256": "46b9580659cd3af3857fe69bbfb04941b653836118c6a4377fc21ce2dc3a863b",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 16.743
+    },
+    {
+      "model": "claude-opus-4-8",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:32:34.277326+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-4-8"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-4-8",
+          "http_status": 200,
+          "response_model": "claude-opus-4-8"
+        }
+      ],
+      "output_characters": 873,
+      "output_sha256": "4951275096e6258c4d5db15b36cd6161711934881a7b0d6e0db022523f38923a",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 7.471
+    },
+    {
+      "model": "claude-opus-4-7",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:32:38.497124+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-4-7"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-4-7",
+          "http_status": 200,
+          "response_model": "claude-opus-4-7"
+        }
+      ],
+      "output_characters": 949,
+      "output_sha256": "73c835c2169271f073e877bc4fcdbc16b0224e83f3bf953f78ac4dd93324f575",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 9.906
+    },
+    {
+      "model": "claude-opus-4-6",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:32:42.144481+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-opus-4-6"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-opus-4-6",
+          "http_status": 200,
+          "response_model": "claude-opus-4-6"
+        }
+      ],
+      "output_characters": 670,
+      "output_sha256": "e39dfd82360c86918630e255ee9e38aefb34a6ee10eebf4370776902407c732a",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 9.646
+    },
+    {
+      "model": "claude-sonnet-4-6",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:32:48.761115+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-sonnet-4-6"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-sonnet-4-6",
+          "http_status": 200,
+          "response_model": "claude-sonnet-4-6"
+        }
+      ],
+      "output_characters": 342,
+      "output_sha256": "fda64dd6b3e6c518e41d8a76632fd74c7417368d92a88191d7a3b61777ac7c61",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 5.881
+    },
+    {
+      "model": "claude-haiku-4-5-20251001",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:32:52.144554+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "claude",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "claude-haiku-4-5-20251001"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/messages",
+          "requested_model": "claude-haiku-4-5-20251001",
+          "http_status": 200,
+          "response_model": "claude-haiku-4-5-20251001"
+        }
+      ],
+      "output_characters": 1261,
+      "output_sha256": "bc7d9dd15f8477ef780f1b7e78a7a9069bf8b6720af294416104cfdd437ad064",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 6.795
+    }
+  ]
+}

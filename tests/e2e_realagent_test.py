@@ -87,7 +87,13 @@ def main():
 
         r = post(base + "/api/onboarding",
                  {"repo_name": "arc-trm-test", "metric": "val_mse",
-                  "claude_token": "sk-ant-test", "purpose": "RealAgent e2e"})
+                  "claude_token": "sk-ant-test", "purpose": "RealAgent e2e",
+                  # This hardware-free test explicitly opts out of council
+                  # review; missing credentials must never imply approval.
+                  "council_enable_gemini": False,
+                  "council_enable_openai": False,
+                  "council_enable_claude_tiebreaker": False,
+                  "pi_agent_enabled": False})
         check(r.get("status") == "started",
               "onboarding launches the RealAgent", str(r))
 

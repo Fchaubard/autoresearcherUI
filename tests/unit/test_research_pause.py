@@ -18,12 +18,16 @@ import pytest
 
 
 @pytest.fixture
-def client(arui_env, fake_subprocess):
+def client(arui_env, fake_subprocess, monkeypatch):
     """A FastAPI TestClient bound to ONLY the api router (no static
     files, no startup events) so the tests stay fast and focused."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
+    from backend.app import notify
     from backend.app.api import router
+    # These tests exercise the durable launch gate without a native agent.
+    # Live Resume acceptance/failure is covered in test_notify_pause_delivery.
+    monkeypatch.setattr(notify, "_tmux_session_alive", lambda _: False)
     app = FastAPI()
     app.include_router(router)
     with TestClient(app) as c:
@@ -119,9 +123,12 @@ def test_track_run_allows_smoke_probe_when_paused(client):
     assert "run_id" in r.json()
 
 
-def test_track_run_allowed_after_resume(client):
+def test_track_run_allowed_after_resume(client, monkeypatch):
     """After /api/research/resume the gate lifts immediately — the next
     POST /api/track/run goes through."""
+    from backend.app import council
+    # A resumed run still requires independent code-review approval.
+    monkeypatch.setattr(council, "is_code_blessed", lambda: True)
     client.post("/api/research/pause")
     assert client.post("/api/track/run",
                        json={"name": "blocked", "config": {}}).status_code == 423
@@ -242,6 +249,19 @@ def test_orchestrator_aborts_if_stopped_while_paused(arui_env, monkeypatch,
 
     asyncio.run(orch._execute("idea-x", 0))
     assert launched == []
+
+
+def test_orchestrator_aborts_if_stopped_while_hard_halted(arui_env, monkeypatch, tmp_path):
+    import asyncio
+    from backend.app import orchestrator, notify
+    project = tmp_path / "halted-project"
+    project.mkdir()
+    orch = orchestrator.Orchestrator(str(project), n_slots=1)
+    orch.running = False
+    monkeypatch.setattr(notify, "research_paused", lambda: False)
+    monkeypatch.setattr(notify, "research_halted", lambda: (True, "operator halt"))
+    # No DB idea exists: getting beyond the halt gate would fail this test.
+    asyncio.run(orch._execute("must-not-launch", 0))
 
 
 # ─────────────────────────── PI agent gate ────────────────────────────

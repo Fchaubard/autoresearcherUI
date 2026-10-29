@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import datetime as dt
+import importlib
+from types import SimpleNamespace
+
+import pytest
 
 
 def _iso(hours_ago: float = 0) -> str:
@@ -87,8 +91,176 @@ def test_dashboard_url_empty_when_no_tunnel(arui_env):
 
 # ── tunnel-URL-change watcher: email the operator when the URL rotates ───────
 
+@pytest.fixture
+def tunnel_clock(arui_env, monkeypatch):
+    from backend.app import notify
+
+    class Clock(dt.datetime):
+        current = dt.datetime(2026, 10, 27, tzinfo=dt.timezone.utc)
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls.current
+
+        @classmethod
+        def advance(cls, seconds):
+            cls.current += dt.timedelta(seconds=seconds)
+
+    monkeypatch.setattr(notify, "dt", SimpleNamespace(
+        datetime=Clock, timezone=dt.timezone))
+    return Clock
+
+
+@pytest.fixture
+def tunnel_delivery(arui_env, setting_setter, monkeypatch):
+    from backend.app import notify
+    setting_setter("onboarding", {"email": "me@example.com"})
+    _write_cf_log("https://current-tunnel.trycloudflare.com")
+    sent = []
+    monkeypatch.setattr(notify, "send_alert", lambda *a, **kw: sent.append(kw) or True)
+    return sent
+
+
+def test_tunnel_reservation_failure_never_sends(tunnel_delivery, monkeypatch):
+    from backend.app import notify
+    from sqlalchemy.orm import Session
+    original = Session.commit
+
+    def broken_commit(self):
+        raise OSError("disk I/O error")
+
+    monkeypatch.setattr(Session, "commit", broken_commit)
+    for _ in range(6):
+        assert notify.maybe_email_tunnel_change() is False
+    assert tunnel_delivery == []
+    monkeypatch.setattr(Session, "commit", original)
+    assert notify.maybe_email_tunnel_change() is True
+    assert len(tunnel_delivery) == 1
+
+
+def test_tunnel_reservation_committed_before_delivery(tunnel_delivery, monkeypatch):
+    from backend.app import notify, settings_kv
+
+    def deliver(*args, **kwargs):
+        state = settings_kv.get(notify._TUNNEL_URL_KEY)
+        assert state["url"] == "https://current-tunnel.trycloudflare.com"
+        assert state["status"] == "reserved"
+        return True
+
+    monkeypatch.setattr(notify, "send_alert", deliver)
+    assert notify.maybe_email_tunnel_change() is True
+
+
+def test_tunnel_post_send_write_failure_survives_restart(tunnel_delivery, monkeypatch):
+    from backend.app import notify
+
+    def broken_finish(*args):
+        raise OSError("disk I/O error after SMTP accepted message")
+
+    monkeypatch.setattr(notify, "_finish_tunnel_notice", broken_finish)
+    assert notify.maybe_email_tunnel_change() is True
+    assert len(tunnel_delivery) == 1
+    importlib.reload(notify)
+    monkeypatch.setattr(notify, "send_alert",
+                        lambda *a, **kw: tunnel_delivery.append(kw) or True)
+    for _ in range(6):
+        assert notify.maybe_email_tunnel_change() is False
+    assert len(tunnel_delivery) == 1
+
+
+def test_tunnel_ambiguous_delivery_is_not_retried(tunnel_delivery, monkeypatch):
+    from backend.app import notify
+
+    def ambiguous_send(*args, **kwargs):
+        tunnel_delivery.append(kwargs)
+        raise RuntimeError("connection lost after delivery")
+
+    monkeypatch.setattr(notify, "send_alert", ambiguous_send)
+    for _ in range(6):
+        assert notify.maybe_email_tunnel_change() is False
+    assert len(tunnel_delivery) == 1
+
+
+def test_tunnel_rotations_coalesce_to_latest_url(tunnel_delivery, tunnel_clock):
+    from backend.app import notify
+    assert notify.maybe_email_tunnel_change() is True
+    for i in range(1, 60):
+        tunnel_clock.advance(60)
+        _write_cf_log(f"https://rotation-{i}.trycloudflare.com")
+        assert notify.maybe_email_tunnel_change() is False
+    tunnel_clock.advance(60)
+    assert notify.maybe_email_tunnel_change() is True
+    assert len(tunnel_delivery) == 2
+    assert tunnel_delivery[-1]["bullets"][0].endswith(
+        "https://rotation-59.trycloudflare.com")
+
+
+def test_tunnel_failure_retries_with_backoff(tunnel_delivery, tunnel_clock, monkeypatch):
+    from backend.app import notify
+    monkeypatch.setattr(notify, "send_alert",
+                        lambda *a, **kw: tunnel_delivery.append(kw) or False)
+    assert notify.maybe_email_tunnel_change() is False
+    for _ in range(14):
+        tunnel_clock.advance(60)
+        assert notify.maybe_email_tunnel_change() is False
+    assert len(tunnel_delivery) == 1
+    tunnel_clock.advance(60)
+    monkeypatch.setattr(notify, "send_alert",
+                        lambda *a, **kw: tunnel_delivery.append(kw) or True)
+    assert notify.maybe_email_tunnel_change() is True
+    assert len(tunnel_delivery) == 2
+
+
+def test_tunnel_concurrent_checks_deliver_once(tunnel_delivery, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from backend.app import notify
+    entered, release = Event(), Event()
+
+    def deliver(*args, **kwargs):
+        tunnel_delivery.append(kwargs)
+        entered.set()
+        assert release.wait(5)
+        return True
+
+    monkeypatch.setattr(notify, "send_alert", deliver)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(notify.maybe_email_tunnel_change)
+        try:
+            assert entered.wait(5)
+            assert pool.submit(notify.maybe_email_tunnel_change).result(5) is False
+        finally:
+            release.set()
+        assert first.result(5) is True
+    assert len(tunnel_delivery) == 1
+
+
+def test_tunnel_custom_domain_ignores_quick_tunnel_rotations(
+        tunnel_delivery, setting_setter, tunnel_clock):
+    from backend.app import notify
+    setting_setter("onboarding", {"dashboard_url": "https://dashboard.example.com/"})
+    assert notify.maybe_email_tunnel_change() is True
+    assert tunnel_delivery[0]["bullets"][0] == "New URL: https://dashboard.example.com"
+    tunnel_clock.advance(3600)
+    _write_cf_log("https://rotated-tunnel.trycloudflare.com")
+    assert notify.maybe_email_tunnel_change() is False
+
+
+def test_email_settings_read_failure_blocks_delivery(arui_env, monkeypatch):
+    from backend.app import notify
+    sent = []
+
+    def broken_settings():
+        raise OSError("database unavailable")
+
+    monkeypatch.setattr(notify, "_cfg", broken_settings)
+    monkeypatch.setattr(notify, "_deliver", lambda *a, **kw: sent.append(kw))
+    assert notify.emails_paused() is True
+    assert notify.send("subject", "body") is False
+    assert sent == []
+
 def test_tunnel_change_emails_once_per_distinct_url(arui_env, setting_setter,
-                                                    monkeypatch):
+                                                    monkeypatch, tunnel_clock):
     from backend.app import notify
     # a configured recipient so send() has somewhere to go
     setting_setter("onboarding", {"email": "me@x.com", "gmail_app_pw": "pw"})
@@ -106,8 +278,10 @@ def test_tunnel_change_emails_once_per_distinct_url(arui_env, setting_setter,
     assert notify.maybe_email_tunnel_change() is True
     # same URL again → no email
     assert notify.maybe_email_tunnel_change() is False
-    # URL rotates → email again
+    # A rotation during the cooldown is coalesced, then sent when due.
     urls.append("https://bbb-rotated.trycloudflare.com")
+    assert notify.maybe_email_tunnel_change() is False
+    tunnel_clock.advance(3600)
     assert notify.maybe_email_tunnel_change() is True
     assert len(sent) == 2
 
@@ -131,6 +305,14 @@ def test_tunnel_change_respects_email_pause(arui_env, setting_setter,
     # records the URL but sends nothing while paused
     assert notify.maybe_email_tunnel_change() is False
     assert sent == []
+    # Resuming must deliver the current link even though its URL is unchanged
+    # from the observation made while paused. Later ticks remain deduplicated.
+    setting_setter("onboarding", {"email": "me@x.com", "gmail_app_pw": "pw",
+                                  "emails_paused": False})
+    assert notify.maybe_email_tunnel_change() is True
+    for _ in range(6):
+        assert notify.maybe_email_tunnel_change() is False
+    assert sent == [1]
 
 
 def _write_ngrok_url(url: str) -> None:

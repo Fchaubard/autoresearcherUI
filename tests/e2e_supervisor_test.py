@@ -9,18 +9,19 @@ that the research can never get permanently blocked on a council review:
      hang — the exact failure mode that wedged the research for ~2h45m.
   2. A genuinely STUCK review (pending, no live worker — i.e. the worker
      crashed / was orphaned by a backend restart before writing a verdict) is
-     detected by the supervisor and auto-recovered: supervisor.tick() re-fires
+     detected by the completion supervisor and auto-recovered: its check re-fires
      the review and the conclusion reaches a terminal verdict again.
   3. The lifecycle status surfaces a human-readable line for the digest.
 
-Hermetic: with no council API keys the review auto-approves (fast, terminal),
-so this needs no network. Pure standard library. Exit 0 = pass.
+Hermetic: missing required council API keys produce an explicit incomplete
+review error (fast, terminal), never approval. No network is needed.
 
 Usage:
     ARUI_AUTORUN=0 ARUI_DATA_DIR=$(mktemp -d) python tests/e2e_supervisor_test.py
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import datetime as dt
 import os
 import sys
@@ -52,6 +53,21 @@ def _wait_until(pred, timeout=15.0, interval=0.2):
     return pred()
 
 
+@contextmanager
+def _allow_completion_worker():
+    """Permit only the explicit, finite review worker after isolated imports.
+
+    The test runner leaves global background loops disabled. The production
+    async entry point otherwise intentionally suppresses this worker in tests.
+    """
+    previous = os.environ.pop("ARUI_DISABLE_BG", None)
+    try:
+        yield
+    finally:
+        if previous is not None:
+            os.environ["ARUI_DISABLE_BG"] = previous
+
+
 def main() -> int:
     os.environ.setdefault("ARUI_AUTORUN", "0")
     os.environ.setdefault("ARUI_DATA_DIR", tempfile.mkdtemp(prefix="arui-sup-"))
@@ -64,8 +80,8 @@ def main() -> int:
     from backend.app.db import SessionLocal
     from backend.app.models import Event, Project
     # Hermetic: scrub any keys council (re)loaded from .deploy/keys.env at
-    # import time, so the review takes the deterministic "no reviewers →
-    # auto-approve" terminal path with no network. Must happen AFTER the
+    # import time, so required reviewers fail visibly without inference.
+    # Must happen AFTER the
     # council import (that import is what reloads the keys).
     for k in ("GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
         os.environ.pop(k, None)
@@ -83,16 +99,19 @@ def main() -> int:
         s.close()
 
     # ── 1. a normal review runs to a terminal verdict + is observable ───────
-    council.review_completion_async(["run-1", "run-2"], "improved val_loss",
-                                    "yes", "ship it")
+    with _allow_completion_worker():
+        council.review_completion_async(["run-1", "run-2"], "improved val_loss",
+                                        "yes", "ship it")
     check(lifecycle.status().get("phase") == lifecycle.PHASE_CONCLUSION_REVIEW,
           "lifecycle phase = conclusion review on launch")
     ok = _wait_until(
         lambda: council.conclusion_state().get("status") != "pending")
     st = council.conclusion_state()
-    check(ok and st.get("status") in ("approved", "rejected", "needs_more"),
-          "completion review reached a TERMINAL verdict (no hang)",
+    check(ok and st.get("status") == "error" and st.get("incomplete"),
+          "missing required reviewers reached a visible TERMINAL error (no hang)",
           st.get("status"))
+    check(st.get("council_verdict", {}).get("missing_reviewers") == ["gemini", "openai"],
+          "missing selected reviewers never became automatic approval")
 
     db2 = SessionLocal()
     try:
@@ -114,7 +133,9 @@ def main() -> int:
     check(council.conclusion_state().get("status") == "pending",
           "review is wedged 'pending' before the supervisor runs")
 
-    supervisor.tick()                                # the watchdog fires
+    with _allow_completion_worker():
+        # The completion watchdog only; never launch unrelated research loops.
+        supervisor._supervise_completion_review()
     check(lifecycle.remediation_count("completion_review") >= 1,
           "supervisor recorded a remediation for the stuck review")
     recovered = _wait_until(

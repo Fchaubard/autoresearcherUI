@@ -175,12 +175,15 @@ def test_register_allows_probe_smoke(arui_env):
 
 
 @pytest.fixture
-def client(arui_env, fake_subprocess):
+def client(arui_env, fake_subprocess, monkeypatch):
     """A FastAPI TestClient bound to the api router (mirrors
     test_research_pause.py to keep tests fast and dependency-free)."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from backend.app.api import router
+    from backend.app import council
+    # This module tests the novelty gate after code review has succeeded.
+    monkeypatch.setattr(council, "is_code_blessed", lambda: True)
     app = FastAPI()
     app.include_router(router)
     with TestClient(app) as c:
@@ -304,7 +307,7 @@ def test_populate_registry_from_db_seeds_existing_runs(
 
 
 def test_populate_registry_then_track_run_blocks_duplicate(
-        arui_env, make_project, make_run):
+        arui_env, make_project, make_run, monkeypatch):
     """End-to-end: a kept run from a prior process is enough to block
     a fresh /api/track/run launching the same config."""
     from backend.app import novelty
@@ -317,6 +320,8 @@ def test_populate_registry_then_track_run_blocks_duplicate(
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from backend.app.api import router
+    from backend.app import council
+    monkeypatch.setattr(council, "is_code_blessed", lambda: True)
     app = FastAPI()
     app.include_router(router)
     with TestClient(app) as c:

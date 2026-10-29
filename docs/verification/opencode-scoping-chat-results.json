@@ -1,0 +1,195 @@
+{
+  "generated_at": "2026-10-28T22:38:06.549570+00:00",
+  "results": [
+    {
+      "model": "opencode/nemotron-3-ultra-free",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:37:22.768940+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "failed",
+      "requests": [],
+      "dispatched_models": [
+        "opencode/nemotron-3-ultra-free"
+      ],
+      "error_type": "RuntimeError",
+      "elapsed_seconds": 4.834,
+      "configuration_revision": "Exact selected-model scoping-chat dispatch, after agent pins but before final config-directory/DB isolation.",
+      "metadata_limitation": "Initial harness recorded public RuntimeError wrapper without the original provider HTTP metadata; do not infer a specific HTTP status for this cell.",
+      "strict_revalidation": "not_repeated_after_quota"
+    },
+    {
+      "model": "opencode/nemotron-3.5-lightning-free",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:37:28.065229+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "failed",
+      "requests": [],
+      "dispatched_models": [
+        "opencode/nemotron-3.5-lightning-free"
+      ],
+      "error_type": "RuntimeError",
+      "elapsed_seconds": 4.699,
+      "configuration_revision": "Exact selected-model scoping-chat dispatch, after agent pins but before final config-directory/DB isolation.",
+      "metadata_limitation": "Initial harness recorded public RuntimeError wrapper without the original provider HTTP metadata; do not infer a specific HTTP status for this cell.",
+      "strict_revalidation": "not_repeated_after_quota"
+    },
+    {
+      "model": "opencode/nemotron-3.5-super-vl-free",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:37:33.193016+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "failed",
+      "requests": [],
+      "dispatched_models": [
+        "opencode/nemotron-3.5-super-vl-free"
+      ],
+      "error_type": "RuntimeError",
+      "elapsed_seconds": 4.673,
+      "configuration_revision": "Exact selected-model scoping-chat dispatch, after agent pins but before final config-directory/DB isolation.",
+      "metadata_limitation": "Initial harness recorded public RuntimeError wrapper without the original provider HTTP metadata; do not infer a specific HTTP status for this cell.",
+      "strict_revalidation": "not_repeated_after_quota"
+    },
+    {
+      "model": "opencode/big-pickle",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:37:38.330467+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "failed",
+      "requests": [],
+      "dispatched_models": [
+        "opencode/big-pickle"
+      ],
+      "error_type": "RuntimeError",
+      "elapsed_seconds": 4.703,
+      "configuration_revision": "Exact selected-model scoping-chat dispatch, after agent pins but before final config-directory/DB isolation.",
+      "metadata_limitation": "Initial harness recorded public RuntimeError wrapper without the original provider HTTP metadata; do not infer a specific HTTP status for this cell.",
+      "strict_revalidation": "not_repeated_after_quota"
+    },
+    {
+      "model": "opencode/glm-5.3-flash-free",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:37:43.471137+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "failed",
+      "requests": [],
+      "dispatched_models": [
+        "opencode/glm-5.3-flash-free"
+      ],
+      "error_type": "RuntimeError",
+      "elapsed_seconds": 4.257,
+      "configuration_revision": "Exact selected-model scoping-chat dispatch, after agent pins but before final config-directory/DB isolation.",
+      "metadata_limitation": "Initial harness recorded public RuntimeError wrapper without the original provider HTTP metadata; do not infer a specific HTTP status for this cell.",
+      "strict_revalidation": "not_repeated_after_quota"
+    },
+    {
+      "model": "opencode/deepseek-v4.1-flash-free",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:37:48.092880+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "failed",
+      "requests": [],
+      "dispatched_models": [
+        "opencode/deepseek-v4.1-flash-free"
+      ],
+      "error_type": "RuntimeError",
+      "elapsed_seconds": 3.944,
+      "configuration_revision": "Exact selected-model scoping-chat dispatch, after agent pins but before final config-directory/DB isolation.",
+      "metadata_limitation": "Initial harness recorded public RuntimeError wrapper without the original provider HTTP metadata; do not infer a specific HTTP status for this cell.",
+      "strict_revalidation": "not_repeated_after_quota"
+    },
+    {
+      "model": "opencode/beam-free",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:37:52.374632+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "failed",
+      "requests": [],
+      "dispatched_models": [
+        "opencode/beam-free"
+      ],
+      "error_type": "RuntimeError",
+      "elapsed_seconds": 4.452,
+      "configuration_revision": "Exact selected-model scoping-chat dispatch, after agent pins but before final config-directory/DB isolation.",
+      "metadata_limitation": "Initial harness recorded public RuntimeError wrapper without the original provider HTTP metadata; do not infer a specific HTTP status for this cell.",
+      "strict_revalidation": "not_repeated_after_quota"
+    },
+    {
+      "model": "opencode/flint-40b-free",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:37:57.233414+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "failed",
+      "requests": [],
+      "dispatched_models": [
+        "opencode/flint-40b-free"
+      ],
+      "error_type": "RuntimeError",
+      "elapsed_seconds": 4.459,
+      "configuration_revision": "Exact selected-model scoping-chat dispatch, after agent pins but before final config-directory/DB isolation.",
+      "metadata_limitation": "Initial harness recorded public RuntimeError wrapper without the original provider HTTP metadata; do not infer a specific HTTP status for this cell.",
+      "strict_revalidation": "not_repeated_after_quota"
+    },
+    {
+      "model": "opencode/mimo-v2.6-flash-free",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-28T22:38:02.146355+00:00",
+      "timeout_seconds": 90,
+      "max_output_tokens": 4096,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "opencode",
+      "status": "failed",
+      "requests": [],
+      "dispatched_models": [
+        "opencode/mimo-v2.6-flash-free"
+      ],
+      "error_type": "RuntimeError",
+      "elapsed_seconds": 4.248,
+      "configuration_revision": "Exact selected-model scoping-chat dispatch, after agent pins but before final config-directory/DB isolation.",
+      "metadata_limitation": "Initial harness recorded public RuntimeError wrapper without the original provider HTTP metadata; do not infer a specific HTTP status for this cell.",
+      "strict_revalidation": "not_repeated_after_quota"
+    }
+  ],
+  "final_source_sha256": {
+    "backend/app/opencode_runtime.py": "bac872558f23ee421d569c711ca5d8270145f5be9687b207e583afcfb036f112",
+    "backend/app/provider_config.py": "3fd5a6d2afa4a18afd1e29d3ef94150e04e72472c0c13be53318fdf49a3691bc",
+    "backend/app/council.py": "15ba9c6b7ffcdd0d554e384042cfd8e47d68018a7f10bcab05a6ef6a99321fd4",
+    "backend/app/pi.py": "d368ab12ca6a3c080f1d1f4dd17eaa876169d215be04cc501df7048033e73856",
+    "backend/app/agent_cli.py": "a756eaf9d1e41af0bdf0b8920e49d735d7c29790aced446c373d24e2342ba5fa"
+  },
+  "strict_configuration": "App-owned config and private DB; exact provider/endpoint/package/API model and request body; all allowed agent models pinned; unpinned delegates denied.",
+  "quota_note": "After earlier successful free inference, HTTP429 free usage limit responses also blocked simple coding. Redundant retries were stopped. Captured CLI error responses exposed body only, with no Retry-After headers or reset time metadata recorded.",
+  "synthetic_validation": "35 focused tests including real installed CLI against synthetic local protocol, hostile global/project model/body/baseURL settings, readonly context permissions and rejection of unpinned custom delegates."
+}

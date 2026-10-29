@@ -23,15 +23,19 @@ that never came for ~2h45m). The structure generalises to the other phases
 """
 from __future__ import annotations
 
-# How long to let a fresh completion-review worker run before we consider a
-# still-"pending" conclusion to be stuck. The worker itself is now bounded (a
-# slow reviewer fails fast at the 240s socket timeout, ≤2 reviewers), so a
-# healthy review settles well under this. Past it with no live worker = stuck.
+# Grace for a pending conclusion with no live worker. A managed CPU reviewer
+# can legitimately take much longer; thread ownership plus lease heartbeats
+# distinguish that work from an orphan without launching duplicate inference.
 _COMPLETION_GRACE_SEC = 360
 
 
 def tick() -> None:
     """One supervisor pass. Best-effort; never raises into the monitor loop."""
+    try:
+        from . import flint_manager
+        flint_manager.tick()
+    except Exception as e:                              # noqa: BLE001
+        print(f"[supervisor] local-model tick error: {e}", flush=True)
     try:
         _supervise_completion_review()
     except Exception as e:                              # noqa: BLE001
@@ -181,8 +185,10 @@ def _supervise_completion_review() -> None:
     # We are in the conclusion-review phase.
     lifecycle.set_phase(lifecycle.PHASE_CONCLUSION_REVIEW)
 
-    # Is a completion-review worker actually alive and recent?
-    if lifecycle.lease_alive("completion_review", max_age_sec=_COMPLETION_GRACE_SEC):
+    # A local worker owns this request even when it exceeds the lease grace
+    # or a heartbeat DB write temporarily fails. Never duplicate its calls.
+    if (council.completion_review_active()
+            or lifecycle.lease_alive("completion_review", max_age_sec=_COMPLETION_GRACE_SEC)):
         lifecycle.set_health(lifecycle.HEALTHY,
                              "council reviewing the conclusion")
         return
@@ -263,6 +269,7 @@ _AGENT_RESTART_MAX_BACKOFF_SEC = 300
 # parked agent look busy and never get un-parked.
 _AGENT_BUSY_MARKERS = (
     "esc to interrupt",
+    "esc interrupt",              # OpenCode 2 mini's live footer
     "compacting conversation",
     "press up to edit queued",   # messages queued while the agent is working
 )
@@ -292,16 +299,17 @@ _AGENT_BOOT_MARKERS = (
 _AGENT_NUDGE = (
     "[AUTONOMY - no human is watching this session] Do not stop and ask for "
     "confirmation or say \"your call\". You are the autonomous research agent. "
-    "Re-read _setup_prompt.txt, the project purpose, directives.jsonl, "
-    "ideas.md, results.md, and lessons.md. Inspect the authoritative run "
-    "ledger and currently active processes, preserve valid in-flight work, "
+    "Read your concise AGENT_STATE.md and GET /api/agent/context for authoritative run "
+    "state. Refer to the purpose in _setup_prompt.txt if it is not already in context; retrieve "
+    "specific directives, lessons or evidence only as needed. Preserve valid in-flight work, "
     "then continue the highest-priority unfinished work that directly serves "
     "this workspace's research objective. Generate and launch a diverse batch "
     "of new on-mandate experiments when compute is available; choose methods, "
     "replication, and concurrency from the actual brief and evidence rather "
-    "than assumptions from another project. NEVER idle or wait for a human "
-    "decision. Keep researching until the operator halts you or the harness's "
-    "explicit terminal protocol is satisfied."
+    "than assumptions from another project. When experiments or review are "
+    "running and no useful preparation remains, POST /api/agent/wait with a "
+    "concise handoff and finish your turn. The server will wake this conversation "
+    "on relevant events. Do not run sleep/status-poll loops or wait for a human decision."
 )
 
 
@@ -460,21 +468,12 @@ def _agent_boot_screen(pane_low: str) -> bool:
     return any(m in pane_low for m in _AGENT_BOOT_MARKERS)
 
 
-def _agent_has_draft(pane_low: str) -> bool:
-    """True if the agent has typed a non-trivial next-step into the prompt (a
-    line beginning with a Claude (❯) or Codex (›) marker with real content).
-    We must NOT nudge then — clearing its own plan with C-u is exactly the
-    counterproductive thrash we saw (148 nudges wiping an in-progress plan)."""
-    for ln in pane_low.splitlines():
-        t = ln.strip()
-        # Codex renders its generic placeholder as literal capture-pane text,
-        # unlike a browser placeholder. It is not a user draft and must not
-        # suppress autonomous recovery.
-        placeholder = t.lower() == "› ask codex to do anything"
-        if (t.startswith(("❯ ", "› ")) and len(t) > 8
-                and 'try "' not in t and not placeholder):
-            return True
-    return False
+def _agent_has_draft(pane_low: str, session: str = _AGENT_SESSION) -> bool:
+    """Inspect only the current input; old user prompts remain in scrollback."""
+    prompt = _nudge_prompt(pane_low)
+    if not prompt:
+        return False
+    return bool(prompt[0] and not _nudge_input_empty(_pane_target(session), pane_low))
 
 
 def _agent_idle_prompt(pane_low: str) -> bool:
@@ -489,6 +488,8 @@ def _agent_idle_prompt(pane_low: str) -> bool:
     return ("shift+tab to cycle" in pane_low       # idle footer, any mode
             or "bypass permissions on" in pane_low
             or "auto mode on" in pane_low
+            or "ask anything, / for commands" in pane_low
+            or "\nyolo mode " in pane_low
             or "enter to select" in pane_low
             or "\n❯ " in pane_low
             or "\n› " in pane_low
@@ -566,29 +567,321 @@ def _agent_idle_save(v: dict | None) -> None:
         db.close()
 
 
+def _nudge_prompt(pane: str) -> tuple[str, int, int] | None:
+    """Extract the last visible input box, not a marker in old scrollback."""
+    lines = pane.splitlines()
+    starts = [(i, _nudge_prompt_line(line)) for i, line in enumerate(lines)]
+    starts = [(i, hit) for i, hit in starts if hit]
+    if not starts:
+        return None
+    start, hit = starts[-1]
+    # OpenCode repeats its left border on every line of a multiline input.
+    # Keep the complete editable block, not just the final bordered line.
+    if hit.group('prefix').lstrip().startswith('┃'):
+        while start and lines[start - 1].lstrip().startswith('┃'):
+            start -= 1
+        hit = _nudge_prompt_line(lines[start])
+    body = [hit.group('body')]
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        line = lines[i].strip()
+        lower = line.lower()
+        if (line.startswith(('─', '━', '═', '╰', '└')) or
+                any(token in lower for token in ('bypass permissions', 'shift+tab to cycle',
+                    'context left', '? for shortcuts', 'auto mode on', 'ctrl+p menu',
+                    'tab to queue message')) or
+                _re.match(r'^(?:gpt-|claude-|opus |sonnet |fable |gemini-)', lower)):
+            end = i
+            break
+        continuation = _nudge_prompt_line(lines[i])
+        body.append(continuation.group('body') if continuation and
+                    continuation.group('prefix').lstrip().startswith('┃') else lines[i])
+    text = ' '.join(' '.join(body).split())
+    return text, start, end
+
+
+def _nudge_prompt_line(line: str):
+    # Gemini's production --screen-reader view has no arrow. OpenCode mini
+    # uses a vertical input border; both formats are from installed CLIs.
+    return _re.match(r'^(?P<prefix>\s*(?:[❯›>┃]\s?|YOLO mode ))(?P<body>.*)$', line, _re.I)
+
+
+def _nudge_pane(target: str, *, joined: bool = True, styled: bool = False) -> str | None:
+    # Only the current screen; -J joins physical wraps without inserting spaces
+    # inside words. A historical marker is never evidence of draft ownership.
+    command = ['tmux', 'capture-pane', '-t', target, '-p']
+    if joined:
+        command.append('-J')
+    if styled:
+        command.append('-e')
+    pane = _sp.run(command, capture_output=True, timeout=4)
+    if pane.returncode or not pane.stdout:
+        return None
+    return pane.stdout.decode('utf-8', errors='ignore') if isinstance(pane.stdout, bytes) else pane.stdout
+
+
+def _nudge_placeholder(text: str) -> bool:
+    low = text.lower()
+    return (low in {'ask codex to do anything', 'ask anything, / for commands',
+                   'ask anything, / for commands, @ for context…',
+                   'type your message or @path/to/file'} or
+            bool(_re.fullmatch(r'try "[^"\n]+"', low)))
+
+
+def _dim_placeholder_line(line: str, column: int, *, muted_palette: int | None = None) -> bool:
+    """Require placeholder styling, even if an operator has pressed Home.
+
+    Codex/Claude use dim; provider-specific muted palettes are accepted only
+    for verified input frames. Unknown rendering is preserved as a draft.
+    """
+    dim, foreground, offset, seen = False, None, 0, False
+    for part in _re.split(r'(\x1b\[[0-9;]*m)', line):
+        if part.startswith('\x1b['):
+            codes = [int(v or '0') for v in part[2:-1].split(';')]
+            index = 0
+            while index < len(codes):
+                code = codes[index]
+                # RGB/indexed color components are not display attributes.
+                if code in (38, 48, 58) and index + 1 < len(codes):
+                    if code == 38:
+                        foreground = (codes[index + 2] if codes[index + 1] == 5
+                                      and index + 2 < len(codes) else None)
+                    index += 5 if codes[index + 1] == 2 else 3
+                    continue
+                if code in (0, 22):
+                    dim = False
+                elif code == 2:
+                    dim = True
+                if code in (0, 39):
+                    foreground = None
+                elif 30 <= code <= 37:
+                    foreground = code - 30
+                elif 90 <= code <= 97:
+                    foreground = code - 90 + 8
+                index += 1
+            continue
+        for char in part:
+            if offset >= column and not char.isspace():
+                seen = True
+                if not dim and (muted_palette is None or foreground != muted_palette):
+                    return False
+            offset += 1
+    return seen
+
+
+def _nudge_input_empty(target: str, pane: str, *, allow_busy: bool = False) -> bool:
+    """Distinguish a painted suggestion from an identically worded draft."""
+    prompt = _nudge_prompt(pane)
+    if not prompt:
+        return False
+    if not prompt[0]:
+        return True
+    if not _nudge_placeholder(prompt[0]) or (not allow_busy and _agent_busy(pane.lower())):
+        return False
+    try:
+        raw = _nudge_pane(target, joined=False, styled=True)
+        if raw is None:
+            return False
+        plain = _re.sub(r'\x1b\[[0-9;]*m', '', raw)
+        current = _nudge_prompt(plain)
+        if not current or current[0].lower() != prompt[0].lower():
+            return False
+        line = plain.splitlines()[current[1]]
+        prefix = _nudge_prompt_line(line)
+        if not prefix:
+            return False
+        cursor = _sp.run(['tmux', 'display-message', '-p', '-t', target,
+                          '#{cursor_y} #{cursor_x}'], capture_output=True, timeout=4)
+        row, column = map(int, cursor.stdout.split())
+        if cursor.returncode or row != current[1]:
+            return False
+        # OpenCode mini uses its muted palette (8), not SGR dim; typed text
+        # uses palette 255. Only accept that style for its bordered input.
+        frame = prefix.group('prefix').lstrip()
+        palette = 8 if frame.startswith('┃') else None
+        input_column = prefix.end('prefix')
+        styled_line = raw.splitlines()[row]
+        if frame == 'YOLO mode ':
+            # Gemini screen-reader mode paints its caret as an inverse blank
+            # at the input start; tmux's hardware cursor stays after the hint.
+            # A typed matching draft is palette 231, with its caret on a real
+            # character at Home, so neither can masquerade as this placeholder.
+            if (column != len(line.rstrip()) or
+                    not _re.match(r'^YOLO mode \x1b\[7m \x1b\[0m', styled_line)):
+                return False
+            palette = 248
+        elif column != input_column:
+            return False
+        if not _dim_placeholder_line(styled_line, input_column, muted_palette=palette):
+            return False
+        # Recheck the input, not the entire terminal: a live spinner or new
+        # model output may repaint other rows while the composer stays empty.
+        # Matching text with changed styling still belongs to the operator.
+        latest = _nudge_pane(target, joined=False, styled=True)
+        if latest is None:
+            return False
+        last = _nudge_prompt(_re.sub(r'\x1b\[[0-9;]*m', '', latest))
+        if not last or last[0] != current[0] or latest.splitlines()[last[1]] != styled_line:
+            return False
+        cursor = _sp.run(['tmux', 'display-message', '-p', '-t', target,
+                          '#{cursor_y} #{cursor_x}'], capture_output=True, timeout=4)
+        last_row, last_column = map(int, cursor.stdout.split())
+        return not cursor.returncode and last_row == last[1] and last_column == column
+    except Exception:                                   # noqa: BLE001
+        return False
+
+
+def _owns_nudge_draft(target: str, pane: str, text: str, *, allow_busy: bool = False) -> bool:
+    """Require full exact text AND the cursor in that editable input box."""
+    if not allow_busy and _agent_busy(pane.lower()):
+        return False
+    prompt = _nudge_prompt(pane)
+    if not prompt or prompt[0] != ' '.join(text.split()):
+        return False
+    raw = _nudge_pane(target, joined=False)
+    if raw is None:
+        return False
+    current = _nudge_prompt(raw)
+    cursor = _sp.run(['tmux', 'display-message', '-p', '-t', target, '#{cursor_y}'],
+                     capture_output=True, timeout=4)
+    if not current or cursor.returncode:
+        return False
+    try:
+        row = int(cursor.stdout.strip())
+    except (ValueError, TypeError, AttributeError):
+        return False
+    if not current[1] <= row < current[2]:
+        return False
+    # Re-capture immediately before sending a key: preserve a draft edited
+    # while the cursor position was being inspected.
+    latest = _nudge_pane(target)
+    last = _nudge_prompt(latest) if latest is not None else None
+    return bool(last and last[0] == prompt[0] and (allow_busy or not _agent_busy(latest.lower())))
+
+
+def _clear_failed_nudge(target: str, text: str, *, allow_busy: bool = False) -> None:
+    pane = _nudge_pane(target)
+    if pane is None or not _owns_nudge_draft(target, pane, text, allow_busy=allow_busy):
+        return
+    # A tiny viewport may hide an active model turn. Never use Ctrl-C or
+    # Escape here. App input is a single logical line, so verified cursor-at-
+    # end Ctrl-U clears that draft without interrupting hidden work.
+    if '\n' not in text:
+        raw = _nudge_pane(target, joined=False)
+        prompt = _nudge_prompt(raw or '')
+        cursor = _sp.run(['tmux', 'display-message', '-p', '-t', target, '#{cursor_y} #{cursor_x}'],
+                         capture_output=True, timeout=4)
+        if not prompt or cursor.returncode:
+            return
+        row, column = map(int, cursor.stdout.split())
+        lines = (raw or '').splitlines()
+        occupied = [i for i in range(prompt[1], prompt[2]) if lines[i].strip()]
+        if not occupied:
+            return
+        end_row = occupied[-1]
+        end_column = len(lines[end_row].rstrip())
+        if lines[prompt[1]].startswith('YOLO mode '):
+            end_column += 1  # Gemini's screen-reader painted caret occupies a cell.
+        if row == end_row and column == end_column:
+            _sp.run(['tmux', 'send-keys', '-t', target, 'C-u'], capture_output=True, timeout=4)
+
+
 def _send_agent_nudge(text: str = _AGENT_NUDGE,
                       session: str = _AGENT_SESSION) -> bool:
-    """Clear any half-typed draft in the prompt (C-u), then type + submit the
-    nudge. Best-effort — returns False on any tmux failure."""
+    from .agent_wait import delivery_lock
+    with delivery_lock():
+        return _send_agent_nudge_locked(text, session)
+
+
+def _send_agent_nudge_locked(text: str, session: str) -> bool:
+    return bool(_submit_agent_input_locked(text, session, allow_queue=False))
+
+
+def deliver_agent_message(text: str, session: str = _AGENT_SESSION) -> str | None:
+    """Report acceptance only after the native CLI consumes the input.
+
+    Very small viewports can hide activity/queue indicators, so those return
+    accepted instead of claiming that a queued message started a new turn.
+    """
+    from .agent_wait import delivery_lock
+    with delivery_lock():
+        return _submit_agent_input_locked(text, session, allow_queue=True)
+
+
+def _delivery_busy(pane: str) -> bool:
+    low = pane.lower()
+    return _agent_busy(low) or _agent_pending_turn(low)
+
+
+def _input_limits(target: str) -> tuple[int, int]:
+    result = _sp.run(['tmux', 'display-message', '-p', '-t', target,
+                      '#{pane_width} #{pane_height}'], capture_output=True, timeout=4)
+    width, height = map(int, result.stdout.split())
+    if result.returncode or width < 10 or height < 3:
+        raise ValueError('The native terminal is too small to verify input')
+    return max(16, min(512, (width - 4) * (1 if height < 12 else 3))), height
+
+
+def _agent_input_consumed(target: str, pane: str, *, queued: bool,
+                          height: int, allow_queue: bool) -> bool:
+    # The sent turn may now be busy, including when an idle-only event wake
+    # was sent. A verified empty composer still proves input consumption.
+    if _nudge_input_empty(target, pane, allow_busy=True):
+        return True
+    # Some native clients replace the entire prompt with an active-turn view.
+    # A tiny viewport may merely reveal a pre-existing spinner on repaint;
+    # neither that nor a busy frame with our editable draft proves acceptance.
+    return bool(height >= 8 and not queued and _delivery_busy(pane)
+                and _nudge_prompt(pane) is None)
+
+
+def _submit_agent_input_locked(text: str, session: str, *, allow_queue: bool) -> str | None:
+    """Submit only from an empty prompt and preserve every unrelated draft."""
     try:
         import time as _t
-        # Escape cancels any open interactive selection menu (the agent's
-        # "enter to select · esc to cancel" prompt) so we land back on the text
-        # prompt; harmless at a plain prompt. Then C-u clears any half-typed
-        # draft, and we type + submit the nudge.
         target = _pane_target(session)
-        _sp.run(["tmux", "send-keys", "-t", target, "Escape"],
-                capture_output=True, timeout=4)
-        _t.sleep(0.3)
-        _sp.run(["tmux", "send-keys", "-t", target, "C-u"],
-                capture_output=True, timeout=4)
-        _sp.run(["tmux", "send-keys", "-t", target, "-l", text],
-                capture_output=True, timeout=4)
-        _t.sleep(0.2)
+        pane = _nudge_pane(target)
+        if pane is None or (_delivery_busy(pane) and not allow_queue):
+            return None
+        if not _nudge_input_empty(target, pane, allow_busy=allow_queue):
+            return None
+        from .agent_inbox import delivery_text
+        budget, height = _input_limits(target)
+        text = delivery_text(text, session, single_line=True, max_chars=budget)
+        pane = _nudge_pane(target)
+        if (pane is None or (_delivery_busy(pane) and not allow_queue) or
+                not _nudge_input_empty(target, pane, allow_busy=allow_queue)):
+            return None
+        # Do not Escape: a small native viewport can hide active generation.
+        # A verified empty composer already permits typing without any clear.
+        pane = _nudge_pane(target)
+        if (pane is None or (_delivery_busy(pane) and not allow_queue) or
+                not _nudge_input_empty(target, pane, allow_busy=allow_queue)):
+            return None
+        written = _sp.run(["tmux", "send-keys", "-t", target, "-l", text],
+                          capture_output=True, timeout=4)
+        if written.returncode != 0:
+            return None
+        # Wait for the complete draft to render before Enter. A successful
+        # tmux write can precede native TUI input processing by several frames.
+        deadline = _t.monotonic() + 3
+        while True:
+            pane = _nudge_pane(target)
+            if pane is not None and _owns_nudge_draft(target, pane, text, allow_busy=allow_queue):
+                break
+            if _t.monotonic() >= deadline:
+                return None
+            _t.sleep(.1)
+        queued = _delivery_busy(pane)
+        delivery = 'queued' if queued else ('accepted' if height < 8 else 'submitted')
+        if queued and not allow_queue:
+            _clear_failed_nudge(target, text, allow_busy=True)
+            return None
         submitted = _sp.run(["tmux", "send-keys", "-t", target, "Enter"],
                             capture_output=True, timeout=4)
         if submitted.returncode != 0:
-            return False
+            _clear_failed_nudge(target, text, allow_busy=allow_queue)
+            return None
 
         # tmux occasionally delivers the literal text but loses the following
         # Enter while the TUI is repainting.  That leaves an apparently alive
@@ -596,22 +889,27 @@ def _send_agent_nudge(text: str = _AGENT_NUDGE,
         # visible state after submission and retry Enter exactly once only
         # when the distinctive nudge marker is still an editable prompt.
         _t.sleep(1.0)
-        pane = _sp.run(["tmux", "capture-pane", "-t", target, "-p",
-                        "-S", "-40"], capture_output=True, timeout=4)
-        pane_low = (pane.stdout or b"").decode(
-            "utf-8", errors="ignore").lower()
-        marker = "[autonomy - no human is watching this session]"
-        if (pane.returncode == 0 and marker in pane_low
-                and not _agent_busy(pane_low)
-                and (_agent_has_draft(pane_low)
-                     or _agent_idle_prompt(pane_low))):
+        pane = _nudge_pane(target)
+        if pane is None:
+            return None
+        if _agent_input_consumed(target, pane, queued=queued, height=height, allow_queue=allow_queue):
+            return delivery
+        if _owns_nudge_draft(target, pane, text, allow_busy=allow_queue):
             retried = _sp.run(["tmux", "send-keys", "-t", target, "Enter"],
                               capture_output=True, timeout=4)
             if retried.returncode != 0:
-                return False
-        return True
+                _clear_failed_nudge(target, text, allow_busy=allow_queue)
+                return None
+            _t.sleep(1.0)
+            pane = _nudge_pane(target)
+            if pane is None:
+                return None
+            if _agent_input_consumed(target, pane, queued=queued, height=height, allow_queue=allow_queue):
+                return delivery
+        _clear_failed_nudge(target, text, allow_busy=allow_queue)
+        return None
     except Exception:                                   # noqa: BLE001
-        return False
+        return None
 
 
 def _supervise_research_agent() -> None:
@@ -670,11 +968,9 @@ def _supervise_research_agent() -> None:
         except Exception:                               # noqa: BLE001
             return 1e9
 
-    # A Codex pending-turn footer without a live spinner is neither "busy" nor
-    # "idle" in the ordinary TUI contract. Track exact visible-pane movement.
-    # If it remains byte-identical for 20 minutes, cancel the wedged provider
-    # turn and refeed through the verified nudge path. Any output change resets
-    # the clock, preserving arbitrarily long but visibly progressing work.
+    # A narrow terminal can hide a healthy turn's spinner and output while
+    # retaining its queue footer. Unchanged pixels cannot prove that work has
+    # stalled; warn once for that screen, without interrupting the process.
     pending = _agent_pending_turn(pane_low) and not busy
     if (not disable_bg and alive and not halted and not paused and
             not concluding and not boot_screen and pending):
@@ -687,24 +983,26 @@ def _supervise_research_agent() -> None:
         frozen_age = _age("pending_since")
         if frozen_age < _AGENT_FROZEN_PENDING_SEC:
             return
-        try:
-            _sp.run(["tmux", "send-keys", "-t",
-                     _pane_target(_AGENT_SESSION), "Escape"],
-                    capture_output=True, timeout=4)
-        except Exception:                               # noqa: BLE001
-            pass
-        ok = _send_agent_nudge()
-        _agent_idle_save({"last_nudge": _agent_iso(), "strikes": 1})
-        lifecycle.emit_event(
-            "agent_frozen_turn_recovered",
-            (f"Research-agent provider turn showed no visible progress for "
-             f"{int(frozen_age)}s; cancelled it and submitted a fresh "
-             "autonomy directive."),
-            severity="warning", actor="supervisor")
-        if not ok:
-            lifecycle.emit_event("supervisor_error",
-                                 "frozen-turn recovery send failed",
-                                 severity="warning")
+        if not state.get("pending_warned_at"):
+            state["pending_warned_at"] = _agent_iso()
+            _agent_idle_save(state)
+            lifecycle.emit_event(
+                "agent_turn_visibility_limited",
+                (f"Research-agent terminal has shown the same queue footer for "
+                 f"{int(frozen_age)}s. A small terminal can hide active work; "
+                 "the current turn and input were preserved. Expand the terminal "
+                 "to inspect progress."),
+                severity="warning", actor="supervisor")
+        return
+
+    # A registered event wait keeps workers running while the model is idle.
+    # Handle it before the generic idle watchdog so no periodic autonomy nudge
+    # defeats the cost saving. Dead-process recovery above remains active.
+    from . import agent_wait
+    if agent_wait.supervise(
+            alive=alive, busy=busy, idle=idle_prompt and not has_draft,
+            blocked=disable_bg or halted or paused or boot_screen,
+            send=_send_agent_nudge):
         return
 
     # First time we see the agent parked, idle_since is unset -> treat idle_age

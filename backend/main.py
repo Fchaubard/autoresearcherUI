@@ -33,6 +33,11 @@ async def lifespan(app: FastAPI):
         _api._apply_tokens_to_env()
     except Exception as e:                              # noqa: BLE001
         print(f"[main] apply_tokens_to_env failed: {e}", flush=True)
+    try:
+        from .app.flint_manager import start_if_selected
+        start_if_selected()
+    except Exception as e:
+        print(f"[main] managed Flint startup failed: {type(e).__name__}", flush=True)
     # Pre-write Claude Code's settings.json with apiKeyHelper so Claude
     # uses ANTHROPIC_API_KEY directly and never falls into OAuth. Doing
     # this at startup (not just at agent spawn) means even a manual

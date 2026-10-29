@@ -80,9 +80,8 @@ def _iso() -> str:
 def _provider_for(model: str) -> str | None:
     known = provider_for(model)
     if known:
-        env = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY",
-               "claude": "ANTHROPIC_API_KEY"}[known]
-        return known if os.environ.get(env) else None
+        from .provider_config import provider_ready
+        return known if provider_ready(model) else None
     m = (model or "").lower()
     if m.startswith("gemini"):
         return "gemini" if os.environ.get("GEMINI_API_KEY") else None
@@ -339,8 +338,10 @@ def _build_context() -> dict:
     # idle GPU summary
     idle = [g for g in gpus if (g.get("util_pct", 0) or 0) < 5
             and (g.get("vram_used_mb", 0) or 0) < 600]
+    from . import agent_wait
     return {
         "now": _iso(),
+        "registered_event_wait": agent_wait.status(),
         "gpus_total": len(gpus),
         "gpus_idle": len(idle),
         "gpus_idle_indices": [g["index"] for g in idle],
@@ -394,6 +395,11 @@ INTERVENE if you see any of:
 
 DO NOT INTERVENE if everything looks healthy. It is fine to return zero
 messages — be sparing, every message interrupts the agent.
+When registered_event_wait.status is waiting and workers are healthy, the
+agent intentionally finished its turn to avoid paid polling. That is NOT a
+stall, halt or request for human input. The deterministic supervisor wakes
+it on experiment/review changes. Intervene only for a concrete new decision
+or problem; do not tell it to sleep, poll or keep generating while waiting.
 
 ESCALATION_HALT (RESEARCH_IMPROVEMENT_PLAN #6):
   If you see an `escalation_halt` Event from the strategic council in
@@ -422,60 +428,55 @@ def _call(model: str, system: str, user: str) -> str:
     """Route the call to the right adapter based on model name."""
     prov = _provider_for(model)
     if not prov:
-        raise RuntimeError(f"no API key for {model}")
-    if prov == "gemini":
-        key = os.environ["GEMINI_API_KEY"]
-        url = ("https://generativelanguage.googleapis.com/v1beta/"
-               f"models/{model}:generateContent?key={key}")
-        body = {
-            "system_instruction": {"parts": [{"text": system}]},
-            "contents": [{"role": "user", "parts": [{"text": user}]}],
-            "generationConfig": {"responseMimeType": "application/json",
-                                 "temperature": 0.5},
-        }
-        effort = _settings().get("pi_agent_effort")
-        if effort and efforts_for(model):
-            body["generationConfig"]["thinkingConfig"] = {"thinkingLevel": effort}
-        data = council._post_json_retry(url, body, {})
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-    if prov == "openai":
-        key = os.environ["OPENAI_API_KEY"]
-        body = {
-            "model": model,
-            "messages": [{"role": "system", "content": system},
-                         {"role": "user", "content": user}],
-            "response_format": {"type": "json_object"},
-        }
-        effort = _settings().get("pi_agent_effort", "medium")
-        if efforts_for(model):
-            body["reasoning_effort"] = effort
-        data = council._post_json_retry(
-            "https://api.openai.com/v1/chat/completions", body,
-            {"Authorization": f"Bearer {key}"})
-        return data["choices"][0]["message"]["content"]
-    if prov == "claude":
-        key = os.environ["ANTHROPIC_API_KEY"]
-        body = {
-            "model": model,
-            "max_tokens": 1500,
-            "system": system,
-            "messages": [{"role": "user", "content": user}],
-        }
-        data = council._post_json_retry(
-            "https://api.anthropic.com/v1/messages", body,
-            {"x-api-key": key, "anthropic-version": "2023-06-01"})
-        return data["content"][0]["text"]
-    raise RuntimeError(f"unknown provider {prov}")
+        from .provider_config import requirement_error
+        raise RuntimeError(requirement_error(model) or f"Provider unavailable for {model}")
+    # Normalize stale effort after a model switch and support Responses-only
+    # models through the same exact-model dispatch used by the council.
+    effort = _settings().get("pi_agent_effort") or "medium"
+    with council.advisory_usage.context(role="pi", operation="pi_cycle"):
+        return council._call_model(model, effort, system, user)
+
+
+def _model_failure(model: str, detail: str, *, mode: str = "research") -> dict:
+    """Expose a selected PI failure without changing models or sending nudges."""
+    message = f"PI selected model {model} failed: {detail}"
+    print(f"[pi/{mode}] {message}", flush=True)
+    try:
+        with SessionLocal() as session:
+            event = Event(id="ev-" + os.urandom(4).hex(), type="pi_error",
+                          severity="warning", actor="pi:" + model,
+                          message=message[:280], created_at=_iso())
+            session.add(event)
+            session.commit()
+        bus.publish("events", "runs_changed", {})
+    except Exception:
+        pass
+    return {"status": "error", "error": message, "model": model,
+            "mode": mode, "messages_sent": 0}
+
+
+def _valid_pi_response(out) -> bool:
+    return (isinstance(out, dict) and isinstance(out.get("concerns"), str)
+            and isinstance(out.get("messages"), list)
+            and all(isinstance(m, str) for m in out["messages"]))
 
 
 def _send_to_agent(text: str, session: str = "agent") -> bool:
     """Type a line into the agent's tmux session (same as user chat).
     `session` lets paper-mode nags target the author tmux instead."""
+    from . import agent_wait
+    with agent_wait.delivery_lock():
+        return _send_to_agent_locked(text, session)
+
+
+def _send_to_agent_locked(text: str, session: str) -> bool:
     try:
-        subprocess.run(["tmux", "send-keys", "-t", session, "-l", text],
-                       capture_output=True, timeout=8)
-        subprocess.run(["tmux", "send-keys", "-t", session, "Enter"],
-                       capture_output=True, timeout=8)
+        from . import agent_wait
+        from .supervisor import deliver_agent_message
+        if not deliver_agent_message(text, session=session):
+            return False
+        if session == "agent":
+            agent_wait.cancel()
         return True
     except Exception:
         return False
@@ -683,8 +684,8 @@ def cycle_paper(force: bool = False) -> dict | None:
         pass
     model = (cfg.get("pi_agent_model") or DEFAULTS["pi_agent_model"]).strip()
     if not _provider_for(model):
-        print(f"[pi/paper] no API key for {model}; skipping", flush=True)
-        return None
+        from .provider_config import requirement_error
+        return _model_failure(model, requirement_error(model) or "provider unavailable", mode="paper")
     ctx = _build_paper_context()
     from . import purpose as _purpose
     _anchor = _purpose.anchor_block()
@@ -695,12 +696,13 @@ def cycle_paper(force: bool = False) -> dict | None:
             + json.dumps(ctx, indent=2, default=str))
     try:
         text = _call(model, SYSTEM_PAPER, user)
+    except urllib.error.HTTPError as e:
+        return _model_failure(model, f"HTTP {e.code}", mode="paper")
     except Exception as e:
-        print(f"[pi/paper] call failed: {e}", flush=True)
-        return None
+        return _model_failure(model, council._model_error_detail(e), mode="paper")
     out = council._safe_parse(text)
-    if not out:
-        return None
+    if not _valid_pi_response(out):
+        return _model_failure(model, "response did not match the PI JSON schema", mode="paper")
     concerns = (out.get("concerns") or "").strip()
     messages = [m for m in (out.get("messages") or []) if m]
     sent = 0
@@ -1193,8 +1195,8 @@ def cycle(force: bool = False) -> dict | None:
         pass
     model = (cfg.get("pi_agent_model") or DEFAULTS["pi_agent_model"]).strip()
     if not _provider_for(model):
-        print(f"[pi] no API key for {model}; skipping cycle", flush=True)
-        return None
+        from .provider_config import requirement_error
+        return _model_failure(model, requirement_error(model) or "provider unavailable")
     ctx = _build_context()
     # Idle-GPU email escalation (NEW 2026-06-05): when ALL GPUs sit idle
     # for >= 30 minutes the operator MUST be told via email + a visible
@@ -1215,21 +1217,13 @@ def cycle(force: bool = False) -> dict | None:
     try:
         text = _call(model, SYSTEM, user)
     except urllib.error.HTTPError as e:
-        body = ""
-        try:
-            body = e.read().decode("utf-8", errors="ignore")[:300]
-        except Exception:
-            pass
-        print(f"[pi] HTTP {e.code}: {body}", flush=True)
-        return None
+        return _model_failure(model, f"HTTP {e.code}")
     except Exception as e:                              # noqa: BLE001
-        print(f"[pi] call failed: {e}", flush=True)
-        return None
+        return _model_failure(model, council._model_error_detail(e))
 
     out = council._safe_parse(text)
-    if not out:
-        print(f"[pi] non-JSON; first 200: {text[:200]!r}", flush=True)
-        return None
+    if not _valid_pi_response(out):
+        return _model_failure(model, "response did not match the PI JSON schema")
     concerns = (out.get("concerns") or "").strip()
     messages = [m for m in (out.get("messages") or []) if m]
 

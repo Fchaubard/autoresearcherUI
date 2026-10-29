@@ -1,0 +1,34 @@
+{
+  "tested_at": "2026-10-29",
+  "mode": "managed",
+  "model": "flint/local",
+  "served_model": "flint",
+  "device": "cpu",
+  "inference_threads": 4,
+  "parallel_slots": 1,
+  "gpu_allocation": false,
+  "checkpoint_revision": "9c47151036bc2c34331142dda04488bceab2bc9f",
+  "checkpoint_sha256": "43c07baccdba42eb7528a9630ee15699b1942c297291dc1b39a061f508ee1a4b",
+  "runtime_commit": "cf24317bea431b807dc93319d74c61bed6e20aff",
+  "context_tokens": 16384,
+  "max_output_tokens": 8192,
+  "persistent_cache": "/var/lib/autoresearcherui/models/flint",
+  "production_configuration_changed": false,
+  "small_completion": {
+    "served_model": "flint",
+    "finish_reason": "stop",
+    "reply_characters": 5,
+    "reply_sha256": "c2e3ac47f4a325469c1a2d5f117e463ec943c721986d5d9f09ac4540b7d80526",
+    "reply_matches": true,
+    "usage": {
+      "completion_tokens": 31,
+      "prompt_tokens": 13,
+      "total_tokens": 44,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      }
+    },
+    "elapsed_seconds": 2.64
+  },
+  "scope_note": "A small response timing does not certify production-length CPU latency. Role results are recorded separately."
+}

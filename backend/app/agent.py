@@ -111,7 +111,7 @@ class RealAgent:
                  anthropic_key: str = "", setup_prompt: str = "",
                  session: str = "agent", kill_criteria: str = "",
                  model: str = "", effort: str = "", openai_key: str = "",
-                 gemini_key: str = ""):
+                 gemini_key: str = "", continuation: dict | None = None):
         self.workspace = os.path.abspath(workspace)
         self.project_name = project_name
         self.ingest_url = ingest_url
@@ -128,6 +128,7 @@ class RealAgent:
         self.effort = (effort or "").strip()
         self.openai_key = (openai_key or "").strip()
         self.gemini_key = (gemini_key or "").strip()
+        self.continuation = continuation
 
     @staticmethod
     def _api_key_truncation(key: str) -> str:
@@ -253,8 +254,9 @@ class RealAgent:
                 print(f"[agent] could not write {path}: {e}", flush=True)
 
         home = os.path.expanduser("~")
-        _merge_into(os.path.join(home, ".claude.json"))
-        _merge_into(os.path.join(home, ".claude", "settings.json"))
+        config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+        _merge_into(os.path.join(config_dir or home, ".claude.json"))
+        _merge_into(os.path.join(config_dir or os.path.join(home, ".claude"), "settings.json"))
         print("[agent] pre-accepted Claude Code consent dialogs + "
               "approved API-key truncation — no OAuth or "
               "bypass-permissions / trust-folder / 'use this API key?' "
@@ -274,6 +276,7 @@ class RealAgent:
         # will launch (recurring footgun — see _install_arui_pth).
         _install_arui_pth(self.repo_root)
         env = {
+            "PWD": os.path.realpath(self.workspace),
             "ARUI_INGEST_URL": self.ingest_url,
             "ARUI_PROJECT": self.project_name,
             "ARUI_REPO": self.repo_root,
@@ -318,12 +321,16 @@ class RealAgent:
             self._ensure_claude_settings(self.anthropic_key)
         if self.openai_key:
             env["OPENAI_API_KEY"] = self.openai_key
-            # Do this before tmux starts.  Otherwise a brand-new Codex node
-            # can remain alive forever at "Provide your own API key" even
-            # though the key exists in its environment.
-            self._ensure_codex_login(self.openai_key)
+            # The app-owned Codex provider consumes this environment key
+            # directly; no global CLI login or credential-file mutation.
+        if self.continuation:
+            env["CODEX_HOME"] = self.continuation["home"]
         if self.gemini_key:
             env["GEMINI_API_KEY"] = self.gemini_key
+        if self.model.startswith("gemini-"):
+            # The workspace was explicitly selected by the operator. Current
+            # Gemini otherwise parks at a trust screen before accepting work.
+            env["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
         log = os.path.join(self.workspace, "agent.log")
 
         provider = "custom"
@@ -331,17 +338,29 @@ class RealAgent:
             inner = " ".join(shlex.quote(c) for c in self.agent_cmd)
         else:                                    # real Claude Code — interactive
             pf = os.path.join(self.workspace, "_setup_prompt.txt")
-            with open(pf, "w") as f:
-                f.write(self.setup_prompt)
+            if not self.continuation:
+                with open(pf, "w") as f:
+                    f.write(self.setup_prompt)
             # DEFAULT claude — its normal pretty TUI. Scrollback comes from
             # turning OFF tmux's alternate-screen (below) so the full-screen TUI
             # paints into the scrollback-bearing normal buffer. See
             # author_agent.start for the full rationale.
             msg = ("Read the file _setup_prompt.txt in this directory and "
                    "carry out the research it describes. Do not stop.")
-            from .agent_cli import command
+            if self.continuation:
+                from .agent_sessions import RESUME_NOTICE
+                msg = RESUME_NOTICE
+            from .agent_cli import command, prepare_environment
+            env.update(prepare_environment(self.model))
             provider, inner = command(self.model or "claude-opus-5",
-                                      self.effort, msg)
+                                      self.effort, msg, workspace=self.workspace,
+                                      resume_session_id=(self.continuation or {}).get("session_id"))
+            from .opencode_runtime import agent_environment
+            env.update(agent_environment(self.model))
+            from .provider_config import ENV_FIELDS
+            for variable in ENV_FIELDS.values():
+                if os.environ.get(variable):
+                    env.setdefault(variable, os.environ[variable])
 
         subprocess.run(["tmux", "kill-session", "-t", self.session],
                        capture_output=True)
@@ -388,20 +407,16 @@ class RealAgent:
         # until the user happens to drag the resize handle, which is
         # bad UX after `/api/agent/restart`.
         pane_stream.apply_remembered_size(self.session)
+        if not self.agent_cmd and provider == "openai":
+            from .agent_cli import accept_codex_project_trust
+            threading.Thread(target=accept_codex_project_trust,
+                             args=(self.session,), daemon=True,
+                             name="codex-project-trust").start()
         # Once Claude Code has booted, hand it the research brief.
         #
-        # Claude Code shows a one-time "Bypass Permissions mode" consent
-        # prompt the first time --dangerously-skip-permissions is used on a
-        # fresh ~/.config/claude. The prompt has two numbered options:
-        #     1. No, exit
-        #     2. Yes, I accept all responsibility …
-        # We auto-accept by typing the literal "2" then Enter. The numeric
-        # shortcut is shown in the menu and bypasses any arrow-key quirks
-        # (Down + Enter previously confirmed the highlighted "No, exit" on
-        # some Claude Code builds because the keystrokes raced the render).
-        # On subsequent restarts the consent is remembered, the prompt
-        # never appears, and the stray "2" is typed at the REPL — Claude
-        # Code's REPL eats single digits without side effects.
+        # Claude 2.1.259 removed numeric menu shortcuts and defaults its
+        # workspace trust prompt to No. Match each active screen before
+        # selecting its affirmative row with arrows, then submit the brief.
         # See https://code.claude.com/docs/en/security
         if not self.agent_cmd and provider == "claude":
             sess = shlex.quote(self.session)
@@ -411,7 +426,7 @@ class RealAgent:
             # the keystroke fired before the prompt existed and the user
             # was left staring at "1. No, exit / 2. Yes, I accept".
             # Instead: every 1 s, capture the pane, look for the consent
-            # text; when it appears, press 2 + Enter. Then wait for the
+            # text; when it appears, select the correct row. Then wait for the
             # REPL to be ready (input prompt or welcome banner) and hand
             # over the research brief. Hard cap at 90 s to never loop
             # forever on a real failure.
@@ -422,16 +437,15 @@ class RealAgent:
             # (a) "Do you want to use this API key?"  (when
             #     ANTHROPIC_API_KEY is set in env)  →  options are
             #     1.Yes / 2.No (recommended). Default is NO — typing
-            #     Enter would reject the key. We must type "1" + Enter.
+            #     Enter would reject the key. Select the previous row first.
             #
             # (b) "Trust this folder" (Claude has never seen this dir)
-            #     → 1.Yes / 2.No; "Yes" is highlighted default, Enter
-            #     is enough.
+            #     → current releases default to No, exit; older ones to Yes.
             #
             # (c) "Bypass Permissions" / "Yes, I accept all responsibility"
             #     (--dangerously-skip-permissions on a fresh install) →
             #     1.No,exit / 2.Yes,I accept. Default is NO — must type
-            #     "2" + Enter.
+            #     Down + Enter.
             #
             # Each handler is idempotent and tracked separately so they
             # can fire in any order. Once the REPL prompt is detected,
@@ -453,13 +467,19 @@ for i in $(seq 1 90); do
   # prompt. The live screen is the single source of truth for what's asking.
   PANE=$(tmux capture-pane -t "$SESS" -p -J 2>/dev/null || true)
 
-  # (a) "Do you want to use this API key?" — pick 1 (Yes). The
+  # Explicit model failures/pickers must stay visible for the operator;
+  # never press Enter through an alternative-model suggestion.
+  if printf "%s" "$PANE" | grep -qiE 'model_not_found|model not found|unknown model|invalid model|model does not exist|choose a different model|select a different model|(fallback model:|fall back to|switch to) *(gpt-|claude-|gemini-)'; then
+    exit 1
+  fi
+
+  # (a) "Do you want to use this API key?" — choose the Yes row. The
   # default 2 (No, recommended) would REFUSE the key. Detect via
   # the literal prompt + the "(recommended)" hint on option 2.
   if [ "$sent_apikey" -eq 0 ]; then
     if printf "%s" "$PANE" | grep -qiE 'use *this *API *key' \\
        && printf "%s" "$PANE" | grep -qE 'No.*\\(recommended\\)'; then
-      tmux send-keys -t "$SESS" '1' >/dev/null 2>&1
+      tmux send-keys -t "$SESS" Up >/dev/null 2>&1
       sleep 0.4
       tmux send-keys -t "$SESS" Enter >/dev/null 2>&1
       sent_apikey=1
@@ -474,7 +494,7 @@ for i in $(seq 1 90); do
   if [ "$sent_fullscreen" -eq 0 ]; then
     if printf "%s" "$PANE" | grep -qiE 'fullscreen renderer' \
        && printf "%s" "$PANE" | grep -qiE 'Not now'; then
-      tmux send-keys -t "$SESS" '2' >/dev/null 2>&1
+      tmux send-keys -t "$SESS" Down >/dev/null 2>&1
       sleep 0.4
       tmux send-keys -t "$SESS" Enter >/dev/null 2>&1
       sent_fullscreen=1
@@ -483,9 +503,15 @@ for i in $(seq 1 90); do
     fi
   fi
 
-  # (b) Trust this folder — default is Yes, just Enter.
+  # (b) Current Claude defaults to No, exit; older releases default to Yes.
   if [ "$sent_trust" -eq 0 ]; then
-    if printf "%s" "$PANE" | grep -qiE 'trust *this *folder|Do *you *trust' ; then
+    if printf "%s" "$PANE" | grep -qiE 'Yes, I trust this folder' \\
+       && printf "%s" "$PANE" | grep -qiE 'No, *exit'; then
+      tmux send-keys -t "$SESS" Home Down Enter >/dev/null 2>&1
+      sent_trust=1
+      sleep 2
+      continue
+    elif printf "%s" "$PANE" | grep -qiE 'trust *this *folder|Do *you *trust' ; then
       tmux send-keys -t "$SESS" Enter >/dev/null 2>&1
       sent_trust=1
       sleep 2
@@ -493,11 +519,11 @@ for i in $(seq 1 90); do
     fi
   fi
 
-  # (c) Bypass Permissions consent — option 2 = Yes.
+  # (c) Bypass Permissions consent — the second row is Yes.
   if [ "$sent_bypass" -eq 0 ]; then
     if printf "%s" "$PANE" | grep -qiE 'Yes, *I *accept|Bypass *Permissions' \\
        && printf "%s" "$PANE" | grep -qiE 'No, *exit'; then
-      tmux send-keys -t "$SESS" '2' >/dev/null 2>&1
+      tmux send-keys -t "$SESS" Down >/dev/null 2>&1
       sleep 0.4
       tmux send-keys -t "$SESS" Enter >/dev/null 2>&1
       sent_bypass=1
@@ -525,11 +551,6 @@ for i in $(seq 1 90); do
     fi
   fi
 done
-if [ "$sent_brief" -eq 0 ]; then
-  tmux send-keys -t "$SESS" -l "$BRIEF" >/dev/null 2>&1
-  sleep 0.5
-  tmux send-keys -t "$SESS" Enter >/dev/null 2>&1
-fi
 """
             # Run the consent-automation script in a reaped daemon thread
             # rather than a detached fire-and-forget Popen: the script polls

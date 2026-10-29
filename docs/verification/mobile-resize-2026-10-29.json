@@ -1,0 +1,65 @@
+{
+  "observed_at_utc": "2026-10-29T20:32:34.769807+00:00",
+  "status": "passed",
+  "ci_failure": {
+    "run": 40948900796,
+    "artifact": 12929689991,
+    "error": "ResizeObserver loop completed with undelivered notifications.",
+    "warning_after_second_keyboard_resize_ms": 53.504,
+    "local_exact_warning_reproduction": "Not seen in 12 repeated original tests; deterministic observer instrumentation reproduced 3 synchronous fitting calls in the old implementation."
+  },
+  "fix": "Coalesce terminal fits into requestAnimationFrame outside ResizeObserver delivery; schedule visibility restoration the same way; cancel pending fit on disposal; preserve follow/read state.",
+  "regressions": {
+    "original_chat_cases_passed": 22,
+    "new_scheduler_cases_passed": 2,
+    "critical_keyboard_renderer_scheduler_repeats_passed": 30,
+    "critical_repeat_duration_seconds": 43,
+    "engines": [
+      "webkit",
+      "chromium"
+    ],
+    "fits_during_observer_after_fix": 0,
+    "three_notification_burst_fits": 1,
+    "pending_fit_canceled_on_disposal": true,
+    "page_error_assertions_unchanged": true
+  },
+  "native_send_e2e": {
+    "passed_cases": 3,
+    "assertions": {
+      "chat_records_exact": true,
+      "document_requests": 1,
+      "document_requests_during_send": 0,
+      "page_identity_preserved": true,
+      "browser_terminal_key_requests": 0,
+      "send_requests": 3,
+      "raw_frames_received": 47,
+      "raw_offset_last": 31029,
+      "page_errors": [],
+      "no_interrupt_keys": true,
+      "backend_enter_count": 3,
+      "no_ctrl_l_warning": true,
+      "short_reply_visible_in_terminal": true,
+      "source_unchanged_during_proof": true
+    },
+    "renderer_selection": {
+      "coarse_pointer": true,
+      "bundled_webgl_available": true,
+      "dom_rows": 29,
+      "canvas_count": 0,
+      "renderer_override": false
+    },
+    "cleanup": {
+      "private_api_stopped": true,
+      "private_tmux_stopped": true,
+      "synthetic_provider_stopped": true,
+      "remaining_owned_processes": []
+    },
+    "artifact": "docs/verification/iphone-send-native-e2e-2026-10-29.json"
+  },
+  "source_sha256": {
+    "backend/app/static/app.js": "49f3bff22c9b1b6a38d716f146862a0162d997a751f1e9866089a64c95d7e71c",
+    "backend/app/api.py": "16cb0318d4179a325f8124b7038f2bca961e193a03a31e32a5593f0f3c0f8441",
+    "backend/app/supervisor.py": "542625a66404157b89db7662a61003f11478caae952f2cee0a222a2a985148cc",
+    "backend/app/agent_inbox.py": "9d734488bd4b4257ef1ff16bfdbdb975a898ebcc2af1e3f4275c674bef04b820"
+  }
+}

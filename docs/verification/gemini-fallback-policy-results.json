@@ -1,0 +1,49 @@
+{
+  "results": [
+    {
+      "selected": "gemini-3.1-flash-lite",
+      "identity_resolution_cases": 4,
+      "synthetic_error_statuses": [
+        404,
+        429,
+        500
+      ],
+      "suggested_models": [
+        "gemini-3.1-flash-lite",
+        "gemini-3.1-flash-lite",
+        "gemini-3.1-flash-lite"
+      ],
+      "passed": true
+    },
+    {
+      "selected": "gemini-2.5-flash",
+      "identity_resolution_cases": 4,
+      "synthetic_error_statuses": [
+        404,
+        429,
+        500
+      ],
+      "suggested_models": [
+        "gemini-2.5-flash",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash"
+      ],
+      "passed": true
+    },
+    {
+      "selected": "gemini-3.1-pro-preview",
+      "identity_resolution_cases": 4,
+      "synthetic_error_statuses": [
+        404,
+        429,
+        500
+      ],
+      "suggested_models": [
+        "gemini-3.1-pro-preview",
+        "gemini-3.1-pro-preview",
+        "gemini-3.1-pro-preview"
+      ],
+      "passed": true
+    }
+  ]
+}
