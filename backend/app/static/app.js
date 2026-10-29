@@ -40,7 +40,7 @@ function _report(msg, extra) {
     fetch('/api/clientlog', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(Object.assign({ msg: String(msg) }, extra || {})),
-    });
+    }).catch(() => { /* A failed report must not trigger another report. */ });
   } catch (e) { /* ignore */ }
 }
 window.addEventListener('error', e => _report(e.message,

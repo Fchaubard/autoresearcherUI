@@ -176,3 +176,27 @@ test('recovered messages stay chronological after newer live events and preserve
   expect(result.rows).toEqual(['Recovered older message','Newer live message']);
   expect(result.moved).toBeLessThan(2);
 });
+
+test('offline diagnostic delivery reports the original failure once without a rejection loop', async ({page}) => {
+  const mock = await installMocks(page);
+  const reports = [];
+  await page.route('**/api/clientlog', route => {
+    reports.push(route.request().postDataJSON());
+    return route.abort('failed');
+  });
+  await page.goto('/dashboard');
+  await page.evaluate(() => {
+    window.testUnhandledReports = [];
+    window.addEventListener('unhandledrejection', event => {
+      window.testUnhandledReports.push(String(event.reason));
+    });
+    setTimeout(() => { throw new Error('Isolated original application failure'); }, 0);
+  });
+  await expect.poll(() => reports.length).toBe(1);
+  await page.waitForTimeout(500);
+  expect(reports).toHaveLength(1);
+  expect(reports[0].msg).toContain('Isolated original application failure');
+  expect(mock.errors).toEqual(['Isolated original application failure']);
+  expect(await page.evaluate(() => window.testUnhandledReports)).toEqual([]);
+  await expect(page.locator('.hero')).toBeVisible();
+});
