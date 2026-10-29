@@ -278,6 +278,8 @@ def test_mixed_tmux_session_preserves_other_project_and_shell(jobs):
 
 def test_resume_reports_pending_settings_warning(arui_env, fake_subprocess, monkeypatch):
     from backend.app import notify, runtime_settings
+    # Isolate pending-settings reporting from native terminal delivery.
+    monkeypatch.setattr(notify, "_tmux_session_alive", lambda _: False)
     assert notify.set_research_paused(True)["ok"]
     monkeypatch.setattr(runtime_settings, "apply_pending", lambda: {
         "warnings": ["Agent model change remains pending"]})

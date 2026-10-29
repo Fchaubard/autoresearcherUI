@@ -18,12 +18,16 @@ import pytest
 
 
 @pytest.fixture
-def client(arui_env, fake_subprocess):
+def client(arui_env, fake_subprocess, monkeypatch):
     """A FastAPI TestClient bound to ONLY the api router (no static
     files, no startup events) so the tests stay fast and focused."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
+    from backend.app import notify
     from backend.app.api import router
+    # These tests exercise the durable launch gate without a native agent.
+    # Live Resume acceptance/failure is covered in test_notify_pause_delivery.
+    monkeypatch.setattr(notify, "_tmux_session_alive", lambda _: False)
     app = FastAPI()
     app.include_router(router)
     with TestClient(app) as c:
