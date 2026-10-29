@@ -23,8 +23,8 @@
 #     catch because the process didn't exit) -> recycle it.
 #   - If the `arui-cf` cloudflared session is gone -> relaunch the tunnel.
 #   - If cloudflared is alive but its published URL is unreachable for two
-#     consecutive checks -> recycle it using HTTP/2 (some GPU providers drop
-#     the QUIC/UDP transport while leaving the process alive forever).
+#     consecutive checks of the same URL -> recycle it using HTTP/2 (some GPU
+#     providers drop QUIC/UDP while leaving the process alive forever).
 #
 #   It NEVER touches the agent / author sessions, and never kills a healthy
 #   backend (single transient healthz blip is tolerated via the 2-strike
@@ -44,10 +44,15 @@ TUNNEL_STRIKE="$ROOT/data/.watchdog_tunnel_strike"
 RUNTIME_ENV="$ROOT/data/.watchdog_runtime.env"
 mkdir -p "$ROOT/data"
 
+# Manual recovery and cron can overlap. Only one check may probe or update
+# strikes at a time; a competing invocation has nothing further to do.
+exec 9>"$ROOT/data/.watchdog.lock" || exit 1
+flock -n 9 || exit 0
+
 # tmux accepts unique prefixes as targets by default. That makes `arui`
 # accidentally match `arui-cf` when the backend session is missing — exactly
 # the state this watchdog must repair. A leading `=` requires an exact name.
-have_session() { tmux has-session -t "=$1" 2>/dev/null; }
+have_session() { tmux has-session -t "=$1" 9>&- 2>/dev/null; }
 backend_up()   { curl -fsS -m 10 "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; }
 
 # Probe the public route, not merely the cloudflared process. A quick tunnel
@@ -97,22 +102,23 @@ snapshot_backend_env() {
 }
 
 launch_backend() {
-  tmux kill-session -t '=arui' 2>/dev/null || true
+  tmux kill-session -t '=arui' 9>&- 2>/dev/null || true
+  # A newly created tmux server/supervisor must not retain our lifetime lock.
   tmux new-session -d -s arui \
     "cd $ROOT && { [ -f data/.watchdog_runtime.env ] && . ./data/.watchdog_runtime.env; [ -f data/arui.env ] && set -a && . ./data/arui.env && set +a; } ; while true; do \
        ARUI_PORT=$PORT .venv/bin/python -m backend.main 2>&1 | tee -a $LOG; \
        echo \"[arui] backend exited at \$(date -u +%FT%TZ); respawning in 2s\" >>$LOG; \
        sleep 2; \
-     done"
+     done" 9>&-
   echo "[watchdog $(date -u +%FT%TZ)] relaunched backend session 'arui'" >>"$LOG"
 }
 
 launch_tunnel() {
-  tmux kill-session -t '=arui-cf' 2>/dev/null || true
+  tmux kill-session -t '=arui-cf' 9>&- 2>/dev/null || true
   # Self-updates restart quick tunnels under a new public hostname and can
   # detach the replacement process from tmux. Upgrade during maintenance.
   tmux new-session -d -s arui-cf \
-    "while true; do cloudflared tunnel --protocol http2 --no-autoupdate --url http://127.0.0.1:$PORT 2>&1 | tee -a $CFLOG; echo '[arui-cf] cloudflared exited; respawning in 2s' >>$CFLOG; sleep 2; done"
+    "while true; do cloudflared tunnel --protocol http2 --no-autoupdate --url http://127.0.0.1:$PORT 2>&1 | tee -a $CFLOG; echo '[arui-cf] cloudflared exited; respawning in 2s' >>$CFLOG; sleep 2; done" 9>&-
   echo "[watchdog $(date -u +%FT%TZ)] relaunched tunnel session 'arui-cf'" >>"$CFLOG"
 }
 
@@ -153,15 +159,18 @@ if command -v cloudflared >/dev/null 2>&1; then
   # recovery has its own PID-aware strike policy above; recycling a healthy
   # tunnel cannot repair a blocked origin and needlessly rotates its URL.
   elif backend_up && ! tunnel_up; then
-    COUNT=0
+    # A replacement quick tunnel must not inherit its predecessor's failures.
+    # Count-only records from older watchdog versions are stale by design.
+    TUNNEL_KEY="${URL:-missing}"
+    OLD_URL=""; COUNT=0
     if [ -f "$TUNNEL_STRIKE" ]; then
-      read -r COUNT <"$TUNNEL_STRIKE" || true
+      read -r OLD_URL COUNT <"$TUNNEL_STRIKE" || true
     fi
     case "$COUNT" in ''|*[!0-9]*) COUNT=0 ;; esac
-    COUNT=$((COUNT + 1))
-    printf '%s\n' "$COUNT" >"$TUNNEL_STRIKE"
+    if [ "$TUNNEL_KEY" != "$OLD_URL" ]; then COUNT=1; else COUNT=$((COUNT + 1)); fi
+    printf '%s %s\n' "$TUNNEL_KEY" "$COUNT" >"$TUNNEL_STRIKE"
     if [ "$COUNT" -ge 2 ]; then
-      echo "[watchdog $(date -u +%FT%TZ)] public tunnel failed $COUNT consecutive checks; recycling 'arui-cf' with HTTP/2" >>"$CFLOG"
+      echo "[watchdog $(date -u +%FT%TZ)] public tunnel $TUNNEL_KEY failed $COUNT consecutive checks; recycling 'arui-cf' with HTTP/2" >>"$CFLOG"
       launch_tunnel
       rm -f "$TUNNEL_STRIKE"
     fi

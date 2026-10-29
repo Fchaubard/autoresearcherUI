@@ -33,6 +33,9 @@ replaced the process outside the tmux supervisor and rotated the public URL.
 [Cloudflare documents the update restart behavior and opt-out flag](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/run-parameters/#no-autoupdate).
 Quick-tunnel URLs can still change when the tunnel is relaunched. Use the
 authenticated `/api/url` endpoint on the server to retrieve the current URL.
+Watchdog checks are serialized, and failure counts belong to the URL actually
+probed. A new hostname cannot inherit failures from its predecessor while DNS
+is still settling.
 
 ## Runtime storage
 

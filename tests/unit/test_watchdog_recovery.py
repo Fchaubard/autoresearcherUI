@@ -3,13 +3,14 @@
 The watchdog closes the gap PR 10 left open: PR 10's in-session `while true`
 supervisor only survives a process crash *inside* the tmux session, not the
 session/server itself dying (which is what stranded the pod on 2026-06-06).
-These tests are static guards — they assert the script and its setup.sh wiring
-keep their critical safety properties so a future edit can't silently regress
-them.
+Static guards verify setup.sh wiring; behavioral tests run the real script
+against fake infrastructure commands and isolated temporary state.
 """
 import os
+import signal
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -186,3 +187,112 @@ def test_watchdog_does_not_confuse_arui_cf_with_missing_backend(tmp_path):
     assert "has-session -t =arui" in calls
     assert "new-session -d -s arui" in calls
     assert "kill-session -t =arui" in calls
+
+
+def _tunnel_fixture(tmp_path):
+    root = tmp_path / "repo"
+    data = root / "data"
+    fake_bin = tmp_path / "bin"
+    data.mkdir(parents=True)
+    fake_bin.mkdir()
+    (data / "cloudflared.log").write_text(
+        "https://old-test-tunnel.trycloudflare.com\n"
+    )
+    calls = tmp_path / "tmux.calls"
+    _fake_command(fake_bin, "tmux", f'echo "$*" >> "{calls}"\nexit 0')
+    _fake_command(fake_bin, "pgrep", "exit 1")
+    _fake_command(fake_bin, "cloudflared", "exit 0")
+    _fake_command(fake_bin, "curl",
+                  'case "$*" in *127.0.0.1*) exit 0 ;; *) exit 1 ;; esac')
+    env = {**os.environ, "ARUI_ROOT": str(root),
+           "PATH": f"{fake_bin}:{os.environ['PATH']}"}
+    return data, fake_bin, calls, env
+
+
+def test_watchdog_tunnel_failures_reset_when_hostname_changes(tmp_path):
+    data, _, calls, env = _tunnel_fixture(tmp_path)
+    strike = data / ".watchdog_tunnel_strike"
+
+    subprocess.run(["bash", WATCHDOG], env=env, check=True, timeout=5)
+    assert strike.read_text().split() == [
+        "https://old-test-tunnel.trycloudflare.com", "1"]
+
+    # A freshly launched URL can briefly fail DNS while being provisioned.
+    # It must get its own first strike, not complete the previous URL's pair.
+    with (data / "cloudflared.log").open("a") as log:
+        log.write("https://replacement-test-tunnel.trycloudflare.com\n")
+    subprocess.run(["bash", WATCHDOG], env=env, check=True, timeout=5)
+    assert strike.read_text().split() == [
+        "https://replacement-test-tunnel.trycloudflare.com", "1"]
+    assert "kill-session" not in calls.read_text()
+
+    subprocess.run(["bash", WATCHDOG], env=env, check=True, timeout=5)
+    assert "kill-session -t =arui-cf" in calls.read_text()
+    assert not strike.exists()
+
+
+def test_watchdog_discards_legacy_count_only_tunnel_strike(tmp_path):
+    data, _, calls, env = _tunnel_fixture(tmp_path)
+    strike = data / ".watchdog_tunnel_strike"
+    strike.write_text("1\n")
+    subprocess.run(["bash", WATCHDOG], env=env, check=True, timeout=5)
+    assert strike.read_text().split() == [
+        "https://old-test-tunnel.trycloudflare.com", "1"]
+    assert "kill-session" not in calls.read_text()
+
+
+def test_watchdog_overlapping_check_exits_without_probing_or_striking(tmp_path):
+    data, fake_bin, calls, env = _tunnel_fixture(tmp_path)
+    entered, release = tmp_path / "entered", tmp_path / "release"
+    _fake_command(fake_bin, "curl",
+                  'case "$*" in *127.0.0.1*) exit 0 ;; esac\n'
+                  f'touch "{entered}"\n'
+                  f'while [ ! -f "{release}" ]; do sleep 0.02; done\n'
+                  'exit 1')
+    first = subprocess.Popen(["bash", WATCHDOG], env=env,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        deadline = time.monotonic() + 5
+        while not entered.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert entered.exists(), "first watchdog did not enter its health check"
+        first_calls = calls.read_text()
+        second = subprocess.run(["bash", WATCHDOG], env=env,
+                                capture_output=True, timeout=2)
+        assert second.returncode == 0
+        assert calls.read_text() == first_calls
+        assert not (data / ".watchdog_tunnel_strike").exists()
+    finally:
+        release.touch()
+        first.communicate(timeout=5)
+    assert first.returncode == 0
+    assert (data / ".watchdog_tunnel_strike").read_text().split()[-1] == "1"
+    assert "kill-session" not in calls.read_text()
+
+
+def test_watchdog_lock_is_not_inherited_by_spawned_session(tmp_path):
+    data, fake_bin, calls, env = _tunnel_fixture(tmp_path)
+    child_pid = tmp_path / "session-child.pid"
+    _fake_command(
+        fake_bin, "tmux",
+        f'echo "$*" >> "{calls}"\n'
+        'case "$1:$3" in has-session:=arui) exit 1 ;; esac\n'
+        'if [ "$1" = new-session ]; then\n'
+        '  sleep 30 >/dev/null 2>&1 &\n'
+        f'  echo "$!" > "{child_pid}"\n'
+        'fi\nexit 0',
+    )
+    _fake_command(fake_bin, "curl", "exit 0")
+    try:
+        subprocess.run(["bash", WATCHDOG], env=env, check=True, timeout=5)
+        pid = int(child_pid.read_text())
+        os.kill(pid, 0)  # The simulated tmux child outlives the watchdog.
+        lock = subprocess.run(["flock", "-n", str(data / ".watchdog.lock"),
+                               "true"], capture_output=True, timeout=2)
+        assert lock.returncode == 0, "session child retained the watchdog lock"
+    finally:
+        if child_pid.exists():
+            try:
+                os.kill(int(child_pid.read_text()), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
