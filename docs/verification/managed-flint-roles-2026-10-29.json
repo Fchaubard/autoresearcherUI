@@ -1,0 +1,1123 @@
+{
+  "tested_at": "2026-10-29T20:01:43.895104+00:00",
+  "source_revision": "2deb145f0533f927dad83c6e4877cd10520a1c50",
+  "model": "flint/local",
+  "served_model": "flint",
+  "mode": "managed",
+  "inference": "real",
+  "checkpoint_revision": "9c47151036bc2c34331142dda04488bceab2bc9f",
+  "checkpoint_sha256": "43c07baccdba42eb7528a9630ee15699b1942c297291dc1b39a061f508ee1a4b",
+  "runtime_commit": "cf24317bea431b807dc93319d74c61bed6e20aff",
+  "hardware": {
+    "device": "cpu",
+    "private_servers_peak": 4,
+    "inference_threads_per_server": 4,
+    "inference_threads_peak": 16,
+    "slots_per_server": 1,
+    "gpu_allocation": false,
+    "available_ram_gib_before_parallel_start": 407.9
+  },
+  "context_tokens": 16384,
+  "production_output_budget_tokens": 8192,
+  "production_cpu_timeout_seconds": 1800,
+  "production_configuration_changed": false,
+  "cleanup": [
+    {
+      "server": "cpu-1",
+      "status": "stopped",
+      "manually_stopped": true,
+      "owned_process_alive": false
+    },
+    {
+      "server": "cpu-3",
+      "status": "stopped",
+      "manually_stopped": true,
+      "owned_process_alive": false
+    },
+    {
+      "server": "cpu-2",
+      "status": "stopped",
+      "manually_stopped": true,
+      "owned_process_alive": false
+    },
+    {
+      "server": "cpu-4",
+      "status": "stopped",
+      "manually_stopped": true,
+      "owned_process_alive": false
+    }
+  ],
+  "title_agent_disabled_for_final_coding": true,
+  "scope_notes": [
+    "Scoping uses the substantive synthetic project and the production 8192-token output budget. Other advisor probes retain production role instructions, dispatch, and parsers but request compact synthetic schema values. The initial tiebreaker attempt exhausted a reduced 4096-token budget; its same-model repeat uses the production 8192-token budget. Other compact advisor cells use 4096.",
+    "Research and author exercise the actual OpenCode CLI with file tools in separate temporary projects; research results are independently checked by unittest.",
+    "No hosted model or other-model fallback is permitted. Every server loads the same official checkpoint and uses four CPU inference threads.",
+    "Scoping and reviewer1 completed before numeric usage and finish-reason instrumentation was added; their output schema and exact requested/served model were captured.",
+    "The coding harness stops after independent file validation succeeds; completed tool-call messages are recorded, but a final chat stop event is not required for a tool-task pass.",
+    "Original coding passes with title generation are retained; final-config repeats disable only decorative titles, and still use actual Flint tools and fresh temporary projects.",
+    "These fixture timings do not certify latency for a full production project."
+  ],
+  "results": [
+    {
+      "model": "flint/local",
+      "role": "scoping",
+      "tested_at": "2026-10-29T19:13:35.223335+00:00",
+      "timeout_seconds": 1800,
+      "max_output_tokens": 8192,
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "flint",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "flint/local"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "flint",
+          "http_status": 200,
+          "response_model": "flint"
+        }
+      ],
+      "output_characters": 3840,
+      "output_sha256": "6cdae68245be0a4f50caedb58ecd3e31327f8d3af3f00150fbe55c041ff8ef08",
+      "output_fields": [
+        "new_ideas",
+        "open_questions",
+        "problem_restated",
+        "recommended_direction",
+        "sota_summary",
+        "user_ideas_assessment"
+      ],
+      "elapsed_seconds": 632.352,
+      "managed": true,
+      "device": "cpu",
+      "threads": 4,
+      "gpu_allocation": false,
+      "managed_server": "cpu-1",
+      "fixture_style": "substantive",
+      "finish_reason_capture": "not captured by early probe instrumentation"
+    },
+    {
+      "model": "flint/local",
+      "role": "reviewer1",
+      "tested_at": "2026-10-29T19:24:07.882975+00:00",
+      "timeout_seconds": 600,
+      "max_output_tokens": 4096,
+      "fixture_style": "compact",
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "flint",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "flint/local"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "flint",
+          "http_status": 200,
+          "response_model": "flint"
+        }
+      ],
+      "output_characters": 561,
+      "output_sha256": "d235814dabf3388988dd734bccbb4023fa015914ada6635fa08e5bb69adac72c",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 459.928,
+      "managed": true,
+      "device": "cpu",
+      "threads": 4,
+      "gpu_allocation": false,
+      "managed_server": "cpu-1",
+      "finish_reason_capture": "not captured by early probe instrumentation"
+    },
+    {
+      "model": "flint/local",
+      "role": "reviewer2",
+      "tested_at": "2026-10-29T19:31:48.074394+00:00",
+      "timeout_seconds": 600,
+      "max_output_tokens": 4096,
+      "fixture_style": "compact",
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "flint",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "flint/local"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "flint",
+          "http_status": 200,
+          "response_model": "flint",
+          "finish_reason": "stop",
+          "usage": {
+            "prompt_tokens": 1630,
+            "completion_tokens": 3956,
+            "total_tokens": 5586
+          }
+        }
+      ],
+      "output_characters": 525,
+      "output_sha256": "0b858807f9c2faf8cfd9994bbabeab373b6b4d9e7abd0a8299e1356e98d72970",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 440.376,
+      "managed": true,
+      "device": "cpu",
+      "threads": 4,
+      "gpu_allocation": false,
+      "managed_server": "cpu-1",
+      "finish_reason_capture": "recorded per request"
+    },
+    {
+      "model": "flint/local",
+      "role": "tiebreaker",
+      "tested_at": "2026-10-29T19:47:01.638910+00:00",
+      "timeout_seconds": 1800,
+      "max_output_tokens": 8192,
+      "fixture_style": "compact",
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "flint",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "flint/local"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "flint",
+          "http_status": 200,
+          "response_model": "flint",
+          "finish_reason": "stop",
+          "usage": {
+            "prompt_tokens": 755,
+            "completion_tokens": 6919,
+            "total_tokens": 7674
+          }
+        }
+      ],
+      "output_characters": 399,
+      "output_sha256": "dd33b9fb7070eac107de5bf14d551c260c4b466e42e2ed09de64a98cf09b1abf",
+      "output_fields": [
+        "learning",
+        "new_ideas",
+        "rerank_pending",
+        "verdict",
+        "veto"
+      ],
+      "elapsed_seconds": 859.595,
+      "managed": true,
+      "device": "cpu",
+      "threads": 4,
+      "gpu_allocation": false,
+      "managed_server": "cpu-1",
+      "hard_timeout_seconds": 1815,
+      "attempt": 2,
+      "attempts": [
+        {
+          "model": "flint/local",
+          "role": "tiebreaker",
+          "tested_at": "2026-10-29T19:39:08.718299+00:00",
+          "timeout_seconds": 600,
+          "max_output_tokens": 4096,
+          "fixture_style": "compact",
+          "inference": "real",
+          "fallback_allowed": false,
+          "provider": "flint",
+          "status": "provider_error",
+          "schema_errors": [
+            "no_parsed_object"
+          ],
+          "dispatched_models": [
+            "flint/local"
+          ],
+          "requests": [
+            {
+              "endpoint": "/v1/chat/completions",
+              "requested_model": "flint",
+              "http_status": 200,
+              "response_model": "flint",
+              "finish_reason": "length",
+              "usage": {
+                "prompt_tokens": 755,
+                "completion_tokens": 4096,
+                "total_tokens": 4851
+              }
+            },
+            {
+              "requested_model": "flint/local",
+              "error_type": "ModelOutputBudgetError"
+            }
+          ],
+          "output_characters": 0,
+          "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "output_fields": [],
+          "error_type": "ModelOutputBudgetError",
+          "elapsed_seconds": 472.311,
+          "managed": true,
+          "device": "cpu",
+          "threads": 4,
+          "gpu_allocation": false,
+          "managed_server": "cpu-1"
+        },
+        {
+          "model": "flint/local",
+          "role": "tiebreaker",
+          "tested_at": "2026-10-29T19:47:01.638910+00:00",
+          "timeout_seconds": 1800,
+          "max_output_tokens": 8192,
+          "fixture_style": "compact",
+          "inference": "real",
+          "fallback_allowed": false,
+          "provider": "flint",
+          "status": "passed",
+          "schema_errors": [],
+          "dispatched_models": [
+            "flint/local"
+          ],
+          "requests": [
+            {
+              "endpoint": "/v1/chat/completions",
+              "requested_model": "flint",
+              "http_status": 200,
+              "response_model": "flint",
+              "finish_reason": "stop",
+              "usage": {
+                "prompt_tokens": 755,
+                "completion_tokens": 6919,
+                "total_tokens": 7674
+              }
+            }
+          ],
+          "output_characters": 399,
+          "output_sha256": "dd33b9fb7070eac107de5bf14d551c260c4b466e42e2ed09de64a98cf09b1abf",
+          "output_fields": [
+            "learning",
+            "new_ideas",
+            "rerank_pending",
+            "verdict",
+            "veto"
+          ],
+          "elapsed_seconds": 859.595,
+          "managed": true,
+          "device": "cpu",
+          "threads": 4,
+          "gpu_allocation": false,
+          "managed_server": "cpu-1",
+          "hard_timeout_seconds": 1815,
+          "attempt": 2
+        }
+      ],
+      "retest_reason": "production_output_budget",
+      "finish_reason_capture": "recorded per request"
+    },
+    {
+      "model": "flint/local",
+      "role": "pi",
+      "tested_at": "2026-10-29T19:41:13.666735+00:00",
+      "timeout_seconds": 600,
+      "max_output_tokens": 4096,
+      "fixture_style": "compact",
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "flint",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "flint/local"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "flint",
+          "http_status": 200,
+          "response_model": "flint",
+          "finish_reason": "stop",
+          "usage": {
+            "prompt_tokens": 1124,
+            "completion_tokens": 531,
+            "total_tokens": 1655
+          }
+        }
+      ],
+      "output_characters": 41,
+      "output_sha256": "db91b91956850fe790be08398941e3d0fdf1f647a945a9688bfa0a8a5996fd8d",
+      "output_fields": [
+        "concerns",
+        "messages"
+      ],
+      "elapsed_seconds": 98.592,
+      "managed_server": "cpu-2",
+      "hard_timeout_seconds": 615,
+      "managed": true,
+      "device": "cpu",
+      "threads": 4,
+      "gpu_allocation": false,
+      "finish_reason_capture": "recorded per request"
+    },
+    {
+      "model": "flint/local",
+      "role": "scoping_chat",
+      "tested_at": "2026-10-29T19:42:52.551521+00:00",
+      "timeout_seconds": 600,
+      "max_output_tokens": 4096,
+      "fixture_style": "compact",
+      "inference": "real",
+      "fallback_allowed": false,
+      "provider": "flint",
+      "status": "passed",
+      "schema_errors": [],
+      "dispatched_models": [
+        "flint/local"
+      ],
+      "requests": [
+        {
+          "endpoint": "/v1/chat/completions",
+          "requested_model": "flint",
+          "http_status": 200,
+          "response_model": "flint",
+          "finish_reason": "stop",
+          "usage": {
+            "prompt_tokens": 266,
+            "completion_tokens": 1783,
+            "total_tokens": 2049
+          }
+        }
+      ],
+      "output_characters": 137,
+      "output_sha256": "1905507d7380c48027c3ac3bb895158798f3b756f1656776f189cd80061ea9e0",
+      "output_fields": [
+        "reply"
+      ],
+      "elapsed_seconds": 180.726,
+      "managed_server": "cpu-2",
+      "hard_timeout_seconds": 615,
+      "managed": true,
+      "device": "cpu",
+      "threads": 4,
+      "gpu_allocation": false,
+      "finish_reason_capture": "recorded per request"
+    },
+    {
+      "model": "flint/local",
+      "provider": "flint",
+      "role": "research",
+      "tested_at": "2026-10-29T19:50:10.054153+00:00",
+      "inference": "real",
+      "fallback_allowed": false,
+      "transport": "agent_cli.command/mini/pty",
+      "timeout_seconds": 1800,
+      "dispatched_models": [
+        "flint/local"
+      ],
+      "status": "passed",
+      "tool_task_passed": true,
+      "observed_models": [
+        "flint/local"
+      ],
+      "completed_tools": [
+        "read",
+        "shell",
+        "write"
+      ],
+      "workspace_verified": true,
+      "cli_response_metadata": {
+        "messages": [
+          {
+            "model": "flint/local",
+            "finish_reason": "tool-calls",
+            "tokens": {
+              "input": 5026,
+              "output": 65,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            },
+            "tools": [
+              "read",
+              "read",
+              "read"
+            ]
+          },
+          {
+            "model": "flint/local",
+            "finish_reason": "tool-calls",
+            "tokens": {
+              "input": 163,
+              "output": 23,
+              "reasoning": 0,
+              "cache": {
+                "read": 5090,
+                "write": 0
+              }
+            },
+            "tools": [
+              "read"
+            ]
+          },
+          {
+            "model": "flint/local",
+            "finish_reason": "tool-calls",
+            "tokens": {
+              "input": 142,
+              "output": 92,
+              "reasoning": 0,
+              "cache": {
+                "read": 5275,
+                "write": 0
+              }
+            },
+            "tools": [
+              "write"
+            ]
+          },
+          {
+            "model": "flint/local",
+            "finish_reason": "tool-calls",
+            "tokens": {
+              "input": 10,
+              "output": 33,
+              "reasoning": 0,
+              "cache": {
+                "read": 5508,
+                "write": 0
+              }
+            },
+            "tools": [
+              "shell"
+            ]
+          },
+          {
+            "model": "flint/local",
+            "finish_reason": "tool-calls",
+            "tokens": {
+              "input": 20,
+              "output": 67,
+              "reasoning": 0,
+              "cache": {
+                "read": 5550,
+                "write": 0
+              }
+            },
+            "tools": [
+              "write"
+            ]
+          }
+        ],
+        "configured_context_tokens": 16384,
+        "configured_output_tokens": 8192
+      },
+      "created_files": [
+        "solution.py",
+        "result.json"
+      ],
+      "file_sha256": {
+        "solution.py": "0b34d8da8851b4ca8f9affba4a089753f11805ede08b3753329a569f33185b7f",
+        "result.json": "89b8d06f22cce686bfebd21631e50a710955a714c5283e777e7c3c92da77f6f3"
+      },
+      "elapsed_seconds": 280.974,
+      "managed": true,
+      "device": "cpu",
+      "threads": 4,
+      "gpu_allocation": false,
+      "managed_server": "cpu-3",
+      "max_output_tokens": 8192,
+      "fixture_style": "synthetic_coding_tool_task",
+      "hard_timeout_seconds": 1815,
+      "attempt": 2,
+      "attempts": [
+        {
+          "model": "flint/local",
+          "provider": "flint",
+          "role": "research",
+          "tested_at": "2026-10-29T19:41:13.618271+00:00",
+          "inference": "real",
+          "fallback_allowed": false,
+          "transport": "agent_cli.command/mini/pty",
+          "timeout_seconds": 600,
+          "dispatched_models": [
+            "flint/local"
+          ],
+          "status": "passed",
+          "tool_task_passed": true,
+          "observed_models": [
+            "flint/local"
+          ],
+          "completed_tools": [
+            "read",
+            "shell",
+            "write"
+          ],
+          "workspace_verified": true,
+          "created_files": [
+            "solution.py",
+            "result.json"
+          ],
+          "file_sha256": {
+            "solution.py": "1671a6e1c386083b992b02919512272a67cadfc4badd20a6e72c4232f04f696d",
+            "result.json": "89b8d06f22cce686bfebd21631e50a710955a714c5283e777e7c3c92da77f6f3"
+          },
+          "elapsed_seconds": 523.545,
+          "managed_server": "cpu-3",
+          "hard_timeout_seconds": 615,
+          "managed": true,
+          "device": "cpu",
+          "threads": 4,
+          "gpu_allocation": false,
+          "cli_response_metadata": {
+            "messages": [
+              {
+                "model": "flint/local",
+                "finish_reason": "tool-calls",
+                "tokens": {
+                  "input": 5026,
+                  "output": 54,
+                  "reasoning": 0,
+                  "cache": {
+                    "read": 0,
+                    "write": 0
+                  }
+                },
+                "tools": [
+                  "read",
+                  "read"
+                ]
+              },
+              {
+                "model": "flint/local",
+                "finish_reason": "tool-calls",
+                "tokens": {
+                  "input": 116,
+                  "output": 45,
+                  "reasoning": 0,
+                  "cache": {
+                    "read": 5079,
+                    "write": 0
+                  }
+                },
+                "tools": [
+                  "read",
+                  "read"
+                ]
+              },
+              {
+                "model": "flint/local",
+                "finish_reason": "tool-calls",
+                "tokens": {
+                  "input": 189,
+                  "output": 171,
+                  "reasoning": 0,
+                  "cache": {
+                    "read": 5239,
+                    "write": 0
+                  }
+                },
+                "tools": [
+                  "write"
+                ]
+              },
+              {
+                "model": "flint/local",
+                "finish_reason": "tool-calls",
+                "tokens": {
+                  "input": 10,
+                  "output": 35,
+                  "reasoning": 0,
+                  "cache": {
+                    "read": 5598,
+                    "write": 0
+                  }
+                },
+                "tools": [
+                  "shell"
+                ]
+              },
+              {
+                "model": "flint/local",
+                "finish_reason": null,
+                "tokens": {},
+                "tools": []
+              }
+            ],
+            "configured_context_tokens": 16384,
+            "configured_output_tokens": 8192,
+            "observed_at": 1793303395.361161
+          },
+          "title_agent_disabled": false,
+          "max_output_tokens": 8192
+        },
+        {
+          "model": "flint/local",
+          "provider": "flint",
+          "role": "research",
+          "tested_at": "2026-10-29T19:50:10.054153+00:00",
+          "inference": "real",
+          "fallback_allowed": false,
+          "transport": "agent_cli.command/mini/pty",
+          "timeout_seconds": 1800,
+          "dispatched_models": [
+            "flint/local"
+          ],
+          "status": "passed",
+          "tool_task_passed": true,
+          "observed_models": [
+            "flint/local"
+          ],
+          "completed_tools": [
+            "read",
+            "shell",
+            "write"
+          ],
+          "workspace_verified": true,
+          "cli_response_metadata": {
+            "messages": [
+              {
+                "model": "flint/local",
+                "finish_reason": "tool-calls",
+                "tokens": {
+                  "input": 5026,
+                  "output": 65,
+                  "reasoning": 0,
+                  "cache": {
+                    "read": 0,
+                    "write": 0
+                  }
+                },
+                "tools": [
+                  "read",
+                  "read",
+                  "read"
+                ]
+              },
+              {
+                "model": "flint/local",
+                "finish_reason": "tool-calls",
+                "tokens": {
+                  "input": 163,
+                  "output": 23,
+                  "reasoning": 0,
+                  "cache": {
+                    "read": 5090,
+                    "write": 0
+                  }
+                },
+                "tools": [
+                  "read"
+                ]
+              },
+              {
+                "model": "flint/local",
+                "finish_reason": "tool-calls",
+                "tokens": {
+                  "input": 142,
+                  "output": 92,
+                  "reasoning": 0,
+                  "cache": {
+                    "read": 5275,
+                    "write": 0
+                  }
+                },
+                "tools": [
+                  "write"
+                ]
+              },
+              {
+                "model": "flint/local",
+                "finish_reason": "tool-calls",
+                "tokens": {
+                  "input": 10,
+                  "output": 33,
+                  "reasoning": 0,
+                  "cache": {
+                    "read": 5508,
+                    "write": 0
+                  }
+                },
+                "tools": [
+                  "shell"
+                ]
+              },
+              {
+                "model": "flint/local",
+                "finish_reason": "tool-calls",
+                "tokens": {
+                  "input": 20,
+                  "output": 67,
+                  "reasoning": 0,
+                  "cache": {
+                    "read": 5550,
+                    "write": 0
+                  }
+                },
+                "tools": [
+                  "write"
+                ]
+              }
+            ],
+            "configured_context_tokens": 16384,
+            "configured_output_tokens": 8192
+          },
+          "created_files": [
+            "solution.py",
+            "result.json"
+          ],
+          "file_sha256": {
+            "solution.py": "0b34d8da8851b4ca8f9affba4a089753f11805ede08b3753329a569f33185b7f",
+            "result.json": "89b8d06f22cce686bfebd21631e50a710955a714c5283e777e7c3c92da77f6f3"
+          },
+          "elapsed_seconds": 280.974,
+          "managed": true,
+          "device": "cpu",
+          "threads": 4,
+          "gpu_allocation": false,
+          "managed_server": "cpu-3",
+          "max_output_tokens": 8192,
+          "fixture_style": "synthetic_coding_tool_task",
+          "hard_timeout_seconds": 1815,
+          "attempt": 2
+        }
+      ],
+      "retest_reason": "final_title_disabled_configuration",
+      "title_agent_disabled": true
+    },
+    {
+      "model": "flint/local",
+      "provider": "flint",
+      "role": "author",
+      "tested_at": "2026-10-29T19:48:42.449364+00:00",
+      "inference": "real",
+      "fallback_allowed": false,
+      "transport": "agent_cli.command/mini/pty",
+      "timeout_seconds": 1800,
+      "dispatched_models": [
+        "flint/local"
+      ],
+      "status": "passed",
+      "tool_task_passed": true,
+      "observed_models": [
+        "flint/local"
+      ],
+      "completed_tools": [
+        "glob",
+        "read",
+        "write"
+      ],
+      "workspace_verified": true,
+      "cli_response_metadata": {
+        "messages": [
+          {
+            "model": "flint/local",
+            "finish_reason": "tool-calls",
+            "tokens": {
+              "input": 5023,
+              "output": 51,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            },
+            "tools": [
+              "read",
+              "read"
+            ]
+          },
+          {
+            "model": "flint/local",
+            "finish_reason": "tool-calls",
+            "tokens": {
+              "input": 105,
+              "output": 292,
+              "reasoning": 0,
+              "cache": {
+                "read": 5073,
+                "write": 0
+              }
+            },
+            "tools": [
+              "glob"
+            ]
+          },
+          {
+            "model": "flint/local",
+            "finish_reason": "tool-calls",
+            "tokens": {
+              "input": 87,
+              "output": 434,
+              "reasoning": 0,
+              "cache": {
+                "read": 5469,
+                "write": 0
+              }
+            },
+            "tools": [
+              "write",
+              "write"
+            ]
+          }
+        ],
+        "configured_context_tokens": 16384,
+        "configured_output_tokens": 8192
+      },
+      "created_files": [
+        "appendix.tex",
+        "paper-check.json"
+      ],
+      "file_sha256": {
+        "appendix.tex": "f5ebea4da5abfccda77a12f9d68da377ced86b05fb0b76f32ba55ab9f9c9a4aa",
+        "paper-check.json": "cb570a7b9617c563fbb40a40cc616fef51458c24ada630323a8659286c404212"
+      },
+      "elapsed_seconds": 335.241,
+      "managed": true,
+      "device": "cpu",
+      "threads": 4,
+      "gpu_allocation": false,
+      "managed_server": "cpu-4",
+      "max_output_tokens": 8192,
+      "fixture_style": "synthetic_coding_tool_task",
+      "hard_timeout_seconds": 1815,
+      "attempt": 2,
+      "attempts": [
+        {
+          "model": "flint/local",
+          "provider": "flint",
+          "role": "author",
+          "tested_at": "2026-10-29T19:41:13.692807+00:00",
+          "inference": "real",
+          "fallback_allowed": false,
+          "transport": "agent_cli.command/mini/pty",
+          "timeout_seconds": 600,
+          "dispatched_models": [
+            "flint/local"
+          ],
+          "status": "passed",
+          "tool_task_passed": true,
+          "observed_models": [
+            "flint/local"
+          ],
+          "completed_tools": [
+            "glob",
+            "read",
+            "write"
+          ],
+          "workspace_verified": true,
+          "created_files": [
+            "appendix.tex",
+            "paper-check.json"
+          ],
+          "file_sha256": {
+            "appendix.tex": "4cb19c5720ca9d6a393dcd43b93df4602c0ec264b6e7ab2bb339d6a16a7c93f4",
+            "paper-check.json": "cb570a7b9617c563fbb40a40cc616fef51458c24ada630323a8659286c404212"
+          },
+          "elapsed_seconds": 396.74,
+          "managed_server": "cpu-4",
+          "hard_timeout_seconds": 615,
+          "managed": true,
+          "device": "cpu",
+          "threads": 4,
+          "gpu_allocation": false,
+          "cli_response_metadata": {
+            "messages": [
+              {
+                "model": "flint/local",
+                "finish_reason": "tool-calls",
+                "tokens": {
+                  "input": 5021,
+                  "output": 54,
+                  "reasoning": 0,
+                  "cache": {
+                    "read": 0,
+                    "write": 0
+                  }
+                },
+                "tools": [
+                  "read",
+                  "glob",
+                  "glob"
+                ]
+              },
+              {
+                "model": "flint/local",
+                "finish_reason": "tool-calls",
+                "tokens": {
+                  "input": 77,
+                  "output": 40,
+                  "reasoning": 0,
+                  "cache": {
+                    "read": 5074,
+                    "write": 0
+                  }
+                },
+                "tools": [
+                  "read",
+                  "read"
+                ]
+              },
+              {
+                "model": "flint/local",
+                "finish_reason": "tool-calls",
+                "tokens": {
+                  "input": 103,
+                  "output": 302,
+                  "reasoning": 0,
+                  "cache": {
+                    "read": 5190,
+                    "write": 0
+                  }
+                },
+                "tools": [
+                  "write"
+                ]
+              },
+              {
+                "model": "flint/local",
+                "finish_reason": "tool-calls",
+                "tokens": {
+                  "input": 10,
+                  "output": 232,
+                  "reasoning": 0,
+                  "cache": {
+                    "read": 5594,
+                    "write": 0
+                  }
+                },
+                "tools": [
+                  "write",
+                  "write"
+                ]
+              }
+            ],
+            "configured_context_tokens": 16384,
+            "configured_output_tokens": 8192,
+            "observed_at": 1793303270.4279187
+          },
+          "title_agent_disabled": false,
+          "max_output_tokens": 8192
+        },
+        {
+          "model": "flint/local",
+          "provider": "flint",
+          "role": "author",
+          "tested_at": "2026-10-29T19:48:42.449364+00:00",
+          "inference": "real",
+          "fallback_allowed": false,
+          "transport": "agent_cli.command/mini/pty",
+          "timeout_seconds": 1800,
+          "dispatched_models": [
+            "flint/local"
+          ],
+          "status": "passed",
+          "tool_task_passed": true,
+          "observed_models": [
+            "flint/local"
+          ],
+          "completed_tools": [
+            "glob",
+            "read",
+            "write"
+          ],
+          "workspace_verified": true,
+          "cli_response_metadata": {
+            "messages": [
+              {
+                "model": "flint/local",
+                "finish_reason": "tool-calls",
+                "tokens": {
+                  "input": 5023,
+                  "output": 51,
+                  "reasoning": 0,
+                  "cache": {
+                    "read": 0,
+                    "write": 0
+                  }
+                },
+                "tools": [
+                  "read",
+                  "read"
+                ]
+              },
+              {
+                "model": "flint/local",
+                "finish_reason": "tool-calls",
+                "tokens": {
+                  "input": 105,
+                  "output": 292,
+                  "reasoning": 0,
+                  "cache": {
+                    "read": 5073,
+                    "write": 0
+                  }
+                },
+                "tools": [
+                  "glob"
+                ]
+              },
+              {
+                "model": "flint/local",
+                "finish_reason": "tool-calls",
+                "tokens": {
+                  "input": 87,
+                  "output": 434,
+                  "reasoning": 0,
+                  "cache": {
+                    "read": 5469,
+                    "write": 0
+                  }
+                },
+                "tools": [
+                  "write",
+                  "write"
+                ]
+              }
+            ],
+            "configured_context_tokens": 16384,
+            "configured_output_tokens": 8192
+          },
+          "created_files": [
+            "appendix.tex",
+            "paper-check.json"
+          ],
+          "file_sha256": {
+            "appendix.tex": "f5ebea4da5abfccda77a12f9d68da377ced86b05fb0b76f32ba55ab9f9c9a4aa",
+            "paper-check.json": "cb570a7b9617c563fbb40a40cc616fef51458c24ada630323a8659286c404212"
+          },
+          "elapsed_seconds": 335.241,
+          "managed": true,
+          "device": "cpu",
+          "threads": 4,
+          "gpu_allocation": false,
+          "managed_server": "cpu-4",
+          "max_output_tokens": 8192,
+          "fixture_style": "synthetic_coding_tool_task",
+          "hard_timeout_seconds": 1815,
+          "attempt": 2
+        }
+      ],
+      "retest_reason": "final_title_disabled_configuration",
+      "title_agent_disabled": true
+    }
+  ],
+  "summary": {
+    "passed": 8
+  }
+}

@@ -925,6 +925,8 @@ body.resizing{user-select:none}
 .convo-empty{font-size:11px;color:var(--muted);padding:6px 2px;font-style:italic}
 .composer{border-top:1px solid var(--border);padding:10px 12px;background:#0e1115}
 .composer .row{display:flex;gap:7px}
+.composer-status{font-size:11px;color:var(--text-2);line-height:1.4;margin-top:6px}
+.composer-status:empty{display:none}
 .composer input{flex:1;background:var(--panel);border:1px solid var(--border);
   border-radius:8px;padding:8px 11px;font-size:12px;outline:none}
 .composer input:focus{border-color:var(--accent)}

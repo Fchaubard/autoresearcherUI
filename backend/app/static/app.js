@@ -28,7 +28,7 @@ async function readApiResponse(response) {
   }
   return body;
 }
-const api = (p) => fetch('/api' + p).then(readApiResponse);
+const api = (p, options) => fetch('/api' + p, options).then(readApiResponse);
 const post = (p, b) => fetch('/api' + p, {
   method: 'POST', headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(b || {}),
@@ -2166,10 +2166,13 @@ function rail() {
   const row = el('div', 'row');
   const inp = el('input'); inp.id = 'chatin';
   inp.setAttribute('aria-label', 'Message the agent');
-  inp.placeholder = 'Message the agent — typed into its session…';
-  inp.onkeydown = e => { if (e.key === 'Enter') sendChat(inp.value); };
+  inp.placeholder = 'Message the agent…';
+  inp.onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) sendChat(inp.value); };
   const snd = el('button', '', 'Send'); snd.onclick = () => sendChat(inp.value);
   row.append(inp, snd); comp.append(row);
+  const status = el('div', 'composer-status'); status.id = 'chat-send-status';
+  status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
+  comp.append(status);
   r.append(comp);
   return r;
 }
@@ -2528,15 +2531,44 @@ function paintRail() {
 function createRailTerm(session) {
   const container = el('div', 'xterm-wrap');
   container.dataset.session = session;
+  // Safari can suspend a request while backgrounded or changing networks.
+  // Bound each request and abort it on disposal so one hung fetch cannot stop
+  // every subsequent frame, or leave a hidden terminal polling indefinitely.
+  let _stopped = false, _inflight = null;
+  const fetchFrame = async (path) => {
+    const controller = new AbortController(); _inflight = controller;
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    try { return await api(path, {signal: controller.signal, cache: 'no-store'}); }
+    finally { clearTimeout(timeout); if (_inflight === controller) _inflight = null; }
+  };
   if (!window.Terminal) {
     container.innerHTML =
       '<pre class="term" data-fallback="1">loading terminal…</pre>';
     const pre = container.firstChild;
+    let timer = null, started = false;
+    const tick = async () => {
+      if (_stopped || _inflight) return;
+      try {
+        const d = await fetchFrame('/agent/raw?session=' + encodeURIComponent(session) + '&offset=0&seed=1');
+        if (!_stopped && d.chunk) {
+          const bytes = Uint8Array.from(atob(d.chunk), c => c.charCodeAt(0));
+          pre.textContent = new TextDecoder().decode(bytes)
+            .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').slice(-32000);
+          pre.scrollTop = pre.scrollHeight;
+        }
+      } catch (_) { /* retry after connection recovery */ }
+      if (!_stopped) timer = setTimeout(tick, 2000);
+    };
+    const refresh = () => { if (!_stopped && !_inflight) { clearTimeout(timer); tick(); } };
+    const visible = () => { if (!document.hidden) refresh(); };
+    document.addEventListener('visibilitychange', visible);
+    window.addEventListener('pageshow', visible);
+    const stop = () => { _stopped = true; clearTimeout(timer); _inflight?.abort(); };
     return { container, fallback: true,
-             startStream: () => {},
-             stopStream: () => {},
+             startStream: () => { if (!started) { started = true; tick(); } },
+             stopStream: stop, resumeLive: refresh,
              writeText: (t) => { pre.textContent = t || ''; },
-             dispose: () => {} };
+             dispose: () => { stop(); document.removeEventListener('visibilitychange', visible); window.removeEventListener('pageshow', visible); } };
   }
   const t = new window.Terminal({
     // Raw mode: backend pipes the program's actual bytes (ANSI codes
@@ -2608,8 +2640,17 @@ function createRailTerm(session) {
       ev.stopPropagation();
     } catch (e) {}
   }, { passive: false, capture: true });
-  const refit = () => { try { fitAddon && fitAddon.fit(); } catch (e) {} };
-  setTimeout(refit, 50);
+  let _following = true, _fitting = false;
+  const refit = () => {
+    // A keyboard resize changes baseY/viewportY even when the user never
+    // scrolled. Preserve their follow/read choice across the resize instead
+    // of treating that geometry change as a request to freeze the stream.
+    if (_stopped) return;
+    const following = _following; _fitting = true;
+    try { fitAddon && fitAddon.fit(); if (following) t.scrollToBottom(); }
+    catch (_) {} finally { _fitting = false; _following = following; }
+  };
+  const initialFit = setTimeout(refit, 50);
   let ro = null;
   try {
     ro = new ResizeObserver(refit);
@@ -2627,6 +2668,7 @@ function createRailTerm(session) {
      `tmux resize-window` + sends Ctrl-L so Claude redraws clean. */
   let _resizeTimer = null, _lastSize = '';
   const pushSize = (cols, rows) => {
+    if (_stopped) return;
     const key = cols + 'x' + rows;
     if (key === _lastSize) return;
     _lastSize = key;
@@ -2640,7 +2682,7 @@ function createRailTerm(session) {
   // After the initial fit (which fires onResize), Claude may already
   // have drawn at the old size. Force one more push + Ctrl-L just to
   // be sure the dimensions match before the user looks at the term.
-  setTimeout(() => {
+  const initialSize = setTimeout(() => {
     if (t.cols && t.rows) pushSize(t.cols, t.rows);
   }, 600);
 
@@ -2779,7 +2821,11 @@ function createRailTerm(session) {
     const q = _pending; _pending = [];
     for (const b of q) { try { t.write(b); } catch (e) {} }
   };
-  try { t.onScroll(() => { if (_atBottom()) _flushPending(); }); } catch (e) {}
+  try { t.onScroll(() => {
+    if (_fitting) return;
+    _following = _atBottom();
+    if (_following) _flushPending();
+  }); } catch (e) {}
   // STRIP the control sequences that make the LIVE Claude TUI hostile to a
   // browser terminal:
   //   - alt-screen enter/leave (?1049/?1047/?47): keeps xterm in the NORMAL
@@ -2811,15 +2857,19 @@ function createRailTerm(session) {
   const _writeOrHold = (bytes) => {
     const out = _filter(bytes);
     if (!out.length) return;
-    if (_atBottom()) t.write(out); else _pending.push(out);
+    if (_following) t.write(out); else _pending.push(out);
   };
+  let _refreshRequested = false, _started = false;
   const tick = async () => {
+    if (_stopped || _inflight) return;
     try {
-      const d = await api(
+      const d = await fetchFrame(
         '/agent/raw?session=' + encodeURIComponent(session)
         + '&offset=' + _offset);
+      if (_stopped) return;
       if (d.rotated) {
         t.reset();
+        _following = true;
         _offset = 0;
         _pending = [];                   // drop held bytes from the old session
         delete _PANE_CACHE[session];     // stale history — start fresh
@@ -2849,10 +2899,14 @@ function createRailTerm(session) {
         _idleMs = more ? 0 : Math.min(_idleMs * 1.5, 2000);
       }
     } catch (e) { _idleMs = Math.min(_idleMs * 1.5, 2000); }
-    _streamTimer = setTimeout(tick, _idleMs);
+    if (!_stopped) {
+      _streamTimer = setTimeout(tick, _refreshRequested ? 0 : _idleMs);
+      _refreshRequested = false;
+    }
   };
   const start = async () => {
-    if (_streamTimer) return;
+    if (_started || _stopped) return;
+    _started = true;
     // Repaint cached history instantly, then resume from the last offset so
     // only net-new bytes are fetched (no slow "buffer in from the top").
     const c = _PANE_CACHE[session];
@@ -2867,32 +2921,48 @@ function createRailTerm(session) {
     // real scrollback, so the history was never useful — only the current
     // frame is. This is what makes the load near-instant.
     try {
-      const d = await api('/agent/raw?session=' + encodeURIComponent(session)
+      const d = await fetchFrame('/agent/raw?session=' + encodeURIComponent(session)
         + '&offset=0&seed=1');
+      if (_stopped) return;
       if (d && d.seeded) {
         try { t.reset(); } catch (e) {}
         const bytes = b64ToBytes(d.chunk);
-        if (bytes.length) { t.write(_filter(bytes)); _cacheAppend(bytes); }
         _offset = d.offset || 0;
+        if (bytes.length) { t.write(_filter(bytes)); _cacheAppend(bytes); }
       }
     } catch (e) { /* no seed → tick() replays from 0 as a fallback */ }
     if (_stopped) return;          // disposed/stopped during the seed fetch
     tick();
   };
-  let _stopped = false;
   const stop  = () => {
     _stopped = true;
+    _inflight?.abort();
     if (_streamTimer) { clearTimeout(_streamTimer); _streamTimer = null; }
   };
+  const refresh = () => {
+    if (_stopped) return;
+    _refreshRequested = true;
+    if (_inflight) return;
+    clearTimeout(_streamTimer); tick();
+  };
+  const visible = () => { if (!document.hidden) { refit(); refresh(); } };
+  document.addEventListener('visibilitychange', visible);
+  window.addEventListener('pageshow', visible);
 
   return {
     container, fallback: false,
     startStream: start,
     stopStream:  stop,
+    resumeLive() {
+      _following = true; t.scrollToBottom(); _flushPending(); refresh();
+    },
     // Escape hatch — e.g. fallback message when stream is offline.
     writeText(text) { t.write(text || ''); },
     dispose() {
       stop();
+      clearTimeout(initialFit); clearTimeout(initialSize); clearTimeout(_resizeTimer);
+      document.removeEventListener('visibilitychange', visible);
+      window.removeEventListener('pageshow', visible);
       try { ro && ro.disconnect(); } catch (e) {}
       try { t.dispose(); } catch (e) {}
     },
@@ -3226,8 +3296,13 @@ function renderSessions(c) {
    events from the backend and prepends them. */
 
 function feedItemEl(it) {
+  const stamp = row => {
+    row.dataset.at = it.t || '';
+    row.dataset.itemId = String(it.d.id || '');
+    return row;
+  };
   if (it.kind === 'chat') {
-    return el('div', 'bub ' + it.d.role, esc(it.d.content));
+    return stamp(el('div', 'bub ' + it.d.role, esc(it.d.content)));
   }
   const e = it.d;
   const ic = e.type === 'breakthrough' ? ['win', '★']
@@ -3239,7 +3314,7 @@ function feedItemEl(it) {
   row.innerHTML = `<div class="ev-ic ${ic[0]}">${ic[1]}</div>` +
     `<div class="ev-bd"><div class="ev-msg">${esc(e.message)}</div>` +
     `<div class="ev-tm">${esc(e.actor)} · ${ago(e.created_at)}</div></div>`;
-  return row;
+  return stamp(row);
 }
 
 function updateBrief() {
@@ -3321,8 +3396,14 @@ function appendFeedItem(it) {
   const feed = document.getElementById('feed');
   if (!feed) return;
   const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
-  feed.append(feedItemEl(it));
+  const anchor = [...feed.children].find(row => row.getBoundingClientRect().bottom > feed.getBoundingClientRect().top);
+  const anchorTop = anchor?.getBoundingClientRect().top;
+  feed.querySelector('.feed-empty')?.remove();
+  const time = Date.parse(it.t) || 0;
+  const after = [...feed.children].find(row => (Date.parse(row.dataset.at) || 0) > time);
+  feed.insertBefore(feedItemEl(it), after || null);
   if (atBottom) feed.scrollTop = feed.scrollHeight;
+  else if (anchor?.isConnected) feed.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
 }
 
 async function loadOlderEvents() {
@@ -3899,58 +3980,62 @@ function closeDrawer() {
 async function sendChat(text) {
   text = (text || '').trim(); if (!text || S._sendingChat) return;
   S._sendingChat = true;
+  const view = S.view, isAuthor = view === 'latex';
   const inp = document.getElementById('chatin'); if (inp) inp.value = '';
+  inp?.blur();
   const button = document.querySelector('.composer .row button');
-  if (button) button.disabled = true;
+  const status = document.getElementById('chat-send-status');
+  if (button) { button.disabled = true; button.textContent = 'Sending…'; }
+  if (status) status.textContent = 'Waiting for the agent to accept your message…';
   try {
-    const isAuthor = S.railTab === 'author';
     const r = await post(isAuthor ? '/paper/author/send' : '/agent/send', { text });
     if (r && r.ok === false) throw new Error(r.detail || r.error || 'No agent session is available.');
-    if (isAuthor) return;
-    S.chat.push({ id: 'tmp-' + Date.now(), role: 'researcher',
+    if (r.message || !isAuthor) acceptChatMessage(r.message || {
+      id: 'tmp-' + Date.now(), role: 'researcher',
       content: text, created_at: new Date().toISOString() });
-    paintConvo();
-    watchAgentForReply();
+    if (status?.isConnected) status.textContent = r.delivery === 'queued'
+      ? 'Queued for the agent.' : 'Message accepted by the agent.';
+    // Show the actual answer stream and release any scroll lock left from
+    // reading history. This does not focus the terminal or open the keyboard.
+    if (S.view === view && inp?.isConnected) {
+      inp.blur(); S.railTab = isAuthor ? 'author' : 'live'; paintRail();
+      _termHost?.resumeLive?.();
+    }
   } catch (e) {
     // Keep an unsent draft recoverable, including HTTP and network failures.
     if (inp && !inp.value) inp.value = text;
+    if (status?.isConnected) status.textContent = 'Message not sent. Your draft has been kept.';
     aruiAlert('Your message was not delivered: ' + e.message,
       { title: 'Could not send message' });
   } finally {
     S._sendingChat = false;
-    if (button?.isConnected) button.disabled = false;
+    if (button?.isConnected) { button.disabled = false; button.textContent = 'Send'; }
   }
 }
 
-// Capture an "agent reply" by diffing the tmux output before/after the send.
-let _agentReplyTimer = null;
-async function watchAgentForReply() {
-  if (_agentReplyTimer) return;          // already watching
-  const before = (await api('/agent/terminal').catch(() => ({}))).text || '';
-  let elapsed = 0;
-  _agentReplyTimer = setInterval(async () => {
-    elapsed += 2200;
-    let d;
-    try { d = await api('/agent/terminal'); } catch (e) { return; }
-    const after = (d && d.text) || '';
-    if (after.length > before.length) {
-      const fresh = after.slice(before.length).trim();
-      // grab the last few content lines (skip blank + box-drawing decoration)
-      const lines = fresh.split('\n').map(l => l.replace(/\s+$/, ''))
-        .filter(l => l && !/^[─━│┃┌┐└┘├┤┬┴┼ ▶▸>›·•]+$/.test(l));
-      if (lines.length) {
-        const reply = lines.slice(-6).join('\n').slice(0, 800);
-        S.chat.push({ role: 'agent', created_at: new Date().toISOString(),
-          content: reply });
-        paintConvo();
-        clearInterval(_agentReplyTimer); _agentReplyTimer = null;
-        return;
-      }
-    }
-    if (elapsed > 30000) {
-      clearInterval(_agentReplyTimer); _agentReplyTimer = null;
-    }
-  }, 2200);
+function acceptChatMessage(msg) {
+  if (!msg || (msg.id && S.chat.some(x => x.id === msg.id))) return;
+  const tmpIdx = S.chat.findIndex(x => typeof x.id === 'string'
+    && x.id.startsWith('tmp-') && x.role === msg.role && x.content === msg.content);
+  if (tmpIdx >= 0) S.chat[tmpIdx] = msg;
+  else {
+    S.chat.push(msg);
+    appendFeedItem({ t: msg.created_at, kind: 'chat', d: msg });
+  }
+  S.chat.sort((a, b) => (Date.parse(a.created_at) || 0) - (Date.parse(b.created_at) || 0)
+    || String(a.id || '').localeCompare(String(b.id || '')));
+  paintConvo();
+}
+
+let _chatRefresh = null;
+function refreshChatLive() {
+  if (_chatRefresh) return _chatRefresh;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  _chatRefresh = api('/chat?limit=100', {signal: controller.signal, cache: 'no-store'})
+    .then(messages => { if (Array.isArray(messages)) messages.forEach(acceptChatMessage); })
+    .catch(() => {}).finally(() => { clearTimeout(timeout); _chatRefresh = null; });
+  return _chatRefresh;
 }
 
 function paintConvo() {
@@ -4055,18 +4140,9 @@ function streams() {
   });
   const ch = new EventSource('/api/stream/chat');
   ch.addEventListener('chat', e => {
-    const msg = JSON.parse(e.data);
-    // Skip if we already showed this (e.g., user message echoed back via SSE
-    // after we already added it locally).
-    if (msg.id && S.chat.some(x => x.id === msg.id)) return;
-    // Replace any temp message with the canonical server copy if content matches.
-    const tmpIdx = S.chat.findIndex(x =>
-      x.id && x.id.startsWith('tmp-') && x.content === msg.content);
-    if (tmpIdx >= 0) S.chat[tmpIdx] = msg;
-    else S.chat.push(msg);
-    paintConvo();
-    appendFeedItem({ t: msg.created_at, kind: 'chat', d: msg });
+    acceptChatMessage(JSON.parse(e.data));
   });
+  ch.addEventListener('open', refreshChatLive);
 
   // ──────────────────────────────────────────────────────────────────────
   // POLLING FALLBACK — covers every case where SSE silently fails:
@@ -4085,10 +4161,14 @@ function streams() {
     _pollHidden = (document.visibilityState === 'hidden');
     // On regaining visibility, do an immediate refresh — the user has
     // probably been away for a while and wants the latest state NOW.
-    if (!_pollHidden) refreshDashboardLive('visible');
+    if (!_pollHidden) { refreshDashboardLive('visible'); refreshChatLive(); }
+  });
+  window.addEventListener('pageshow', () => {
+    if (!document.hidden) { refreshDashboardLive('pageshow'); refreshChatLive(); }
   });
   setInterval(() => {
     if (_pollHidden) return;                 // don't poll backgrounded tabs
+    refreshChatLive();
     if (Date.now() - _lastRunsRefreshAt < STALE_THRESHOLD_MS) return;
     refreshDashboardLive('poll');
   }, POLL_INTERVAL_MS);

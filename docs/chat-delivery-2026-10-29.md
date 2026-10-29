@@ -1,0 +1,34 @@
+# Mobile agent messages and live updates
+
+The operator reported two separate failures: the terminal stopped updating until
+a page refresh, and app Send wrote a message into the native agent's input but
+left Enter unaccepted.
+
+The terminal freeze reproduced with the real bundled xterm in WebKit at an
+iPhone-sized viewport. Starting at 390×844, the terminal followed its live buffer
+at viewport/base row 79. Shrinking to 390×360 for the keyboard changed those rows
+to 101/105. The old scroll lock interpreted the resize as deliberately reading
+history, held every later frame, and stayed frozen after restoring the viewport.
+The server continued delivering updates 8→18→28 while only update 8 remained
+visible. With the fix, visible updates advance8→18→28 and viewport/base rows
+stay equal. Deliberately scrolling up still preserves the reading position.
+
+The live view now bounds requests, aborts disposed streams, and refreshes after
+phone resume. Plain-text fallback also updates if xterm cannot load. Chat
+recovery fetches recent saved messages after reconnect and periodically while
+visible, deduplicates server echoes, and restores chronological order without
+moving an operator who is reading older activity.
+
+Send shows progress, waits for the backend's acceptance result, then opens the
+correct research or author terminal and follows its live output. Sending from a
+paper page's Activity or Summary tab now targets the author. Failed delivery
+keeps the input draft and displays the error. Long messages keep their complete
+text in private workspace files; the native CLI receives a short reference that
+can be inspected for safe Enter retry. Messages are saved to chat only after
+verified submission or queuing. Busy state alone does not establish queuing.
+
+Regression coverage uses real xterm rendering in WebKit and Chromium, including
+keyboard resize, reading history, Send, author routing, hung requests, disposal,
+plain-text fallback, missed events, duplicate echoes, and reconnect ordering.
+Private native-CLI probes exercise the submission/queue boundary separately;
+these use synthetic content and loopback endpoints without paid inference.
