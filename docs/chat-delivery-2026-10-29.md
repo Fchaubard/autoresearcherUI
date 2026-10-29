@@ -18,6 +18,8 @@ phone resume. Plain-text fallback also updates if xterm cannot load. Chat
 recovery fetches recent saved messages after reconnect and periodically while
 visible, deduplicates server echoes, and restores chronological order without
 moving an operator who is reading older activity.
+Terminal fits are coalesced into animation frames instead of mutating layout
+inside ResizeObserver delivery; closing the view cancels any pending fit.
 
 The final production visual check also found missing glyphs with the GPU
 terminal renderer in headless mobile WebKit, despite a populated terminal

@@ -2602,8 +2602,8 @@ function createRailTerm(session) {
   if (WebLinksAddon) t.loadAddon(new WebLinksAddon((e, uri) =>
     window.open(uri, '_blank', 'noopener')));
   t.open(container);
-  // Keep the DOM renderer on touch devices: mobile WebKit can lose glyphs
-  // from the WebGL atlas when the keyboard changes the viewport. Fine-pointer
+  // Keep the DOM renderer on touch devices: mobile WebKit testing showed
+  // missing WebGL glyphs before and after keyboard resizing. Fine-pointer
   // desktops keep acceleration for frequent full-screen repaints. If WebGL
   // is unavailable or loses its context, the DOM renderer remains available.
   try {
@@ -2641,7 +2641,7 @@ function createRailTerm(session) {
       ev.stopPropagation();
     } catch (e) {}
   }, { passive: false, capture: true });
-  let _following = true, _fitting = false;
+  let _following = true, _fitting = false, _fitFrame = null;
   const refit = () => {
     // A keyboard resize changes baseY/viewportY even when the user never
     // scrolled. Preserve their follow/read choice across the resize instead
@@ -2651,10 +2651,16 @@ function createRailTerm(session) {
     try { fitAddon && fitAddon.fit(); if (following) t.scrollToBottom(); }
     catch (_) {} finally { _fitting = false; _following = following; }
   };
-  const initialFit = setTimeout(refit, 50);
+  const scheduleFit = () => {
+    if (_stopped || _fitFrame !== null) return;
+    // FitAddon changes DOM geometry. Run after observer delivery so fitting
+    // cannot feed layout changes back into the same ResizeObserver cycle.
+    _fitFrame = requestAnimationFrame(() => { _fitFrame = null; refit(); });
+  };
+  const initialFit = setTimeout(scheduleFit, 50);
   let ro = null;
   try {
-    ro = new ResizeObserver(refit);
+    ro = new ResizeObserver(scheduleFit);
     ro.observe(container);
   } catch (e) { /* not all browsers */ }
 
@@ -2946,7 +2952,7 @@ function createRailTerm(session) {
     if (_inflight) return;
     clearTimeout(_streamTimer); tick();
   };
-  const visible = () => { if (!document.hidden) { refit(); refresh(); } };
+  const visible = () => { if (!document.hidden) { scheduleFit(); refresh(); } };
   document.addEventListener('visibilitychange', visible);
   window.addEventListener('pageshow', visible);
 
@@ -2962,6 +2968,7 @@ function createRailTerm(session) {
     dispose() {
       stop();
       clearTimeout(initialFit); clearTimeout(initialSize); clearTimeout(_resizeTimer);
+      if (_fitFrame !== null) { cancelAnimationFrame(_fitFrame); _fitFrame = null; }
       document.removeEventListener('visibilitychange', visible);
       window.removeEventListener('pageshow', visible);
       try { ro && ro.disconnect(); } catch (e) {}

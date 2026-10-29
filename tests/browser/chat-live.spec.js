@@ -82,6 +82,67 @@ test('coarse-pointer phones use legible DOM terminal rows without overriding the
   expect(mock.errors).toEqual([]);
 });
 
+test('terminal fits run after resize delivery, coalesce bursts, and cancel on disposal', async ({page}) => {
+  const stream = streamFixture(); const mock = await installMocks(page, {overrides:stream.overrides});
+  await page.addInitScript(() => {
+    const Original = window.ResizeObserver;
+    window.testResizeDeliveryDepth = 0;
+    window.ResizeObserver = class extends Original {
+      constructor(callback) {
+        const deliver = (entries, observer) => {
+          window.testResizeDeliveryDepth++;
+          try { callback(entries, observer); }
+          finally { window.testResizeDeliveryDepth--; }
+        };
+        super(deliver);
+        this.deliverForTest = () => deliver([], this);
+      }
+      observe(target, options) {
+        if (target.classList.contains('xterm-wrap') && target.dataset.session === 'agent') {
+          window.testTerminalResizeObserver = this;
+        }
+        return super.observe(target, options);
+      }
+    };
+  });
+  await page.goto('/dashboard'); await instrumentTerminal(page);
+  await page.evaluate(() => {
+    const Original = window.FitAddon.FitAddon;
+    window.testFitCalls = {total:0, duringObserver:0};
+    window.FitAddon = {FitAddon: class extends Original {
+      fit() {
+        window.testFitCalls.total++;
+        if (window.testResizeDeliveryDepth) window.testFitCalls.duringObserver++;
+        return super.fit();
+      }
+    }};
+  });
+  await openLive(page);
+  await expect.poll(() => page.evaluate(() => window.testFitCalls.total)).toBeGreaterThan(0);
+  await page.setViewportSize({width:390,height:360});
+  await page.setViewportSize({width:390,height:844});
+  await page.waitForTimeout(100);
+  expect(await page.evaluate(() => window.testFitCalls.duringObserver)).toBe(0);
+  const burst = await page.evaluate(async () => {
+    // Isolate the controlled burst from unrelated late font/layout delivery.
+    window.testTerminalResizeObserver.disconnect();
+    const before = window.testFitCalls.total;
+    for (let i=0;i<3;i++) window.testTerminalResizeObserver.deliverForTest();
+    const synchronousFits = window.testFitCalls.total - before;
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    return {synchronousFits, completedFits:window.testFitCalls.total-before};
+  });
+  expect(burst).toEqual({synchronousFits:0,completedFits:1});
+  const atDisposal = await page.evaluate(() => {
+    window.testTerminalResizeObserver.deliverForTest();
+    S.railTab = 'feed'; paintRail();
+    return window.testFitCalls.total;
+  });
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  expect(await page.evaluate(() => window.testFitCalls.total)).toBe(atDisposal);
+  expect(mock.errors).toEqual([]);
+});
+
 test.describe('desktop renderer', () => {
   test.use({isMobile:false,hasTouch:false,viewport:{width:1440,height:1000}});
   test('fine-pointer desktops retain the WebGL renderer when available', async ({page}) => {
