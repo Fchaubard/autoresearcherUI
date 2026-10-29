@@ -267,3 +267,48 @@ def no_network(monkeypatch):
         raise RuntimeError("network access blocked in unit tests")
 
     monkeypatch.setattr(urllib.request, "urlopen", boom)
+
+
+class NudgeTerminal:
+    """A tiny editable prompt model; capture reflects actual key effects."""
+    def __init__(self, success_after=2, marker="›", failed_key=None):
+        self.calls, self.draft, self.history = [], "", ""
+        self.enters, self.clears, self.busy = 0, 0, False
+        self.success_after, self.marker, self.failed_key = success_after, marker, failed_key
+        self.edit_after_enter, self.capture_failure, self.cursor_override = None, None, None
+
+    def screen(self):
+        if self.busy:
+            return self.history + "Working (3s · esc to interrupt)\n"
+        return self.history + self.marker + " " + self.draft + "\nbypass permissions on\n"
+
+    def __call__(self, cmd, **kwargs):
+        from subprocess import CompletedProcess
+        self.calls.append(cmd)
+        if cmd[:2] == ["tmux", "capture-pane"]:
+            if self.enters and self.capture_failure is not None:
+                return CompletedProcess(cmd, self.capture_failure, stdout=b"")
+            return CompletedProcess(cmd, 0, stdout=self.screen().encode())
+        if cmd[:2] == ["tmux", "display-message"]:
+            cursor = len(self.history.splitlines()) + max(1, len(self.draft.splitlines())) - 1
+            return CompletedProcess(cmd, 0, stdout=str(cursor if self.cursor_override is None else self.cursor_override).encode())
+        failed = ("-l" in cmd if self.failed_key == "-l" else cmd[-1] == self.failed_key)
+        if failed:
+            return CompletedProcess(cmd, 1, stdout=b"")
+        if "-l" in cmd:
+            self.draft = cmd[-1]
+        elif cmd[-1] == "Enter":
+            self.enters += 1
+            if self.edit_after_enter is not None:
+                self.draft = self.edit_after_enter
+            elif self.success_after is not None and self.enters >= self.success_after:
+                self.draft, self.busy = "", True
+        elif cmd[-1] == "C-c":
+            self.draft = ""
+            self.clears += 1
+        return CompletedProcess(cmd, 0, stdout=b"")
+
+
+@pytest.fixture
+def nudge_terminal():
+    return NudgeTerminal

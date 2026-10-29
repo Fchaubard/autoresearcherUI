@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import socket
 import threading
 import time
 from types import SimpleNamespace
@@ -21,6 +22,31 @@ def test_device_selection_never_reuses_a_busy_gpu(arui_env):
     resources["gpus"][1]["used_mb"] = 0
     assert choose_device(resources) == "gpu:1"
     assert choose_device(resources, "cpu") is None
+
+
+@pytest.mark.parametrize("status", ["running", "queued"])
+def test_gpu_reserved_before_cuda_launch_is_not_available(arui_env, make_project, make_run, monkeypatch, status):
+    from backend.app import flint_manager as fm
+    make_project(); make_run(status=status, gpu_index=0)
+    def query(command, **kwargs):
+        return SimpleNamespace(returncode=0, stdout="0, GPU-fixture, 48000, 0\n" if command[1].startswith("--query-gpu=") else "")
+    monkeypatch.setattr(fm.subprocess, "run", query)
+    monkeypatch.setattr(fm.psutil, "virtual_memory", lambda: SimpleNamespace(available=60 * fm.GIB))
+    resources = fm.hardware()
+    assert resources["gpus"][0]["busy"] is True
+    assert fm.choose_device(resources) == "cpu"
+
+
+def test_unknown_scheduler_state_never_implies_an_idle_gpu(arui_env, monkeypatch):
+    from backend.app import flint_manager as fm, db
+    def query(command, **kwargs):
+        return SimpleNamespace(returncode=0, stdout="0, GPU-fixture, 48000, 0\n" if command[1].startswith("--query-gpu=") else "")
+    monkeypatch.setattr(fm.subprocess, "run", query)
+    monkeypatch.setattr(fm.psutil, "virtual_memory", lambda: SimpleNamespace(available=60 * fm.GIB))
+    def unavailable():
+        raise OSError("fixture database unavailable")
+    monkeypatch.setattr(db, "SessionLocal", unavailable)
+    assert fm.choose_device(fm.hardware()) == "cpu"
 
 
 def test_managed_default_and_explicit_external_configuration(arui_env, monkeypatch):
@@ -100,6 +126,60 @@ def test_cancelling_a_download_reports_stopping_until_the_worker_finishes(arui_e
     assert server.prepare()["status"] == "stopping"
     release.set(); server._worker.join(1)
     assert server.status()["status"] == "stopped"
+
+
+def test_stop_serializes_with_automatic_prepare(arui_env, tmp_path, monkeypatch):
+    from backend.app.flint_manager import ManagedFlint
+    monkeypatch.setenv("ARUI_FLINT_ALLOW_SETUP", "1")
+    server = ManagedFlint(tmp_path / "state", tmp_path / "cache")
+    entered, release, prepared = threading.Event(), threading.Event(), threading.Event()
+    def terminate_owned():
+        entered.set(); release.wait(2)
+    monkeypatch.setattr(server, "_stop_process", terminate_owned)
+    monkeypatch.setattr(server, "_setup", lambda _: pytest.fail("Stop was undone by automatic prepare"))
+    stopper = threading.Thread(target=server.stop); stopper.start(); assert entered.wait(1)
+    def attempt():
+        server.prepare(automatic=True); prepared.set()
+    starter = threading.Thread(target=attempt); starter.start()
+    assert not prepared.wait(.05)
+    release.set(); stopper.join(1); starter.join(1)
+    assert prepared.is_set()
+    assert server.status()["status"] == "stopped"
+    assert server.status()["manually_stopped"] is True
+
+
+def test_other_manager_stop_cancels_start_before_process_creation(arui_env, tmp_path, monkeypatch):
+    from backend.app.flint_manager import ManagedFlint
+    one = ManagedFlint(tmp_path / "state", tmp_path / "cache")
+    two = ManagedFlint(tmp_path / "state", tmp_path / "cache")
+    two.stop()
+    assert not one._stop.is_set()
+    with pytest.raises(RuntimeError, match="setup stopped"):
+        one._start(tmp_path / "runtime", tmp_path / "model", "cpu")
+
+
+def test_concurrent_state_updates_preserve_another_managers_stop_flag(arui_env, tmp_path, monkeypatch):
+    from backend.app.flint_manager import ManagedFlint
+    one = ManagedFlint(tmp_path / "state", tmp_path / "cache")
+    two = ManagedFlint(tmp_path / "state", tmp_path / "cache")
+    one._write(manually_stopped=False)
+    entered, release, stopped = threading.Event(), threading.Event(), threading.Event()
+    read = one._read
+    def paused_read():
+        value = read(); entered.set(); release.wait(2); return value
+    monkeypatch.setattr(one, "_read", paused_read)
+    writer = threading.Thread(target=lambda: one._write(status="starting")); writer.start()
+    assert entered.wait(1)
+    def persist_stop():
+        two._write(manually_stopped=True); stopped.set()
+    stopper = threading.Thread(target=persist_stop); stopper.start()
+    try:
+        assert not stopped.wait(.05)
+    finally:
+        release.set(); writer.join(1); stopper.join(1)
+    assert stopped.is_set()
+    assert two._read()["manually_stopped"] is True
+    assert two._read()["status"] == "starting"
 
 
 def test_unhealthy_owned_process_stops_before_replacement(arui_env, tmp_path, monkeypatch):
@@ -242,3 +322,42 @@ def test_crash_loop_recovery_stops_after_three_attempts(arui_env, tmp_path, monk
     assert server.recover()["status"] == "error"
     assert len(calls) == 3
     assert "Automatic recovery is paused" in server.status()["detail"]
+
+
+def test_recovery_preserves_the_connection_used_by_existing_cli_clients(arui_env, tmp_path, monkeypatch):
+    from backend.app import flint_manager as fm
+    server = fm.ManagedFlint(tmp_path / "state", tmp_path / "cache")
+    with socket.socket() as available:
+        available.bind(("127.0.0.1", 0)); port = available.getsockname()[1]
+    server._write(port=port, requested_device="cpu")
+    key = server.root / "api-key"
+    key.write_text("synthetic-existing-client-key")
+    before = server.connection()
+    commands = []
+    def launch(command, **kwargs):
+        commands.append(command)
+        return SimpleNamespace(pid=42, poll=lambda: None)
+    monkeypatch.setattr(fm.subprocess, "Popen", launch)
+    monkeypatch.setattr(fm.psutil, "Process", lambda _: SimpleNamespace(create_time=lambda: 100.0))
+    monkeypatch.setattr(server, "_healthy", lambda: True)
+    server._start(tmp_path / "llama-server", tmp_path / "model.gguf", "cpu")
+    assert server.connection() == before
+    assert commands[0][commands[0].index("--port") + 1] == str(port)
+    assert key.stat().st_mode & 0o777 == 0o600
+
+
+def test_recovery_does_not_replace_an_unrelated_listener_or_rotate_credentials(arui_env, tmp_path, monkeypatch):
+    from backend.app import flint_manager as fm
+    server = fm.ManagedFlint(tmp_path / "state", tmp_path / "cache")
+    with socket.socket() as other:
+        other.bind(("127.0.0.1", 0)); other.listen()
+        port = other.getsockname()[1]
+        server._write(port=port)
+        key = server.root / "api-key"; key.write_text("synthetic-existing-client-key")
+        before = server.connection()
+        with monkeypatch.context() as patch:
+            patch.setattr(fm.subprocess, "Popen", lambda *a, **k: pytest.fail("Unexpected replacement server"))
+            with pytest.raises(RuntimeError, match="in use by another process"):
+                server._start(tmp_path / "llama-server", tmp_path / "model.gguf", "cpu")
+        assert server.connection() == before
+        assert other.getsockname()[1] == port

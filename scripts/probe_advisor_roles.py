@@ -177,6 +177,12 @@ def probe_role(model: str, role: str, *, timeout: int = 90,
                     entry["response_model"] = data["model"]
                 if isinstance(data.get("modelVersion"), str):
                     entry["response_model"] = data["modelVersion"]
+                choices = data.get("choices") or []
+                if choices and isinstance(choices[0], dict):
+                    entry["finish_reason"] = choices[0].get("finish_reason")
+                usage = data.get("usage") or {}
+                entry["usage"] = {key: usage[key] for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+                                  if isinstance(usage.get(key), int)}
                 return data
             except Exception as exc:
                 entry.update(_error_metadata(exc))

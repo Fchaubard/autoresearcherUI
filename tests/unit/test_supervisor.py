@@ -313,50 +313,11 @@ def test_idle_nudge_decision_fires_when_parked():
         idle_age=500, nudge_age=1e9, strikes=0) == "nudge"
 
 
-class NudgeTerminal:
-    """A tiny editable prompt model; capture reflects actual key effects."""
-    def __init__(self, success_after=2, marker="›", failed_key=None):
-        self.calls, self.draft, self.history = [], "", ""
-        self.enters, self.clears, self.busy = 0, 0, False
-        self.success_after, self.marker, self.failed_key = success_after, marker, failed_key
-        self.edit_after_enter, self.capture_failure, self.cursor_override = None, None, None
-
-    def screen(self):
-        if self.busy:
-            return self.history + "Working (3s · esc to interrupt)\n"
-        return self.history + self.marker + " " + self.draft + "\nbypass permissions on\n"
-
-    def __call__(self, cmd, **kwargs):
-        from subprocess import CompletedProcess
-        self.calls.append(cmd)
-        if cmd[:2] == ["tmux", "capture-pane"]:
-            if self.enters and self.capture_failure is not None:
-                return CompletedProcess(cmd, self.capture_failure, stdout=b"")
-            return CompletedProcess(cmd, 0, stdout=self.screen().encode())
-        if cmd[:2] == ["tmux", "display-message"]:
-            cursor = len(self.history.splitlines()) + max(1, len(self.draft.splitlines())) - 1
-            return CompletedProcess(cmd, 0, stdout=str(cursor if self.cursor_override is None else self.cursor_override).encode())
-        failed = ("-l" in cmd if self.failed_key == "-l" else cmd[-1] == self.failed_key)
-        if failed:
-            return CompletedProcess(cmd, 1, stdout=b"")
-        if "-l" in cmd:
-            self.draft = cmd[-1]
-        elif cmd[-1] == "Enter":
-            self.enters += 1
-            if self.edit_after_enter is not None:
-                self.draft = self.edit_after_enter
-            elif self.success_after is not None and self.enters >= self.success_after:
-                self.draft, self.busy = "", True
-        elif cmd[-1] == "C-c":
-            self.draft = ""
-            self.clears += 1
-        return CompletedProcess(cmd, 0, stdout=b"")
-
 
 @pytest.mark.parametrize("marker", ["›", "❯"])
-def test_nudge_retries_enter_when_text_remains_in_prompt(monkeypatch, marker):
+def test_nudge_retries_enter_when_text_remains_in_prompt(monkeypatch, marker, nudge_terminal):
     from backend.app import supervisor as sv
-    terminal = NudgeTerminal(marker=marker)
+    terminal = nudge_terminal(marker=marker)
     monkeypatch.setattr(sv._sp, "run", terminal)
     monkeypatch.setattr("time.sleep", lambda _: None)
     assert sv._send_agent_nudge() is True
@@ -365,9 +326,9 @@ def test_nudge_retries_enter_when_text_remains_in_prompt(monkeypatch, marker):
 
 
 @pytest.mark.parametrize("failed_key", ["Escape", "C-u", "-l", "Enter"])
-def test_nudge_never_claims_delivery_after_failed_tmux_send(monkeypatch, failed_key):
+def test_nudge_never_claims_delivery_after_failed_tmux_send(monkeypatch, failed_key, nudge_terminal):
     from backend.app import supervisor as sv
-    terminal = NudgeTerminal(failed_key=failed_key)
+    terminal = nudge_terminal(failed_key=failed_key)
     monkeypatch.setattr(sv._sp, "run", terminal)
     monkeypatch.setattr("time.sleep", lambda _: None)
     assert sv._send_agent_nudge("[RESEARCH EVENT] r1 completed") is False
@@ -375,9 +336,9 @@ def test_nudge_never_claims_delivery_after_failed_tmux_send(monkeypatch, failed_
 
 
 @pytest.mark.parametrize("capture_failure", [0, 1])
-def test_nudge_unverified_delivery_is_not_success(monkeypatch, capture_failure):
+def test_nudge_unverified_delivery_is_not_success(monkeypatch, capture_failure, nudge_terminal):
     from backend.app import supervisor as sv
-    terminal = NudgeTerminal()
+    terminal = nudge_terminal()
     terminal.capture_failure = capture_failure
     monkeypatch.setattr(sv._sp, "run", terminal)
     monkeypatch.setattr("time.sleep", lambda _: None)
@@ -385,18 +346,18 @@ def test_nudge_unverified_delivery_is_not_success(monkeypatch, capture_failure):
     assert terminal.enters == 1 and terminal.clears == 0
 
 
-def test_event_nudge_retries_lost_enter_and_verifies_acceptance(monkeypatch):
+def test_event_nudge_retries_lost_enter_and_verifies_acceptance(monkeypatch, nudge_terminal):
     from backend.app import supervisor as sv
-    terminal = NudgeTerminal()
+    terminal = nudge_terminal()
     monkeypatch.setattr(sv._sp, "run", terminal)
     monkeypatch.setattr("time.sleep", lambda _: None)
     assert sv._send_agent_nudge("[RESEARCH EVENT] r1 completed") is True
     assert terminal.enters == 2
 
 
-def test_nudge_does_not_double_submit_once_agent_is_busy(monkeypatch):
+def test_nudge_does_not_double_submit_once_agent_is_busy(monkeypatch, nudge_terminal):
     from backend.app import supervisor as sv
-    terminal = NudgeTerminal(success_after=1)
+    terminal = nudge_terminal(success_after=1)
     monkeypatch.setattr(sv._sp, "run", terminal)
     monkeypatch.setattr("time.sleep", lambda _: None)
     assert sv._send_agent_nudge() is True
@@ -404,9 +365,9 @@ def test_nudge_does_not_double_submit_once_agent_is_busy(monkeypatch):
 
 
 @pytest.mark.parametrize("marker", ["›", "❯"])
-def test_unsent_multiline_app_draft_is_cleared_after_two_lost_enters(monkeypatch, marker):
+def test_unsent_multiline_app_draft_is_cleared_after_two_lost_enters(monkeypatch, marker, nudge_terminal):
     from backend.app import supervisor as sv
-    terminal = NudgeTerminal(success_after=None, marker=marker)
+    terminal = nudge_terminal(success_after=None, marker=marker)
     monkeypatch.setattr(sv._sp, "run", terminal)
     monkeypatch.setattr("time.sleep", lambda _: None)
     assert not sv._send_agent_nudge("[RESEARCH EVENT] r1 completed\nKeep training intact.")
@@ -415,9 +376,9 @@ def test_unsent_multiline_app_draft_is_cleared_after_two_lost_enters(monkeypatch
 
 
 @pytest.mark.parametrize("edited", ["My unrelated operator instruction", "[RESEARCH EVENT] r1 completed BUT DO NOT SEND THIS"])
-def test_historical_marker_or_edited_draft_never_qualifies_for_retry_or_cleanup(monkeypatch, edited):
+def test_historical_marker_or_edited_draft_never_qualifies_for_retry_or_cleanup(monkeypatch, edited, nudge_terminal):
     from backend.app import supervisor as sv
-    terminal = NudgeTerminal(success_after=None)
+    terminal = nudge_terminal(success_after=None)
     terminal.history = "› [RESEARCH EVENT] r1 completed\nOld response\n"
     terminal.edit_after_enter = edited
     monkeypatch.setattr(sv._sp, "run", terminal)
@@ -426,9 +387,9 @@ def test_historical_marker_or_edited_draft_never_qualifies_for_retry_or_cleanup(
     assert terminal.enters == 1 and terminal.clears == 0 and terminal.draft == edited
 
 
-def test_nudge_preserves_draft_written_after_supervisor_idle_check(monkeypatch):
+def test_nudge_preserves_draft_written_after_supervisor_idle_check(monkeypatch, nudge_terminal):
     from backend.app import supervisor as sv
-    terminal = NudgeTerminal()
+    terminal = nudge_terminal()
     terminal.draft = "Operator is still editing this"
     monkeypatch.setattr(sv._sp, "run", terminal)
     assert not sv._send_agent_nudge("[RESEARCH EVENT] r1 completed")
@@ -436,9 +397,9 @@ def test_nudge_preserves_draft_written_after_supervisor_idle_check(monkeypatch):
     assert terminal.draft == "Operator is still editing this"
 
 
-def test_matching_scrollback_without_cursor_ownership_is_never_cleared(monkeypatch):
+def test_matching_scrollback_without_cursor_ownership_is_never_cleared(monkeypatch, nudge_terminal):
     from backend.app import supervisor as sv
-    terminal = NudgeTerminal(success_after=None)
+    terminal = nudge_terminal(success_after=None)
     terminal.history = "Historical output\n"
     terminal.cursor_override = 0
     monkeypatch.setattr(sv._sp, "run", terminal)

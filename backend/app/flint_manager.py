@@ -51,6 +51,20 @@ def hardware() -> dict:
             index, uuid, total, used = [part.strip() for part in line.split(",")]
             result["gpus"].append({"index": int(index), "total_mb": int(total), "used_mb": int(used),
                                    "busy": uuid in busy})
+        try:
+            # The app reserves GPU indices in its DB before the training child
+            # appears in nvidia-smi. Respect that launch window as well.
+            from .db import SessionLocal
+            from .models import Run
+            with SessionLocal() as db:
+                reserved = {int(index) for index, in db.query(Run.gpu_index).filter(
+                    Run.status.in_(("running", "queued")), Run.gpu_index.isnot(None)).all()}
+            for gpu in result["gpus"]:
+                gpu["busy"] = gpu["busy"] or gpu["index"] in reserved
+        except Exception:
+            # An unreadable scheduler state must not be treated as idle GPUs.
+            for gpu in result["gpus"]:
+                gpu["busy"] = True
     except (OSError, ValueError, subprocess.TimeoutExpired):
         pass
     return result
@@ -87,12 +101,17 @@ class ManagedFlint:
     def _write(self, **changes) -> dict:
         with self._lock:
             self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
-            state = {**self._read(), **changes, "updated_at": time.time()}
-            temp = self.root / ("state-" + secrets.token_hex(4) + ".tmp")
-            temp.write_text(json.dumps(state))
-            temp.chmod(0o600)
-            temp.replace(self.state_path)
-            return state
+            # Keep the merge atomic across manager instances, independently of
+            # the long-running setup lock. A stale status update must not erase
+            # a Stop flag written by a different worker.
+            with (self.root / "state.lock").open("a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                state = {**self._read(), **changes, "updated_at": time.time()}
+                temp = self.root / ("state-" + secrets.token_hex(4) + ".tmp")
+                temp.write_text(json.dumps(state))
+                temp.chmod(0o600)
+                temp.replace(self.state_path)
+                return state
 
     def _owned_process(self, state: dict):
         try:
@@ -150,6 +169,11 @@ class ManagedFlint:
     def is_ready(self) -> bool:
         return self.status()["status"] == "ready" and self._healthy()
 
+    def _cancelled(self) -> bool:
+        # The durable flag also cancels an installer owned by another backend
+        # worker. A restart cannot erase the user's explicit Stop instruction.
+        return self._stop.is_set() or bool(self._read().get("manually_stopped"))
+
     @staticmethod
     def _device_changed(state: dict, requested: str) -> bool:
         active = state.get("active_requested_device", state.get("requested_device", requested))
@@ -187,7 +211,7 @@ class ManagedFlint:
             process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=env, start_new_session=True)
             deadline = time.monotonic() + timeout
             while process.poll() is None:
-                if self._stop.wait(.25) or time.monotonic() > deadline:
+                if self._stop.wait(.25) or self._cancelled() or time.monotonic() > deadline:
                     with contextlib.suppress(ProcessLookupError):
                         os.killpg(process.pid, signal.SIGTERM)
                     try:
@@ -211,7 +235,7 @@ class ManagedFlint:
         digest = hashlib.sha256()
         with path.open("rb") as stream:
             for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-                if self._stop.is_set():
+                if self._cancelled():
                     raise RuntimeError("Flint setup stopped.")
                 digest.update(chunk)
         if stat.st_size != CHECKPOINT_BYTES or digest.hexdigest() != CHECKPOINT_SHA256:
@@ -241,7 +265,7 @@ class ManagedFlint:
             last = 0.0
             with part.open("ab" if append else "wb") as stream:
                 while chunk := response.read(2 * 1024 * 1024):
-                    if self._stop.is_set():
+                    if self._cancelled():
                         raise RuntimeError("Flint setup stopped. Retry to resume the download.")
                     stream.write(chunk)
                     offset += len(chunk)
@@ -302,8 +326,10 @@ class ManagedFlint:
                     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
                 except BlockingIOError:
-                    if self._stop.wait(.5):
+                    if self._stop.wait(.5) or self._cancelled():
                         return
+            if self._cancelled():
+                return
             if self._owned_process(self._read()):
                 if self._healthy() and not self._device_changed(self._read(), requested):
                     self._write(status="ready", detail="Flint is ready.")
@@ -324,11 +350,11 @@ class ManagedFlint:
                         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                         break
                     except BlockingIOError:
-                        if self._stop.wait(.5):
+                        if self._stop.wait(.5) or self._cancelled():
                             return
                 model = self._checkpoint()
                 binary, supports_cuda = self._runtime()
-            while not self._stop.is_set():
+            while not self._cancelled():
                 requested = self._read().get("requested_device", requested)
                 resources = hardware()
                 device = choose_device(resources, requested if supports_cuda else "cpu")
@@ -337,7 +363,7 @@ class ManagedFlint:
                 self._write(status="waiting_for_resources", detail="Waiting for an idle GPU with 32 GB free, or 48 GB available RAM. Running experiments stay in place.")
                 if self._stop.wait(15):
                     return
-            if self._stop.is_set():
+            if self._cancelled():
                 return
             # Recheck immediately before allocation; never claim a GPU selected
             # before a long download or build.
@@ -347,64 +373,82 @@ class ManagedFlint:
             self._start(binary, model, device)
         except Exception as exc:
             failures = int(self._read().get("failures", 0)) + 1
-            self._write(status="stopped" if self._stop.is_set() else "error",
+            self._write(status="stopped" if self._cancelled() else "error",
                         failures=failures, next_retry_at=time.time() + 30 * (2 ** min(failures, 3)),
                         detail=str(exc) if isinstance(exc, RuntimeError) else
                         "Flint setup could not finish. Check available storage, network and the local setup log, then retry.")
 
     def _start(self, binary: Path, model: Path, device: str):
-        if self._stop.is_set():
-            raise RuntimeError("Flint setup stopped.")
-        with socket.socket() as sock:
-            sock.bind(("127.0.0.1", 0))
-            port = sock.getsockname()[1]
-        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        key = self.root / "api-key"
-        key.write_text(secrets.token_urlsafe(32))
-        key.chmod(0o600)
-        command = [str(binary), "--model", str(model), "--alias", "flint", "--ctx-size", "16384",
-                   "--n-gpu-layers", "0" if device == "cpu" else "99", "--parallel", "1",
-                   "--threads", "4", "--threads-batch", "4", "--cache-ram", "0", "--jinja",
-                   "--temp", "1.0", "--top-p", "0.95", "--top-k", "20", "--min-p", "0",
-                   "--host", "127.0.0.1", "--port", str(port), "--api-key-file", str(key)]
-        env = {**os.environ, "CUDA_VISIBLE_DEVICES": "" if device == "cpu" else device.split(":")[1],
-               "LD_LIBRARY_PATH": str(binary.parent) + os.pathsep + os.environ.get("LD_LIBRARY_PATH", "")}
-        with (self.root / "server.log").open("ab") as log:
-            process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
-                                       env=env, start_new_session=True)
-        self._write(status="starting", detail="Loading Flint into " + ("CPU memory. CPU responses take longer." if device == "cpu" else "the idle GPU."),
-                    device=device, port=port, pid=process.pid, process_created_at=psutil.Process(process.pid).create_time(),
-                    model_path=str(model), runtime_path=str(binary), progress=None)
+        with self._lock:
+            if self._cancelled():
+                raise RuntimeError("Flint setup stopped.")
+            # A running coding CLI keeps this URL/key in its provider configuration.
+            # Recovery must bring the same connection back, not invalidate clients.
+            saved_port = int(self._read().get("port") or 0)
+            with socket.socket() as sock:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    sock.bind(("127.0.0.1", saved_port))
+                except OSError:
+                    raise RuntimeError("Flint's saved local port is in use by another process. Free that port and retry; existing client credentials were kept.") from None
+                port = sock.getsockname()[1]
+            self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            key = self.root / "api-key"
+            if not key.exists() or not key.read_text().strip():
+                key.write_text(secrets.token_urlsafe(32))
+            key.chmod(0o600)
+            command = [str(binary), "--model", str(model), "--alias", "flint", "--ctx-size", "16384",
+                       "--n-gpu-layers", "0" if device == "cpu" else "99", "--parallel", "1",
+                       "--threads", "4", "--threads-batch", "4", "--cache-ram", "0", "--jinja",
+                       "--temp", "1.0", "--top-p", "0.95", "--top-k", "20", "--min-p", "0",
+                       "--host", "127.0.0.1", "--port", str(port), "--api-key-file", str(key)]
+            env = {**os.environ, "CUDA_VISIBLE_DEVICES": "" if device == "cpu" else device.split(":")[1],
+                   "LD_LIBRARY_PATH": str(binary.parent) + os.pathsep + os.environ.get("LD_LIBRARY_PATH", "")}
+            with (self.root / "server.log").open("ab") as log:
+                process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
+                                           env=env, start_new_session=True)
+            self._write(status="starting", detail="Loading Flint into " + ("CPU memory. CPU responses take longer." if device == "cpu" else "the idle GPU."),
+                        device=device, port=port, pid=process.pid, process_created_at=psutil.Process(process.pid).create_time(),
+                        model_path=str(model), runtime_path=str(binary), progress=None)
         deadline = time.monotonic() + 600
         while time.monotonic() < deadline and not self._stop.wait(.5):
+            if self._cancelled():
+                break
             if process.poll() is not None:
                 raise RuntimeError("The local Flint server exited while starting. Check the local server log and retry.")
             if self._healthy():
-                self._write(status="ready", failures=0, health_failures=0,
-                            active_requested_device=self._read().get("launch_requested_device", "auto"),
-                            detail="Flint is ready on " + ("CPU (4 threads). Responses are slower; training GPUs remain available." if device == "cpu" else device.replace(":", " ").upper() + "."))
-                return
+                with self._lock:
+                    if self._cancelled():
+                        break
+                    self._write(status="ready", failures=0, health_failures=0,
+                                active_requested_device=self._read().get("launch_requested_device", "auto"),
+                                detail="Flint is ready on " + ("CPU (4 threads). Responses are slower; training GPUs remain available." if device == "cpu" else device.replace(":", " ").upper() + "."))
+                    return
         self._stop_process()
-        if self._stop.is_set():
+        if self._cancelled():
             raise RuntimeError("Flint setup stopped.")
         raise RuntimeError("Flint did not become ready within 10 minutes. Retry setup after checking available memory.")
 
     def _stop_process(self):
         process = self._owned_process(self._read())
         if process:
-            process.terminate()
-            try:
-                process.wait(timeout=10)
-            except psutil.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
+            with contextlib.suppress(psutil.NoSuchProcess):
+                process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except psutil.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
 
     def stop(self) -> dict:
-        self._stop.set()
-        self._stop_process()
-        self._write(status="stopped", manually_stopped=True,
-                    detail="Managed Flint is stopped. Its downloaded model is kept for the next start.")
-        return self.status()
+        with self._lock:
+            self._stop.set()
+            self._write(status="stopping", manually_stopped=True,
+                        detail="Stopping managed Flint; its downloaded model will be kept.")
+            self._stop_process()
+            self._write(status="stopped", manually_stopped=True,
+                        detail="Managed Flint is stopped. Its downloaded model is kept for the next start.")
+            return self.status()
 
     def recover(self, device: str = "auto") -> dict:
         """Bounded service recovery; explicit Stop remains stopped."""

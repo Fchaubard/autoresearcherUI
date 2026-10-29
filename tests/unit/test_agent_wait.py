@@ -229,13 +229,12 @@ def test_operator_message_preserves_wait_and_chat_on_failed_delivery(
         assert agent_wait.status()["status"] == "waiting"
 
 
-def test_unsent_event_draft_keeps_wait_registered(arui_env, monkeypatch):
-    from tests.unit.test_supervisor import NudgeTerminal
+def test_unsent_event_draft_keeps_wait_registered(arui_env, monkeypatch, nudge_terminal):
     seed(arui_env)
     from backend.app import agent_wait, supervisor
     agent_wait.arm("Await baseline.")
     set_run("kept_novel")
-    terminal = NudgeTerminal(success_after=None)
+    terminal = nudge_terminal(success_after=None)
     monkeypatch.setattr(supervisor._sp, "run", terminal)
     monkeypatch.setattr("time.sleep", lambda _: None)
     now = dt.datetime.now(dt.timezone.utc)
