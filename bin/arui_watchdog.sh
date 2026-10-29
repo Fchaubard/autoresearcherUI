@@ -109,8 +109,10 @@ launch_backend() {
 
 launch_tunnel() {
   tmux kill-session -t '=arui-cf' 2>/dev/null || true
+  # Self-updates restart quick tunnels under a new public hostname and can
+  # detach the replacement process from tmux. Upgrade during maintenance.
   tmux new-session -d -s arui-cf \
-    "while true; do cloudflared tunnel --protocol http2 --url http://localhost:$PORT 2>&1 | tee -a $CFLOG; echo '[arui-cf] cloudflared exited; respawning in 2s' >>$CFLOG; sleep 2; done"
+    "while true; do cloudflared tunnel --protocol http2 --no-autoupdate --url http://127.0.0.1:$PORT 2>&1 | tee -a $CFLOG; echo '[arui-cf] cloudflared exited; respawning in 2s' >>$CFLOG; sleep 2; done"
   echo "[watchdog $(date -u +%FT%TZ)] relaunched tunnel session 'arui-cf'" >>"$CFLOG"
 }
 

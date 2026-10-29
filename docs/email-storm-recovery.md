@@ -14,6 +14,26 @@ retries after 15 minutes. Genuine rotations are coalesced to the latest URL with
 a one-hour cooldown. Configured stable dashboard domains take precedence, and
 unreadable email-pause settings suppress delivery.
 
+## Link recovery after paused notifications
+
+On October 29, cloudflared's automatic update restarted the quick tunnel and
+assigned a new hostname while email was paused. The deployed application was
+healthy, but the old bookmark was no longer usable. The notification state also
+treated a URL observed during a pause as already handled, so resuming email
+would not deliver that current link.
+
+Paused URLs now remain eligible for one notification after email resumes,
+subject to the same durable reservation and cooldown rules. Repeated scheduler
+ticks and concurrent workers cannot resend a successfully claimed URL.
+
+Both initial setup and watchdog recovery launch cloudflared with
+`--no-autoupdate --protocol http2` and an explicit `127.0.0.1` origin. Upgrade the
+tunnel binary during planned maintenance; its automatic updater previously
+replaced the process outside the tmux supervisor and rotated the public URL.
+[Cloudflare documents the update restart behavior and opt-out flag](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/run-parameters/#no-autoupdate).
+Quick-tunnel URLs can still change when the tunnel is relaunched. Use the
+authenticated `/api/url` endpoint on the server to retrieve the current URL.
+
 ## Runtime storage
 
 Keep the active SQLite and DuckDB databases on a local filesystem. The affected

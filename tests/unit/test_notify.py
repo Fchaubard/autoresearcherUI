@@ -305,6 +305,14 @@ def test_tunnel_change_respects_email_pause(arui_env, setting_setter,
     # records the URL but sends nothing while paused
     assert notify.maybe_email_tunnel_change() is False
     assert sent == []
+    # Resuming must deliver the current link even though its URL is unchanged
+    # from the observation made while paused. Later ticks remain deduplicated.
+    setting_setter("onboarding", {"email": "me@x.com", "gmail_app_pw": "pw",
+                                  "emails_paused": False})
+    assert notify.maybe_email_tunnel_change() is True
+    for _ in range(6):
+        assert notify.maybe_email_tunnel_change() is False
+    assert sent == [1]
 
 
 def _write_ngrok_url(url: str) -> None:

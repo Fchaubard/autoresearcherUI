@@ -1916,7 +1916,12 @@ def _claim_tunnel_notice(cur: str, paused: bool) -> tuple[str, dict] | None:
         row = db.query(Setting).filter(Setting.key == _TUNNEL_URL_KEY).first()
         state = dict(row.value) if row and isinstance(row.value, dict) else {}
         prev = state.get("url", "")
-        if prev == cur and state.get("status") != "failed":
+        # Observing a URL while email is paused does not deliver it. Keep it
+        # eligible for one durable claim when notifications resume; a
+        # reserved/sent URL must still be deduplicated across restarts.
+        if prev == cur and state.get("status") not in {"failed", "paused"}:
+            return None
+        if paused and prev == cur and state.get("status") == "paused":
             return None
         last_attempt = _parse_iso(state.get("attempted_at") or state.get("at"))
         if paused:

@@ -110,6 +110,8 @@ def test_watchdog_recycles_alive_but_unreachable_tunnel_over_http2(tmp_path):
     assert "kill-session -t =arui-cf" in calls
     assert "new-session -d -s arui-cf" in calls
     assert "cloudflared tunnel --protocol http2" in calls
+    assert "--no-autoupdate" in calls
+    assert "--url http://127.0.0.1:8000" in calls
     assert not (data / ".watchdog_tunnel_strike").exists()
 
 

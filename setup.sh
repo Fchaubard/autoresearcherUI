@@ -249,7 +249,7 @@ if [ "$NO_TUNNEL" -eq 0 ] && command -v cloudflared >/dev/null 2>&1; then
   # `/api/url` endpoint (or by tailing data/cloudflared.log) — the
   # important thing is the tunnel never just dies and stays dead.
   tmux new-session -d -s arui-cf \
-    "while true; do cloudflared tunnel --url http://localhost:$PORT 2>&1 | tee -a $CFLOG; echo '[arui-cf] cloudflared exited; respawning in 2s' >>$CFLOG; sleep 2; done"
+    "while true; do cloudflared tunnel --protocol http2 --no-autoupdate --url http://127.0.0.1:$PORT 2>&1 | tee -a $CFLOG; echo '[arui-cf] cloudflared exited; respawning in 2s' >>$CFLOG; sleep 2; done"
   # parse the public URL out of cloudflared's log
   for i in $(seq 1 40); do
     PUB=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$CFLOG" \
