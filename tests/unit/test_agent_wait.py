@@ -149,6 +149,28 @@ def test_supervisor_honors_registered_wait_before_idle_nudges(arui_env, monkeypa
     supervisor._supervise_research_agent()
 
 
+def test_wait_wakes_when_history_contains_old_prompts_but_current_input_is_empty(arui_env, monkeypatch, nudge_terminal):
+    seed(arui_env)
+    from backend.app import agent_wait, supervisor
+    agent_wait.arm('Compare the completed baseline.')
+    set_run('kept_novel')
+    monkeypatch.delenv('ARUI_DISABLE_BG', raising=False)
+    monkeypatch.setattr(supervisor, '_agent_alive', lambda: True)
+    monkeypatch.setattr(supervisor, '_supervise_dead_research_agent', lambda **kw: False)
+    terminal = nudge_terminal()
+    terminal.history = '› [RESEARCH EVENT] old accepted message\nAnalysis completed.\n'
+    terminal.placeholder = 'Ask Codex to do anything'
+    monkeypatch.setattr(supervisor._sp, 'run', terminal)
+    monkeypatch.setattr(supervisor, '_agent_pane_low', lambda: terminal.screen().lower())
+    sent = []
+    monkeypatch.setattr(supervisor, '_send_agent_nudge', lambda text: sent.append(text) or True)
+    monkeypatch.setattr(supervisor, '_should_nudge_idle_agent',
+                        lambda *a, **kw: pytest.fail('registered event wait must own this wake'))
+    supervisor._supervise_research_agent()
+    assert len(sent) == 1 and 'r1: running -> kept_novel' in sent[0]
+    assert agent_wait.status() == {}
+
+
 def test_http_wait_is_authenticated_and_invalid_requests_do_not_park(arui_env):
     seed(arui_env)
     from fastapi import FastAPI
@@ -176,26 +198,25 @@ def test_http_wait_is_authenticated_and_invalid_requests_do_not_park(arui_env):
 
 def test_pi_delivery_cancels_wait_only_after_success(arui_env, monkeypatch):
     seed(arui_env)
-    from backend.app import agent_wait, pi
-    from subprocess import CompletedProcess
+    from backend.app import agent_wait, pi, supervisor
     agent_wait.arm("Await result")
-    monkeypatch.setattr(pi.subprocess, "run", lambda args, **kwargs: CompletedProcess(args, 1))
+    monkeypatch.setattr(supervisor, "_send_agent_nudge", lambda *args, **kwargs: False)
     assert not pi._send_to_agent("A concrete intervention")
     assert agent_wait.status()["status"] == "waiting"
-    commands = []
-    def succeeds(args, **kwargs):
-        commands.append(args)
-        return CompletedProcess(args, 0)
-    monkeypatch.setattr(pi.subprocess, "run", succeeds)
+    verified = []
+    def succeeds(text, session):
+        verified.append((text, session))
+        return True
+    monkeypatch.setattr(supervisor, "_send_agent_nudge", succeeds)
     assert pi._send_to_agent("A concrete intervention")
     assert agent_wait.status() == {}
-    assert commands[0][3:5] == ["=agent:", "-l"]
+    assert verified == [("A concrete intervention", "agent")]
 
 
 @pytest.mark.parametrize("failure", ["literal", "enter", "timeout", None])
 def test_operator_message_preserves_wait_and_chat_on_failed_delivery(
-        arui_env, monkeypatch, failure):
-    from subprocess import CompletedProcess, TimeoutExpired
+        arui_env, monkeypatch, failure, nudge_terminal):
+    from subprocess import TimeoutExpired
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     seed(arui_env)
@@ -204,15 +225,14 @@ def test_operator_message_preserves_wait_and_chat_on_failed_delivery(
     from backend.app.models import ChatMessage
     agent_wait.arm("Await baseline.")
     monkeypatch.setattr(api, "_tmux_alive", lambda _: True)
-    commands = []
+    monkeypatch.setattr("time.sleep", lambda _: None)
+    terminal = nudge_terminal(success_after=1,
+        failed_key={"literal": "-l", "enter": "Enter"}.get(failure))
 
     def send(cmd, **kwargs):
-        commands.append(cmd)
         if failure == "timeout":
             raise TimeoutExpired(cmd, 4)
-        failed = ((failure == "literal" and "-l" in cmd)
-                  or (failure == "enter" and cmd[-1] == "Enter"))
-        return CompletedProcess(cmd, 1 if failed else 0)
+        return terminal(cmd, **kwargs)
 
     monkeypatch.setattr(api.subprocess, "run", send)
     app = FastAPI()
@@ -220,7 +240,7 @@ def test_operator_message_preserves_wait_and_chat_on_failed_delivery(
     with TestClient(app) as client:
         result = client.post("/api/agent/send", json={"text": "Inspect r1"}).json()
     assert result["ok"] is (failure is None)
-    assert all(cmd[3] == "=agent:" for cmd in commands)
+    assert all(cmd[3] == "=agent:" for cmd in terminal.calls if cmd[:2] == ["tmux", "send-keys"])
     with SessionLocal() as db:
         assert db.query(ChatMessage).count() == (1 if failure is None else 0)
     if failure is None:
@@ -271,38 +291,38 @@ def test_registered_wait_does_not_suppress_frozen_turn_recovery(arui_env, monkey
 
 
 @pytest.mark.parametrize('fails', [False, True])
-def test_terminal_enter_clears_wait_only_after_delivery(arui_env, monkeypatch, fails):
-    from subprocess import CompletedProcess
+def test_terminal_enter_clears_wait_only_after_delivery(arui_env, monkeypatch, fails, nudge_terminal):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     seed(arui_env)
     from backend.app import agent_wait, api
     agent_wait.arm('Await baseline')
     monkeypatch.setattr(api, '_tmux_alive', lambda _: True)
-    commands = []
-    def send(command, **kwargs):
-        commands.append(command)
-        return CompletedProcess(command, int(fails))
-    monkeypatch.setattr(api.subprocess, 'run', send)
+    terminal = nudge_terminal(success_after=1, failed_key='Enter' if fails else None)
+    terminal.draft = 'Inspect the baseline'
+    monkeypatch.setattr('time.sleep', lambda _: None)
+    monkeypatch.setattr(api.subprocess, 'run', terminal)
     app = FastAPI(); app.include_router(api.router)
     with TestClient(app) as client:
         result = client.post('/api/agent/keys', json={'session':'agent', 'data':'\r'}).json()
     assert result['ok'] is (not fails)
+    commands = [c for c in terminal.calls if c[:2] == ['tmux', 'send-keys']]
     assert commands[0][3:] == ['=agent:', 'Enter']
     assert bool(agent_wait.status()) is fails
 
 
 @pytest.mark.parametrize('sender', ['api', 'pi'])
-def test_operator_and_pi_delivery_wait_for_supervisor_transaction(arui_env, monkeypatch, sender):
+def test_operator_and_pi_delivery_wait_for_supervisor_transaction(arui_env, monkeypatch, sender, nudge_terminal):
     import threading
-    from subprocess import CompletedProcess
     seed(arui_env)
     from backend.app import agent_wait, api, pi
     agent_wait.arm('Await baseline')
     started, attempted, completed = threading.Event(), threading.Event(), threading.Event()
+    terminal = nudge_terminal(success_after=1)
+    monkeypatch.setattr('time.sleep', lambda _: None)
     def send(command, **kwargs):
         attempted.set()
-        return CompletedProcess(command, 0)
+        return terminal(command, **kwargs)
     monkeypatch.setattr(api.subprocess, 'run', send)
     result = []
     def deliver():

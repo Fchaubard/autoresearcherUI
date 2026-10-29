@@ -1,5 +1,9 @@
 # Local Flint verification
 
+For current installation and lifecycle behavior, see [Managed local Flint](managed-flint.md).
+Selecting Flint now downloads, verifies and starts the local model automatically.
+The manual commands below document the original October 28 verification.
+
 On October 28, actual Recursive Flint weights passed research and author
 coding tasks, scoping, both reviewer slots, tiebreaker, PI, and scoping chat.
 The tests used a temporary localhost server on an idle GPU. They did not
@@ -15,8 +19,9 @@ for the final results and configuration revision of each attempt.
 - CUDA llama.cpp commit: `cf24317bea431b807dc93319d74c61bed6e20aff`.
 - Context: 16,384 tokens, one server slot. App output budget: 8,192 tokens,
   including reasoning. Served ID: `flint`; UI selection: `flint/local`.
-- The checkpoint and compiled runtime were retained under `/tmp/arui-flint-live`
-  on the test host. This temporary directory is not a durable installation.
+- The original test used `/tmp/arui-flint-live`. On October 29 its verified
+  checkpoint and pinned runtime moved into the persistent managed cache,
+  `/var/lib/autoresearcherui/models/flint`; the old path is a compatibility link.
 
 The test used idle GPU 9. To reproduce on that host when the device is available:
 
@@ -29,10 +34,10 @@ CUDA_VISIBLE_DEVICES=9 /tmp/arui-flint-live/build/bin/llama-server \
   --host 127.0.0.1 --port 18342
 ```
 
-Configure the app's Flint server URL as `http://127.0.0.1:18342/v1` and served
-model as `flint`. For a different server, set `ARUI_FLINT_CONTEXT_TOKENS` and
-`ARUI_FLINT_MAX_OUTPUT_TOKENS` to budgets that fit that server. The app does
-not automatically download weights, reserve a GPU, or start a local server.
+That test configured the external server URL as `http://127.0.0.1:18342/v1`
+and served model as `flint`. Advanced external-server mode still supports
+custom endpoints and `ARUI_FLINT_CONTEXT_TOKENS` / `ARUI_FLINT_MAX_OUTPUT_TOKENS`
+budgets. Normal managed setup needs none of these connection fields.
 See [Recursive's NVIDIA setup](https://docs.recursive.com/local/nvidia) for
 installation options.
 

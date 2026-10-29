@@ -2169,6 +2169,14 @@ def _deliver_agent_message(text: str) -> dict:
 
 def _deliver_agent_message_locked(text: str) -> dict:
     from . import agent_wait
+    if agent_wait.status().get("status") == "waiting":
+        # A parked CLI needs verified acceptance, not just tmux's successful
+        # key write: a lost Enter must not discard its durable event wait.
+        from . import supervisor
+        if not supervisor._send_agent_nudge(text):
+            return {"ok": False, "error": "The waiting agent has not accepted the message. Its wait was preserved; check the terminal and retry."}
+        agent_wait.cancel()
+        return {"ok": True}
     try:
         target = "=agent:"
         written = subprocess.run(["tmux", "send-keys", "-t", target, "-l", text],
@@ -2265,14 +2273,36 @@ async def agent_keys(request: Request):
     def deliver():
         from . import agent_wait
         with agent_wait.delivery_lock():
+            verify_wait = (sess == "agent" and keys == ["Enter"]
+                           and agent_wait.status().get("status") == "waiting")
+            before_prompt = None
+            before_empty = False
             try:
+                if verify_wait:
+                    from . import supervisor
+                    before = supervisor._nudge_pane("=agent:")
+                    before_prompt = supervisor._nudge_prompt(before) if before is not None else None
+                    before_empty = bool(before is not None and supervisor._nudge_input_empty("=agent:", before))
                 result = subprocess.run(["tmux", "send-keys", "-t", "=" + sess + ":", *keys],
                                         capture_output=True, timeout=4)
                 if result.returncode != 0:
                     return {"ok": False, "error": "Terminal input could not be delivered."}
+                if verify_wait:
+                    # Raw terminal input belongs to the operator. Never retry,
+                    # clear or replace it; retain the wait if acceptance is
+                    # uncertain or Enter merely hit an already empty prompt.
+                    import time
+                    time.sleep(.3)
+                    after = supervisor._nudge_pane("=agent:")
+                    accepted = bool(before_prompt and not before_empty and after is not None and (
+                        supervisor._agent_busy(after.lower()) or supervisor._nudge_input_empty("=agent:", after)))
+                    if accepted:
+                        agent_wait.cancel()
+                    elif before_prompt is None or not before_empty:
+                        return {"ok": False, "error": "Terminal submission could not be verified. The research wait was retained; inspect the terminal before retrying."}
             except (OSError, subprocess.TimeoutExpired):
                 return {"ok": False, "error": "Terminal input could not be delivered."}
-            if sess == "agent" and keys == ["Enter"]:
+            if not verify_wait and sess == "agent" and keys == ["Enter"]:
                 agent_wait.cancel()
             return {"ok": True, "kind": kind}
     return await asyncio.to_thread(deliver)

@@ -325,7 +325,7 @@ def test_nudge_retries_enter_when_text_remains_in_prompt(monkeypatch, marker, nu
     assert any("-J" in cmd for cmd in terminal.calls if cmd[:2] == ["tmux", "capture-pane"])
 
 
-@pytest.mark.parametrize("failed_key", ["Escape", "C-u", "-l", "Enter"])
+@pytest.mark.parametrize("failed_key", ["Escape", "-l", "Enter"])
 def test_nudge_never_claims_delivery_after_failed_tmux_send(monkeypatch, failed_key, nudge_terminal):
     from backend.app import supervisor as sv
     terminal = nudge_terminal(failed_key=failed_key)
@@ -397,6 +397,99 @@ def test_nudge_preserves_draft_written_after_supervisor_idle_check(monkeypatch, 
     assert terminal.draft == "Operator is still editing this"
 
 
+def test_nudge_preserves_operator_draft_that_appears_after_escape(monkeypatch, nudge_terminal):
+    from backend.app import supervisor as sv
+    terminal = nudge_terminal()
+    def run(command, **kwargs):
+        result = terminal(command, **kwargs)
+        if command[:2] == ['tmux', 'send-keys'] and command[-1] == 'Escape':
+            terminal.draft = 'Operator started typing during the repaint'
+        return result
+    monkeypatch.setattr(sv._sp, 'run', run)
+    monkeypatch.setattr('time.sleep', lambda _: None)
+    assert not sv._send_agent_nudge('[RESEARCH EVENT] r1 completed')
+    assert terminal.draft == 'Operator started typing during the repaint'
+    assert [cmd[-1] for cmd in terminal.calls if cmd[:2] == ['tmux', 'send-keys']] == ['Escape']
+
+
+@pytest.mark.parametrize('marker,placeholder', [
+    ('›', 'Ask Codex to do anything'), ('❯', 'Try "how does <filepath> work?"'),
+    ('>', 'Ask anything, / for commands'),
+])
+def test_painted_placeholder_is_empty_only_with_cursor_and_style_evidence(monkeypatch, nudge_terminal, marker, placeholder):
+    from backend.app import supervisor as sv
+    terminal = nudge_terminal(success_after=1, marker=marker)
+    terminal.placeholder = placeholder
+    terminal.history = '› An earlier operator instruction\nCompleted it.\n'
+    monkeypatch.setattr(sv._sp, 'run', terminal)
+    monkeypatch.setattr('time.sleep', lambda _: None)
+    assert sv._nudge_prompt(terminal.screen())[0] == placeholder
+    assert not sv._agent_has_draft(terminal.screen().lower())
+    assert sv._send_agent_nudge('[RESEARCH EVENT] r1 completed')
+    assert terminal.enters == 1 and terminal.busy
+
+
+@pytest.mark.parametrize('placeholder', ['Ask Codex to do anything', 'Try "how does <filepath> work?"'])
+@pytest.mark.parametrize('at_home', [False, True])
+def test_typed_placeholder_words_are_preserved_even_after_home(monkeypatch, nudge_terminal, placeholder, at_home):
+    from backend.app import supervisor as sv
+    terminal = nudge_terminal(marker='❯' if placeholder.startswith('Try') else '›')
+    terminal.draft = placeholder
+    if at_home:
+        terminal.cursor_x_override = 2
+    monkeypatch.setattr(sv._sp, 'run', terminal)
+    assert sv._agent_has_draft(terminal.screen().lower())
+    assert not sv._send_agent_nudge('[RESEARCH EVENT] r1 completed')
+    assert terminal.draft == placeholder
+    assert not any(cmd[:2] == ['tmux', 'send-keys'] for cmd in terminal.calls)
+
+
+@pytest.mark.parametrize('failure', ['style', 'cursor', 'cursor_error', 'changed_style'])
+def test_ambiguous_placeholder_is_preserved(monkeypatch, nudge_terminal, failure):
+    from backend.app import supervisor as sv
+    import subprocess
+    terminal = nudge_terminal(marker='❯')
+    terminal.placeholder = 'Try "review the code"'
+    if failure == 'style':
+        terminal.placeholder_dim = False
+    if failure == 'cursor':
+        terminal.cursor_x_override = 5
+    def run(command, **kwargs):
+        result = terminal(command, **kwargs)
+        if command[:2] == ['tmux', 'display-message']:
+            if failure == 'cursor_error':
+                return subprocess.CompletedProcess(command, 1, stdout=b'')
+            if failure == 'changed_style':
+                terminal.draft = terminal.placeholder
+                terminal.cursor_x_override = 2
+        return result
+    monkeypatch.setattr(sv._sp, 'run', run)
+    assert sv._agent_has_draft(terminal.screen().lower())
+    assert not sv._send_agent_nudge('[RESEARCH EVENT] r1 completed')
+    assert not any(cmd[:2] == ['tmux', 'send-keys'] for cmd in terminal.calls)
+
+
+def test_rgb_color_components_are_not_dim_placeholder_evidence():
+    from backend.app import supervisor as sv
+    assert not sv._dim_placeholder_line('❯ \x1b[38;2;2;2;2mTry "a task"\x1b[0m', 2)
+
+
+def test_typed_rgb_placeholder_with_cursor_home_is_preserved(monkeypatch, nudge_terminal):
+    from backend.app import supervisor as sv
+    terminal = nudge_terminal()
+    terminal.draft, terminal.cursor_x_override = 'Ask Codex to do anything', 2
+    def run(command, **kwargs):
+        result = terminal(command, **kwargs)
+        if command[:2] == ['tmux', 'capture-pane'] and '-e' in command:
+            result.stdout = result.stdout.replace(b'Ask Codex', b'\x1b[38;2;2;2;2mAsk Codex')
+        return result
+    monkeypatch.setattr(sv._sp, 'run', run)
+    assert sv._agent_has_draft(terminal.screen().lower())
+    assert not sv._send_agent_nudge('[RESEARCH EVENT] r1 completed')
+    assert terminal.draft == 'Ask Codex to do anything'
+    assert not any(cmd[:2] == ['tmux', 'send-keys'] for cmd in terminal.calls)
+
+
 def test_matching_scrollback_without_cursor_ownership_is_never_cleared(monkeypatch, nudge_terminal):
     from backend.app import supervisor as sv
     terminal = nudge_terminal(success_after=None)
@@ -436,6 +529,17 @@ def test_installed_codex_clears_failed_multiline_draft_without_inference(arui_en
         time.sleep(.1)
     else:
         pytest.fail('private Codex prompt did not become ready')
+    # An identically worded real draft at Home has the same cursor coordinates
+    # as the painted placeholder, but must never be treated as empty.
+    assert sv._nudge_input_empty('=nudge-probe:', pane)
+    run(['tmux', 'send-keys', '-t', '=nudge-probe:', '-l', 'Ask Codex to do anything'], capture_output=True)
+    run(['tmux', 'send-keys', '-t', '=nudge-probe:', 'Home'], capture_output=True)
+    time.sleep(.2)
+    typed = sv._nudge_pane('=nudge-probe:')
+    assert typed and not sv._nudge_input_empty('=nudge-probe:', typed)
+    assert sv._agent_has_draft(typed.lower(), session='nudge-probe')
+    run(['tmux', 'send-keys', '-t', '=nudge-probe:', 'C-c'], capture_output=True)
+    time.sleep(.2)
     enters = []
     def lose_enter(cmd, **kwargs):
         if cmd[:4] == ['tmux', 'send-keys', '-t', '=nudge-probe:'] and cmd[-1] == 'Enter':
@@ -445,14 +549,14 @@ def test_installed_codex_clears_failed_multiline_draft_without_inference(arui_en
     monkeypatch.setattr(sv._sp, 'run', lose_enter)
     message = '[RESEARCH EVENT] synthetic result completed\nKeep all valid training running.\nInspect the saved result next.'
     assert not sv._send_agent_nudge(message, session='nudge-probe')
-    deadline, prompt = time.monotonic() + 3, None
+    deadline, empty = time.monotonic() + 3, False
     while time.monotonic() < deadline:
         pane = sv._nudge_pane('=nudge-probe:')
-        prompt = sv._nudge_prompt(pane or '')
-        if prompt and not prompt[0]:
+        empty = sv._nudge_input_empty('=nudge-probe:', pane or '')
+        if empty:
             break
         time.sleep(.1)
-    assert len(enters) == 2 and prompt and not prompt[0]
+    assert len(enters) == 2 and empty
     assert run(['tmux', 'has-session', '-t', '=nudge-probe'], capture_output=True).returncode == 0
 
 
@@ -536,7 +640,7 @@ def test_agent_pane_capture_uses_exact_pane_target(monkeypatch):
     assert calls[0][3] == "=agent:"
 
 
-def test_codex_idle_prompt_and_draft_detection():
+def test_codex_idle_prompt_and_draft_detection(monkeypatch, nudge_terminal):
     """Current Codex uses ›, not Claude's ❯, for its input prompt."""
     from backend.app import supervisor as sv
     parked = ("  completed the current batch\n"
@@ -544,10 +648,25 @@ def test_codex_idle_prompt_and_draft_detection():
               "› Ask Codex to do anything\n"
               "  gpt-5.6-sol · working directory")
     low = parked.lower()
+    terminal = nudge_terminal()
+    terminal.placeholder = 'Ask Codex to do anything'
+    monkeypatch.setattr(sv._sp, 'run', terminal)
     assert sv._agent_idle_prompt(low) is True
     assert sv._agent_has_draft(low) is False
     assert sv._agent_has_draft("result\n› launch the next experiment") is True
     assert sv._agent_has_draft("result\n› \n  gpt-5.6-sol") is False
+
+
+@pytest.mark.parametrize('marker,empty', [('›', 'Ask Codex to do anything'), ('❯', '')])
+def test_historical_user_prompt_does_not_make_empty_live_input_a_draft(monkeypatch, nudge_terminal, marker, empty):
+    from backend.app import supervisor as sv
+    historical = f'{marker} [RESEARCH EVENT] the prior completed message\nCompleted the analysis.\n'
+    pane = historical + f'{marker} {empty}\nbypass permissions on\n'
+    terminal = nudge_terminal(marker=marker)
+    terminal.history, terminal.placeholder = historical, empty
+    monkeypatch.setattr(sv._sp, 'run', terminal)
+    assert not sv._agent_has_draft(pane.lower())
+    assert sv._agent_has_draft(historical + f'{marker} Operator is editing a new instruction\nbypass permissions on\n')
 
 
 def test_busy_and_boot_markers():

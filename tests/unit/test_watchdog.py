@@ -207,7 +207,7 @@ def test_runner_skips_disabled_scripts(arui_env, make_project, make_run,
 
 
 @pytest.mark.parametrize("failure", ["literal", "enter", "timeout", None])
-def test_page_delivery_preserves_wait_until_success(
+def test_page_nonwaiting_delivery_checks_tmux_steps(
         arui_env, make_project, make_run, monkeypatch, failure):
     from contextlib import contextmanager
     from subprocess import CompletedProcess, TimeoutExpired
@@ -215,7 +215,6 @@ def test_page_delivery_preserves_wait_until_success(
     from backend.app.watchdog import runner
     make_project()
     make_run(status="running")
-    agent_wait.arm("Await this experiment.")
     original_lock = agent_wait.delivery_lock
     original_cancel = agent_wait.cancel
     locked = False
@@ -256,6 +255,6 @@ def test_page_delivery_preserves_wait_until_success(
         assert agent_wait.status() == {}
     else:
         assert cancelled == []
-        assert agent_wait.status()["status"] == "waiting"
+        assert agent_wait.status() == {}
         if failure in {"literal", "timeout"}:
             assert len(commands) == 1

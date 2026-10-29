@@ -276,11 +276,12 @@ class NudgeTerminal:
         self.enters, self.clears, self.busy = 0, 0, False
         self.success_after, self.marker, self.failed_key = success_after, marker, failed_key
         self.edit_after_enter, self.capture_failure, self.cursor_override = None, None, None
+        self.placeholder, self.placeholder_dim, self.cursor_x_override = "", True, None
 
     def screen(self):
         if self.busy:
             return self.history + "Working (3s · esc to interrupt)\n"
-        return self.history + self.marker + " " + self.draft + "\nbypass permissions on\n"
+        return self.history + self.marker + " " + (self.draft or self.placeholder) + "\nbypass permissions on\n"
 
     def __call__(self, cmd, **kwargs):
         from subprocess import CompletedProcess
@@ -288,10 +289,17 @@ class NudgeTerminal:
         if cmd[:2] == ["tmux", "capture-pane"]:
             if self.enters and self.capture_failure is not None:
                 return CompletedProcess(cmd, self.capture_failure, stdout=b"")
-            return CompletedProcess(cmd, 0, stdout=self.screen().encode())
+            screen = self.screen()
+            if '-e' in cmd and self.placeholder and not self.draft and self.placeholder_dim:
+                screen = screen.replace(self.marker + ' ' + self.placeholder,
+                                        self.marker + ' \x1b[2m' + self.placeholder + '\x1b[0m')
+            return CompletedProcess(cmd, 0, stdout=screen.encode())
         if cmd[:2] == ["tmux", "display-message"]:
             cursor = len(self.history.splitlines()) + max(1, len(self.draft.splitlines())) - 1
-            return CompletedProcess(cmd, 0, stdout=str(cursor if self.cursor_override is None else self.cursor_override).encode())
+            row = cursor if self.cursor_override is None else self.cursor_override
+            column = 2 + len(self.draft.split('\n')[-1]) if self.cursor_x_override is None else self.cursor_x_override
+            value = f'{row} {column}' if '#{cursor_x}' in cmd[-1] else str(row)
+            return CompletedProcess(cmd, 0, stdout=value.encode())
         failed = ("-l" in cmd if self.failed_key == "-l" else cmd[-1] == self.failed_key)
         if failed:
             return CompletedProcess(cmd, 1, stdout=b"")

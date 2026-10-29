@@ -468,21 +468,12 @@ def _agent_boot_screen(pane_low: str) -> bool:
     return any(m in pane_low for m in _AGENT_BOOT_MARKERS)
 
 
-def _agent_has_draft(pane_low: str) -> bool:
-    """True if the agent has typed a non-trivial next-step into the prompt (a
-    line beginning with a Claude (❯) or Codex (›) marker with real content).
-    We must NOT nudge then — clearing its own plan with C-u is exactly the
-    counterproductive thrash we saw (148 nudges wiping an in-progress plan)."""
-    for ln in pane_low.splitlines():
-        t = ln.strip()
-        # Codex renders its generic placeholder as literal capture-pane text,
-        # unlike a browser placeholder. It is not a user draft and must not
-        # suppress autonomous recovery.
-        placeholder = t.lower() == "› ask codex to do anything"
-        if (t.startswith(("❯ ", "› ")) and len(t) > 8
-                and 'try "' not in t and not placeholder):
-            return True
-    return False
+def _agent_has_draft(pane_low: str, session: str = _AGENT_SESSION) -> bool:
+    """Inspect only the current input; old user prompts remain in scrollback."""
+    prompt = _nudge_prompt(pane_low)
+    if not prompt:
+        return False
+    return bool(prompt[0] and not _nudge_input_empty(_pane_target(session), pane_low))
 
 
 def _agent_idle_prompt(pane_low: str) -> bool:
@@ -596,21 +587,94 @@ def _nudge_prompt(pane: str) -> tuple[str, int, int] | None:
             break
         body.append(lines[i])
     text = ' '.join(' '.join(body).split())
-    if text.lower() in {'ask codex to do anything', 'ask anything, / for commands'}:
-        text = ''
     return text, start, end
 
 
-def _nudge_pane(target: str, *, joined: bool = True) -> str | None:
+def _nudge_pane(target: str, *, joined: bool = True, styled: bool = False) -> str | None:
     # Only the current screen; -J joins physical wraps without inserting spaces
     # inside words. A historical marker is never evidence of draft ownership.
     command = ['tmux', 'capture-pane', '-t', target, '-p']
     if joined:
         command.append('-J')
+    if styled:
+        command.append('-e')
     pane = _sp.run(command, capture_output=True, timeout=4)
     if pane.returncode or not pane.stdout:
         return None
     return pane.stdout.decode('utf-8', errors='ignore') if isinstance(pane.stdout, bytes) else pane.stdout
+
+
+def _nudge_placeholder(text: str) -> bool:
+    low = text.lower()
+    return (low in {'ask codex to do anything', 'ask anything, / for commands'} or
+            bool(_re.fullmatch(r'try "[^"\n]+"', low)))
+
+
+def _dim_placeholder_line(line: str, column: int) -> bool:
+    """Require placeholder styling, even if an operator has pressed Home.
+
+    Codex and Claude paint suggestions dimly; ordinary editable text is not
+    dim. Unknown rendering is preserved as a draft rather than guessed empty.
+    """
+    dim, offset, seen = False, 0, False
+    for part in _re.split(r'(\x1b\[[0-9;]*m)', line):
+        if part.startswith('\x1b['):
+            codes = [int(v or '0') for v in part[2:-1].split(';')]
+            index = 0
+            while index < len(codes):
+                code = codes[index]
+                # RGB/indexed color components are not display attributes.
+                if code in (38, 48, 58) and index + 1 < len(codes):
+                    index += 5 if codes[index + 1] == 2 else 3
+                    continue
+                if code in (0, 22):
+                    dim = False
+                elif code == 2:
+                    dim = True
+                index += 1
+            continue
+        for char in part:
+            if offset >= column and not char.isspace():
+                seen = True
+                if not dim:
+                    return False
+            offset += 1
+    return seen
+
+
+def _nudge_input_empty(target: str, pane: str) -> bool:
+    """Distinguish a painted suggestion from an identically worded draft."""
+    prompt = _nudge_prompt(pane)
+    if not prompt:
+        return False
+    if not prompt[0]:
+        return True
+    if not _nudge_placeholder(prompt[0]) or _agent_busy(pane.lower()):
+        return False
+    try:
+        raw = _nudge_pane(target, joined=False, styled=True)
+        if raw is None:
+            return False
+        plain = _re.sub(r'\x1b\[[0-9;]*m', '', raw)
+        current = _nudge_prompt(plain)
+        if not current or current[0].lower() != prompt[0].lower():
+            return False
+        line = plain.splitlines()[current[1]]
+        prefix = _re.match(r'^\s*[❯›>]\s?', line)
+        if not prefix:
+            return False
+        cursor = _sp.run(['tmux', 'display-message', '-p', '-t', target,
+                          '#{cursor_y} #{cursor_x}'], capture_output=True, timeout=4)
+        row, column = map(int, cursor.stdout.split())
+        if cursor.returncode or row != current[1] or column != prefix.end():
+            return False
+        if not _dim_placeholder_line(raw.splitlines()[row], column):
+            return False
+        # Exact styled recapture also catches a user replacing the suggestion
+        # with the same words while the cursor was being inspected.
+        return _nudge_pane(target, joined=False, styled=True) == raw
+    except Exception:                                   # noqa: BLE001
+        return False
 
 
 def _owns_nudge_draft(target: str, pane: str, text: str) -> bool:
@@ -665,21 +729,17 @@ def _send_agent_nudge_locked(text: str, session: str) -> bool:
         pane = _nudge_pane(target)
         if pane is None or _agent_busy(pane.lower()):
             return False
-        prompt = _nudge_prompt(pane)
-        if prompt is None or prompt[0]:
+        if not _nudge_input_empty(target, pane):
             return False
-        # Escape cancels any open interactive selection menu (the agent's
-        # "enter to select · esc to cancel" prompt) so we land back on the text
-        # prompt; harmless at a plain prompt. Then C-u clears any half-typed
-        # draft, and we type + submit the nudge.
+        # Dismiss an empty-input menu, then recheck after the TUI repaint.
+        # Never clear input: an operator may begin typing during this delay.
         escaped = _sp.run(["tmux", "send-keys", "-t", target, "Escape"],
                           capture_output=True, timeout=4)
         if escaped.returncode != 0:
             return False
         _t.sleep(0.3)
-        cleared = _sp.run(["tmux", "send-keys", "-t", target, "C-u"],
-                          capture_output=True, timeout=4)
-        if cleared.returncode != 0:
+        pane = _nudge_pane(target)
+        if pane is None or _agent_busy(pane.lower()) or not _nudge_input_empty(target, pane):
             return False
         written = _sp.run(["tmux", "send-keys", "-t", target, "-l", text],
                           capture_output=True, timeout=4)
@@ -715,8 +775,7 @@ def _send_agent_nudge_locked(text: str, session: str) -> bool:
                 return False
             if _agent_busy(pane.lower()):
                 return True
-        prompt = _nudge_prompt(pane)
-        if prompt and not prompt[0]:
+        if _nudge_input_empty(target, pane):
             return True
         _clear_failed_nudge(target, text)
         return False

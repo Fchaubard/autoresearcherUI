@@ -48,6 +48,12 @@ def _page_agent(message: str) -> bool:
     from .. import agent_wait
     try:
         with agent_wait.delivery_lock():
+            if agent_wait.status().get("status") == "waiting":
+                from ..supervisor import _send_agent_nudge
+                if not _send_agent_nudge(message, session="agent"):
+                    return False
+                agent_wait.cancel()
+                return True
             # Keep the literal message, Enter and wait cancellation together
             # so a concurrent event wake cannot erase or interleave the page.
             target = "=agent:"
