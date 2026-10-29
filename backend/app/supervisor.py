@@ -23,15 +23,19 @@ that never came for ~2h45m). The structure generalises to the other phases
 """
 from __future__ import annotations
 
-# How long to let a fresh completion-review worker run before we consider a
-# still-"pending" conclusion to be stuck. The worker itself is now bounded (a
-# slow reviewer fails fast at the 240s socket timeout, ≤2 reviewers), so a
-# healthy review settles well under this. Past it with no live worker = stuck.
+# Grace for a pending conclusion with no live worker. A managed CPU reviewer
+# can legitimately take much longer; thread ownership plus lease heartbeats
+# distinguish that work from an orphan without launching duplicate inference.
 _COMPLETION_GRACE_SEC = 360
 
 
 def tick() -> None:
     """One supervisor pass. Best-effort; never raises into the monitor loop."""
+    try:
+        from . import flint_manager
+        flint_manager.tick()
+    except Exception as e:                              # noqa: BLE001
+        print(f"[supervisor] local-model tick error: {e}", flush=True)
     try:
         _supervise_completion_review()
     except Exception as e:                              # noqa: BLE001
@@ -181,8 +185,10 @@ def _supervise_completion_review() -> None:
     # We are in the conclusion-review phase.
     lifecycle.set_phase(lifecycle.PHASE_CONCLUSION_REVIEW)
 
-    # Is a completion-review worker actually alive and recent?
-    if lifecycle.lease_alive("completion_review", max_age_sec=_COMPLETION_GRACE_SEC):
+    # A local worker owns this request even when it exceeds the lease grace
+    # or a heartbeat DB write temporarily fails. Never duplicate its calls.
+    if (council.completion_review_active()
+            or lifecycle.lease_alive("completion_review", max_age_sec=_COMPLETION_GRACE_SEC)):
         lifecycle.set_health(lifecycle.HEALTHY,
                              "council reviewing the conclusion")
         return
@@ -293,16 +299,17 @@ _AGENT_BOOT_MARKERS = (
 _AGENT_NUDGE = (
     "[AUTONOMY - no human is watching this session] Do not stop and ask for "
     "confirmation or say \"your call\". You are the autonomous research agent. "
-    "Re-read _setup_prompt.txt, the project purpose, directives.jsonl, "
-    "ideas.md, results.md, and lessons.md. Inspect the authoritative run "
-    "ledger and currently active processes, preserve valid in-flight work, "
+    "Read your concise AGENT_STATE.md and GET /api/agent/context for authoritative run "
+    "state. Refer to the purpose in _setup_prompt.txt if it is not already in context; retrieve "
+    "specific directives, lessons or evidence only as needed. Preserve valid in-flight work, "
     "then continue the highest-priority unfinished work that directly serves "
     "this workspace's research objective. Generate and launch a diverse batch "
     "of new on-mandate experiments when compute is available; choose methods, "
     "replication, and concurrency from the actual brief and evidence rather "
-    "than assumptions from another project. NEVER idle or wait for a human "
-    "decision. Keep researching until the operator halts you or the harness's "
-    "explicit terminal protocol is satisfied."
+    "than assumptions from another project. When experiments or review are "
+    "running and no useful preparation remains, POST /api/agent/wait with a "
+    "concise handoff and finish your turn. The server will wake this conversation "
+    "on relevant events. Do not run sleep/status-poll loops or wait for a human decision."
 )
 
 
@@ -568,28 +575,121 @@ def _agent_idle_save(v: dict | None) -> None:
         db.close()
 
 
+def _nudge_prompt(pane: str) -> tuple[str, int, int] | None:
+    """Extract the last visible input box, not a marker in old scrollback."""
+    lines = pane.splitlines()
+    starts = [(i, _re.match(r'^\s*[❯›>]\s?(.*)$', line)) for i, line in enumerate(lines)]
+    starts = [(i, hit) for i, hit in starts if hit]
+    if not starts:
+        return None
+    start, hit = starts[-1]
+    body = [hit.group(1)]
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        line = lines[i].strip()
+        lower = line.lower()
+        if (line.startswith(('─', '━', '═', '╰', '└')) or
+                any(token in lower for token in ('bypass permissions', 'shift+tab to cycle',
+                    'context left', '? for shortcuts', 'auto mode on')) or
+                _re.match(r'^(?:gpt-|claude-|opus |sonnet |fable |gemini-)', lower)):
+            end = i
+            break
+        body.append(lines[i])
+    text = ' '.join(' '.join(body).split())
+    if text.lower() in {'ask codex to do anything', 'ask anything, / for commands'}:
+        text = ''
+    return text, start, end
+
+
+def _nudge_pane(target: str, *, joined: bool = True) -> str | None:
+    # Only the current screen; -J joins physical wraps without inserting spaces
+    # inside words. A historical marker is never evidence of draft ownership.
+    command = ['tmux', 'capture-pane', '-t', target, '-p']
+    if joined:
+        command.append('-J')
+    pane = _sp.run(command, capture_output=True, timeout=4)
+    if pane.returncode or not pane.stdout:
+        return None
+    return pane.stdout.decode('utf-8', errors='ignore') if isinstance(pane.stdout, bytes) else pane.stdout
+
+
+def _owns_nudge_draft(target: str, pane: str, text: str) -> bool:
+    """Require full exact text AND the cursor in that editable input box."""
+    if _agent_busy(pane.lower()):
+        return False
+    prompt = _nudge_prompt(pane)
+    if not prompt or prompt[0] != ' '.join(text.split()):
+        return False
+    raw = _nudge_pane(target, joined=False)
+    if raw is None:
+        return False
+    current = _nudge_prompt(raw)
+    cursor = _sp.run(['tmux', 'display-message', '-p', '-t', target, '#{cursor_y}'],
+                     capture_output=True, timeout=4)
+    if not current or cursor.returncode:
+        return False
+    try:
+        row = int(cursor.stdout.strip())
+    except (ValueError, TypeError, AttributeError):
+        return False
+    if not current[1] <= row < current[2]:
+        return False
+    # Re-capture immediately before sending a key: preserve a draft edited
+    # while the cursor position was being inspected.
+    latest = _nudge_pane(target)
+    last = _nudge_prompt(latest) if latest is not None else None
+    return bool(last and last[0] == prompt[0] and not _agent_busy(latest.lower()))
+
+
+def _clear_failed_nudge(target: str, text: str) -> None:
+    pane = _nudge_pane(target)
+    if pane is None or not _owns_nudge_draft(target, pane, text):
+        return
+    # Native Codex/Claude clear a whole idle draft with one Ctrl-C. Ctrl-U
+    # only removes the last logical line of a multiline Codex prompt.
+    _sp.run(['tmux', 'send-keys', '-t', target, 'C-c'], capture_output=True, timeout=4)
+
+
 def _send_agent_nudge(text: str = _AGENT_NUDGE,
                       session: str = _AGENT_SESSION) -> bool:
-    """Clear any half-typed draft in the prompt (C-u), then type + submit the
-    nudge. Best-effort — returns False on any tmux failure."""
+    from .agent_wait import delivery_lock
+    with delivery_lock():
+        return _send_agent_nudge_locked(text, session)
+
+
+def _send_agent_nudge_locked(text: str, session: str) -> bool:
+    """Submit only from an empty prompt and preserve every unrelated draft."""
     try:
         import time as _t
+        target = _pane_target(session)
+        pane = _nudge_pane(target)
+        if pane is None or _agent_busy(pane.lower()):
+            return False
+        prompt = _nudge_prompt(pane)
+        if prompt is None or prompt[0]:
+            return False
         # Escape cancels any open interactive selection menu (the agent's
         # "enter to select · esc to cancel" prompt) so we land back on the text
         # prompt; harmless at a plain prompt. Then C-u clears any half-typed
         # draft, and we type + submit the nudge.
-        target = _pane_target(session)
-        _sp.run(["tmux", "send-keys", "-t", target, "Escape"],
-                capture_output=True, timeout=4)
+        escaped = _sp.run(["tmux", "send-keys", "-t", target, "Escape"],
+                          capture_output=True, timeout=4)
+        if escaped.returncode != 0:
+            return False
         _t.sleep(0.3)
-        _sp.run(["tmux", "send-keys", "-t", target, "C-u"],
-                capture_output=True, timeout=4)
-        _sp.run(["tmux", "send-keys", "-t", target, "-l", text],
-                capture_output=True, timeout=4)
+        cleared = _sp.run(["tmux", "send-keys", "-t", target, "C-u"],
+                          capture_output=True, timeout=4)
+        if cleared.returncode != 0:
+            return False
+        written = _sp.run(["tmux", "send-keys", "-t", target, "-l", text],
+                          capture_output=True, timeout=4)
+        if written.returncode != 0:
+            return False
         _t.sleep(0.2)
         submitted = _sp.run(["tmux", "send-keys", "-t", target, "Enter"],
                             capture_output=True, timeout=4)
         if submitted.returncode != 0:
+            _clear_failed_nudge(target, text)
             return False
 
         # tmux occasionally delivers the literal text but loses the following
@@ -598,20 +698,28 @@ def _send_agent_nudge(text: str = _AGENT_NUDGE,
         # visible state after submission and retry Enter exactly once only
         # when the distinctive nudge marker is still an editable prompt.
         _t.sleep(1.0)
-        pane = _sp.run(["tmux", "capture-pane", "-t", target, "-p",
-                        "-S", "-40"], capture_output=True, timeout=4)
-        pane_low = (pane.stdout or b"").decode(
-            "utf-8", errors="ignore").lower()
-        marker = "[autonomy - no human is watching this session]"
-        if (pane.returncode == 0 and marker in pane_low
-                and not _agent_busy(pane_low)
-                and (_agent_has_draft(pane_low)
-                     or _agent_idle_prompt(pane_low))):
+        pane = _nudge_pane(target)
+        if pane is None:
+            return False
+        if _agent_busy(pane.lower()):
+            return True
+        if _owns_nudge_draft(target, pane, text):
             retried = _sp.run(["tmux", "send-keys", "-t", target, "Enter"],
                               capture_output=True, timeout=4)
             if retried.returncode != 0:
+                _clear_failed_nudge(target, text)
                 return False
-        return True
+            _t.sleep(1.0)
+            pane = _nudge_pane(target)
+            if pane is None:
+                return False
+            if _agent_busy(pane.lower()):
+                return True
+        prompt = _nudge_prompt(pane)
+        if prompt and not prompt[0]:
+            return True
+        _clear_failed_nudge(target, text)
+        return False
     except Exception:                                   # noqa: BLE001
         return False
 
@@ -707,6 +815,16 @@ def _supervise_research_agent() -> None:
             lifecycle.emit_event("supervisor_error",
                                  "frozen-turn recovery send failed",
                                  severity="warning")
+        return
+
+    # A registered event wait keeps workers running while the model is idle.
+    # Handle it before the generic idle watchdog so no periodic autonomy nudge
+    # defeats the cost saving. Dead-process recovery above remains active.
+    from . import agent_wait
+    if agent_wait.supervise(
+            alive=alive, busy=busy, idle=idle_prompt and not has_draft,
+            blocked=disable_bg or halted or paused or boot_screen,
+            send=_send_agent_nudge):
         return
 
     # First time we see the agent parked, idle_since is unset -> treat idle_age

@@ -204,3 +204,58 @@ def test_runner_skips_disabled_scripts(arui_env, make_project, make_run,
              created_at=_iso(seconds_ago=2000))
     fired = runner.run_once()
     assert all(f["script"] != "no_metric_flow" for f in fired)
+
+
+@pytest.mark.parametrize("failure", ["literal", "enter", "timeout", None])
+def test_page_delivery_preserves_wait_until_success(
+        arui_env, make_project, make_run, monkeypatch, failure):
+    from contextlib import contextmanager
+    from subprocess import CompletedProcess, TimeoutExpired
+    from backend.app import agent_wait
+    from backend.app.watchdog import runner
+    make_project()
+    make_run(status="running")
+    agent_wait.arm("Await this experiment.")
+    original_lock = agent_wait.delivery_lock
+    original_cancel = agent_wait.cancel
+    locked = False
+    commands, cancelled = [], []
+
+    @contextmanager
+    def observed_lock():
+        nonlocal locked
+        with original_lock():
+            locked = True
+            try:
+                yield
+            finally:
+                locked = False
+
+    def cancel():
+        assert locked
+        cancelled.append(True)
+        original_cancel()
+
+    def send(cmd, **kwargs):
+        assert locked
+        commands.append(cmd)
+        if failure == "timeout":
+            raise TimeoutExpired(cmd, 5)
+        failed = ((failure == "literal" and "-l" in cmd)
+                  or (failure == "enter" and cmd[-1] == "Enter"))
+        return CompletedProcess(cmd, 1 if failed else 0)
+
+    monkeypatch.setattr(agent_wait, "delivery_lock", observed_lock)
+    monkeypatch.setattr(agent_wait, "cancel", cancel)
+    monkeypatch.setattr(runner.subprocess, "run", send)
+    assert runner._page_agent("[WATCHDOG] Investigate the failed run.") is (failure is None)
+    assert all(cmd[3] == "=agent:" for cmd in commands)
+    if failure is None:
+        assert commands[-1][-1] == "Enter"
+        assert cancelled == [True]
+        assert agent_wait.status() == {}
+    else:
+        assert cancelled == []
+        assert agent_wait.status()["status"] == "waiting"
+        if failure in {"literal", "timeout"}:
+            assert len(commands) == 1

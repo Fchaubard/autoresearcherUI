@@ -2300,3 +2300,10 @@ textarea.onb-in{resize:vertical;line-height:1.5}
 .anav2-save-status{font-size:11px;color:var(--muted);overflow-wrap:anywhere}
 .anav2-save-status.error{color:var(--bad)}
 .anav2-save-retry[hidden]{display:none}
+.flint-setup { margin: 8px 0 16px; padding: 14px; border: 1px solid var(--border, #d9dce2); border-radius: 10px; min-width: 0; }
+.flint-setup p { margin: 8px 0; overflow-wrap: anywhere; }
+.flint-setup-status { font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.flint-setup progress { display: block; width: 100%; margin: 10px 0; }
+.flint-setup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.flint-setup-actions button { min-height: 44px; }
+.flint-setup[hidden], .flint-setup [hidden], .onb-field[hidden] { display: none; }

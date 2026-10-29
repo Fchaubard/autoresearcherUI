@@ -111,7 +111,7 @@ class RealAgent:
                  anthropic_key: str = "", setup_prompt: str = "",
                  session: str = "agent", kill_criteria: str = "",
                  model: str = "", effort: str = "", openai_key: str = "",
-                 gemini_key: str = ""):
+                 gemini_key: str = "", continuation: dict | None = None):
         self.workspace = os.path.abspath(workspace)
         self.project_name = project_name
         self.ingest_url = ingest_url
@@ -128,6 +128,7 @@ class RealAgent:
         self.effort = (effort or "").strip()
         self.openai_key = (openai_key or "").strip()
         self.gemini_key = (gemini_key or "").strip()
+        self.continuation = continuation
 
     @staticmethod
     def _api_key_truncation(key: str) -> str:
@@ -322,6 +323,8 @@ class RealAgent:
             env["OPENAI_API_KEY"] = self.openai_key
             # The app-owned Codex provider consumes this environment key
             # directly; no global CLI login or credential-file mutation.
+        if self.continuation:
+            env["CODEX_HOME"] = self.continuation["home"]
         if self.gemini_key:
             env["GEMINI_API_KEY"] = self.gemini_key
         if self.model.startswith("gemini-"):
@@ -335,18 +338,23 @@ class RealAgent:
             inner = " ".join(shlex.quote(c) for c in self.agent_cmd)
         else:                                    # real Claude Code — interactive
             pf = os.path.join(self.workspace, "_setup_prompt.txt")
-            with open(pf, "w") as f:
-                f.write(self.setup_prompt)
+            if not self.continuation:
+                with open(pf, "w") as f:
+                    f.write(self.setup_prompt)
             # DEFAULT claude — its normal pretty TUI. Scrollback comes from
             # turning OFF tmux's alternate-screen (below) so the full-screen TUI
             # paints into the scrollback-bearing normal buffer. See
             # author_agent.start for the full rationale.
             msg = ("Read the file _setup_prompt.txt in this directory and "
                    "carry out the research it describes. Do not stop.")
+            if self.continuation:
+                from .agent_sessions import RESUME_NOTICE
+                msg = RESUME_NOTICE
             from .agent_cli import command, prepare_environment
             env.update(prepare_environment(self.model))
             provider, inner = command(self.model or "claude-opus-5",
-                                      self.effort, msg, workspace=self.workspace)
+                                      self.effort, msg, workspace=self.workspace,
+                                      resume_session_id=(self.continuation or {}).get("session_id"))
             from .opencode_runtime import agent_environment
             env.update(agent_environment(self.model))
             from .provider_config import ENV_FIELDS

@@ -16,6 +16,9 @@ ENV_FIELDS = {
     "flint_base_url": "ARUI_FLINT_BASE_URL",
     "flint_model": "ARUI_FLINT_MODEL",
     "flint_token": "ARUI_FLINT_API_KEY",
+    "flint_mode": "ARUI_FLINT_MODE",
+    "flint_device": "ARUI_FLINT_DEVICE",
+    "flint_timeout_seconds": "ARUI_FLINT_TIMEOUT_SECONDS",
     "flint_context_tokens": "ARUI_FLINT_CONTEXT_TOKENS",
     "flint_max_output_tokens": "ARUI_FLINT_MAX_OUTPUT_TOKENS",
 }
@@ -45,7 +48,18 @@ def opencode_binary() -> str:
                  and os.access(p, os.X_OK)), "")
 
 
+def flint_managed(cfg: dict | None = None) -> bool:
+    mode = config_value("flint_mode", cfg)
+    if mode not in {"", "managed", "external"}:
+        raise ValueError("Flint mode must be managed or external")
+    # Existing installations with an explicit endpoint retain that endpoint.
+    return mode == "managed" or (not mode and not config_value("flint_base_url", cfg))
+
+
 def flint_config(cfg: dict | None = None) -> tuple[str, str, str]:
+    if flint_managed(cfg):
+        from .flint_manager import manager
+        return manager().connection()
     url = config_value("flint_base_url", cfg).rstrip("/")
     parsed = urlsplit(url)
     if (parsed.scheme not in {"http", "https"} or not parsed.hostname
@@ -57,19 +71,40 @@ def flint_config(cfg: dict | None = None) -> tuple[str, str, str]:
     return url, model, config_value("flint_token", cfg)
 
 
+def flint_timeout(cfg: dict | None = None) -> float:
+    value = config_value("flint_timeout_seconds", cfg)
+    if value:
+        try:
+            seconds = float(value)
+        except ValueError:
+            raise ValueError("Flint timeout must be a number of seconds") from None
+        if not 10 <= seconds <= 3600:
+            raise ValueError("Flint timeout must be between 10 and 3600 seconds")
+        return seconds
+    if flint_managed(cfg):
+        from .flint_manager import manager
+        if manager().status().get("device") == "cpu":
+            return 1800
+    return 240
+
+
 def flint_limits(cfg: dict | None = None) -> tuple[int, int]:
     """Client budgets must fit the local server, not the model's theoretical max."""
+    managed = flint_managed(cfg)
     try:
-        context = int(config_value("flint_context_tokens", cfg) or "16384")
+        context = 16384 if managed else int(config_value("flint_context_tokens", cfg) or "16384")
         output = int(config_value("flint_max_output_tokens", cfg) or "8192")
     except ValueError:
         raise ValueError("Flint context and output token limits must be whole numbers") from None
+    if managed:
+        output = min(output, 8192)
     if context < 1024 or output < 1 or output >= context:
         raise ValueError("Flint needs context >= 1024 tokens and an output budget smaller than its context")
     return context, output
 
 
-def requirement_error(model: str, cfg: dict | None = None, *, agent: bool = False) -> str:
+def requirement_error(model: str, cfg: dict | None = None, *, agent: bool = False,
+                      check_ready: bool = True) -> str:
     provider = provider_for(model)
     if not provider:
         return f"Unknown model provider for {model!r}"
@@ -80,6 +115,12 @@ def requirement_error(model: str, cfg: dict | None = None, *, agent: bool = Fals
         try:
             flint_config(cfg)
             flint_limits(cfg)
+            flint_timeout(cfg)
+            if check_ready and flint_managed(cfg):
+                from .flint_manager import manager
+                state = manager().status()
+                if state["status"] != "ready":
+                    return state["detail"] + " Select Flint to start automatic setup."
         except ValueError as exc:
             return str(exc)
         return ""

@@ -728,7 +728,7 @@ def spawn_age_sec() -> float:
         db.close()
 
 
-def start(proposal_id: str = "") -> dict:
+def start(proposal_id: str = "", *, continuation: dict | None = None) -> dict:
     """Spawn the Author Agent in tmux 'author'. Idempotent."""
     if _tmux_alive(SESSION):
         return {"status": "already_running"}
@@ -746,6 +746,15 @@ def start(proposal_id: str = "") -> dict:
             db.close()
     except Exception:
         return {"status": "error", "detail": "Saved model settings could not be read; author was not started."}
+    if continuation is None:
+        from .agent_sessions import recovery_conversation, ConversationUnavailable
+        try:
+            continuation = recovery_conversation("author")
+            selected = author_config.get("author_agent_model") or author_config.get("research_agent_model") or "claude-opus-5"
+            if continuation and selected != continuation.get("target_model", continuation["model"]):
+                raise ConversationUnavailable("Saved conversation recovery does not match the selected model.")
+        except ConversationUnavailable:
+            return {"status": "error", "detail": "Saved conversation recovery could not be verified; no fresh author conversation was started."}
     db = SessionLocal()
     try:
         proposal = (db.query(PaperProposal)
@@ -812,6 +821,8 @@ def start(proposal_id: str = "") -> dict:
     if _claude_key:
         os.environ["ANTHROPIC_API_KEY"] = _claude_key
     launch_env = {"IS_SANDBOX": "1", "PWD": str(folder.resolve())}
+    if continuation:
+        launch_env["CODEX_HOME"] = continuation["home"]
     if _token_value:
         launch_env["ARUI_INGEST_TOKEN"] = _token_value
     if _claude_key:
@@ -843,7 +854,8 @@ def start(proposal_id: str = "") -> dict:
         # the TUI but leave that prompt unsubmitted. The verified feeder below
         # is the single delivery path for every provider.
         provider, inner = command(_author_model or "claude-opus-5",
-                                  _author_effort, "", workspace=folder)
+                                  _author_effort, "", workspace=folder,
+                                  resume_session_id=(continuation or {}).get("session_id"))
         from .opencode_runtime import agent_environment
         launch_env.update(agent_environment(_author_model))
         # Make sure Claude uses the API key (set in env) instead of
@@ -891,7 +903,9 @@ def start(proposal_id: str = "") -> dict:
         # shows, verifies the brief was accepted, retries if it sits queued).
         # Run in a background thread so start() returns immediately.
         if not cmd_override and not os.environ.get("ARUI_DISABLE_BG"):
-            threading.Thread(target=feed_brief, daemon=True,
+            from .agent_sessions import AUTHOR_RESUME_NOTICE
+            threading.Thread(target=feed_brief,
+                             kwargs={"brief": AUTHOR_RESUME_NOTICE} if continuation else {}, daemon=True,
                              name="author-feed").start()
     except Exception as e:
         from .safe_errors import describe

@@ -338,8 +338,10 @@ def _build_context() -> dict:
     # idle GPU summary
     idle = [g for g in gpus if (g.get("util_pct", 0) or 0) < 5
             and (g.get("vram_used_mb", 0) or 0) < 600]
+    from . import agent_wait
     return {
         "now": _iso(),
+        "registered_event_wait": agent_wait.status(),
         "gpus_total": len(gpus),
         "gpus_idle": len(idle),
         "gpus_idle_indices": [g["index"] for g in idle],
@@ -393,6 +395,11 @@ INTERVENE if you see any of:
 
 DO NOT INTERVENE if everything looks healthy. It is fine to return zero
 messages — be sparing, every message interrupts the agent.
+When registered_event_wait.status is waiting and workers are healthy, the
+agent intentionally finished its turn to avoid paid polling. That is NOT a
+stall, halt or request for human input. The deterministic supervisor wakes
+it on experiment/review changes. Intervene only for a concrete new decision
+or problem; do not tell it to sleep, poll or keep generating while waiting.
 
 ESCALATION_HALT (RESEARCH_IMPROVEMENT_PLAN #6):
   If you see an `escalation_halt` Event from the strategic council in
@@ -426,7 +433,8 @@ def _call(model: str, system: str, user: str) -> str:
     # Normalize stale effort after a model switch and support Responses-only
     # models through the same exact-model dispatch used by the council.
     effort = _settings().get("pi_agent_effort") or "medium"
-    return council._call_model(model, effort, system, user)
+    with council.advisory_usage.context(role="pi", operation="pi_cycle"):
+        return council._call_model(model, effort, system, user)
 
 
 def _model_failure(model: str, detail: str, *, mode: str = "research") -> dict:
@@ -456,11 +464,25 @@ def _valid_pi_response(out) -> bool:
 def _send_to_agent(text: str, session: str = "agent") -> bool:
     """Type a line into the agent's tmux session (same as user chat).
     `session` lets paper-mode nags target the author tmux instead."""
+    from . import agent_wait
+    with agent_wait.delivery_lock():
+        return _send_to_agent_locked(text, session)
+
+
+def _send_to_agent_locked(text: str, session: str) -> bool:
     try:
-        subprocess.run(["tmux", "send-keys", "-t", session, "-l", text],
-                       capture_output=True, timeout=8)
-        subprocess.run(["tmux", "send-keys", "-t", session, "Enter"],
-                       capture_output=True, timeout=8)
+        target = "=" + session + ":"
+        written = subprocess.run(["tmux", "send-keys", "-t", target, "-l", text],
+                                 capture_output=True, timeout=8)
+        if written.returncode != 0:
+            return False
+        submitted = subprocess.run(["tmux", "send-keys", "-t", target, "Enter"],
+                                   capture_output=True, timeout=8)
+        if submitted.returncode != 0:
+            return False
+        if session == "agent":
+            from . import agent_wait
+            agent_wait.cancel()
         return True
     except Exception:
         return False

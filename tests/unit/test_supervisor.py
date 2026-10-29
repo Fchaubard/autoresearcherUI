@@ -313,57 +313,186 @@ def test_idle_nudge_decision_fires_when_parked():
         idle_age=500, nudge_age=1e9, strikes=0) == "nudge"
 
 
-def test_nudge_retries_enter_when_text_remains_in_prompt(monkeypatch):
-    """Regression: tmux delivered the nudge text but lost Enter, parking the
-    live agent indefinitely. The sender verifies and retries once."""
-    import subprocess as _sp
-    from backend.app import supervisor as sv
-    calls = []
+class NudgeTerminal:
+    """A tiny editable prompt model; capture reflects actual key effects."""
+    def __init__(self, success_after=2, marker="›", failed_key=None):
+        self.calls, self.draft, self.history = [], "", ""
+        self.enters, self.clears, self.busy = 0, 0, False
+        self.success_after, self.marker, self.failed_key = success_after, marker, failed_key
+        self.edit_after_enter, self.capture_failure, self.cursor_override = None, None, None
 
-    class Result:
-        returncode = 0
-        stdout = b""
+    def screen(self):
+        if self.busy:
+            return self.history + "Working (3s · esc to interrupt)\n"
+        return self.history + self.marker + " " + self.draft + "\nbypass permissions on\n"
 
-    def fake_run(cmd, **kwargs):
-        calls.append(cmd)
-        result = Result()
+    def __call__(self, cmd, **kwargs):
+        from subprocess import CompletedProcess
+        self.calls.append(cmd)
         if cmd[:2] == ["tmux", "capture-pane"]:
-            result.stdout = (b"\xe2\x9d\xaf [AUTONOMY - no human is watching "
-                             b"this session] continue research\n"
-                             b"bypass permissions on\n")
-        return result
+            if self.enters and self.capture_failure is not None:
+                return CompletedProcess(cmd, self.capture_failure, stdout=b"")
+            return CompletedProcess(cmd, 0, stdout=self.screen().encode())
+        if cmd[:2] == ["tmux", "display-message"]:
+            cursor = len(self.history.splitlines()) + max(1, len(self.draft.splitlines())) - 1
+            return CompletedProcess(cmd, 0, stdout=str(cursor if self.cursor_override is None else self.cursor_override).encode())
+        failed = ("-l" in cmd if self.failed_key == "-l" else cmd[-1] == self.failed_key)
+        if failed:
+            return CompletedProcess(cmd, 1, stdout=b"")
+        if "-l" in cmd:
+            self.draft = cmd[-1]
+        elif cmd[-1] == "Enter":
+            self.enters += 1
+            if self.edit_after_enter is not None:
+                self.draft = self.edit_after_enter
+            elif self.success_after is not None and self.enters >= self.success_after:
+                self.draft, self.busy = "", True
+        elif cmd[-1] == "C-c":
+            self.draft = ""
+            self.clears += 1
+        return CompletedProcess(cmd, 0, stdout=b"")
 
-    monkeypatch.setattr(_sp, "run", fake_run)
+
+@pytest.mark.parametrize("marker", ["›", "❯"])
+def test_nudge_retries_enter_when_text_remains_in_prompt(monkeypatch, marker):
+    from backend.app import supervisor as sv
+    terminal = NudgeTerminal(marker=marker)
+    monkeypatch.setattr(sv._sp, "run", terminal)
     monkeypatch.setattr("time.sleep", lambda _: None)
     assert sv._send_agent_nudge() is True
-    enters = [c for c in calls if c[:4] == ["tmux", "send-keys", "-t", "=agent:"]
-              and c[-1] == "Enter"]
-    assert len(enters) == 2
+    assert terminal.enters == 2 and terminal.clears == 0
+    assert any("-J" in cmd for cmd in terminal.calls if cmd[:2] == ["tmux", "capture-pane"])
+
+
+@pytest.mark.parametrize("failed_key", ["Escape", "C-u", "-l", "Enter"])
+def test_nudge_never_claims_delivery_after_failed_tmux_send(monkeypatch, failed_key):
+    from backend.app import supervisor as sv
+    terminal = NudgeTerminal(failed_key=failed_key)
+    monkeypatch.setattr(sv._sp, "run", terminal)
+    monkeypatch.setattr("time.sleep", lambda _: None)
+    assert sv._send_agent_nudge("[RESEARCH EVENT] r1 completed") is False
+    assert not terminal.busy
+
+
+@pytest.mark.parametrize("capture_failure", [0, 1])
+def test_nudge_unverified_delivery_is_not_success(monkeypatch, capture_failure):
+    from backend.app import supervisor as sv
+    terminal = NudgeTerminal()
+    terminal.capture_failure = capture_failure
+    monkeypatch.setattr(sv._sp, "run", terminal)
+    monkeypatch.setattr("time.sleep", lambda _: None)
+    assert sv._send_agent_nudge("[RESEARCH EVENT] r1 completed") is False
+    assert terminal.enters == 1 and terminal.clears == 0
+
+
+def test_event_nudge_retries_lost_enter_and_verifies_acceptance(monkeypatch):
+    from backend.app import supervisor as sv
+    terminal = NudgeTerminal()
+    monkeypatch.setattr(sv._sp, "run", terminal)
+    monkeypatch.setattr("time.sleep", lambda _: None)
+    assert sv._send_agent_nudge("[RESEARCH EVENT] r1 completed") is True
+    assert terminal.enters == 2
 
 
 def test_nudge_does_not_double_submit_once_agent_is_busy(monkeypatch):
-    import subprocess as _sp
     from backend.app import supervisor as sv
-    calls = []
-
-    class Result:
-        returncode = 0
-        stdout = b""
-
-    def fake_run(cmd, **kwargs):
-        calls.append(cmd)
-        result = Result()
-        if cmd[:2] == ["tmux", "capture-pane"]:
-            result.stdout = (b"[AUTONOMY - no human is watching this session]\n"
-                             b"Working (12s \xc2\xb7 esc to interrupt)\n")
-        return result
-
-    monkeypatch.setattr(_sp, "run", fake_run)
+    terminal = NudgeTerminal(success_after=1)
+    monkeypatch.setattr(sv._sp, "run", terminal)
     monkeypatch.setattr("time.sleep", lambda _: None)
     assert sv._send_agent_nudge() is True
-    enters = [c for c in calls if c[:4] == ["tmux", "send-keys", "-t", "=agent:"]
-              and c[-1] == "Enter"]
-    assert len(enters) == 1
+    assert terminal.enters == 1 and terminal.clears == 0
+
+
+@pytest.mark.parametrize("marker", ["›", "❯"])
+def test_unsent_multiline_app_draft_is_cleared_after_two_lost_enters(monkeypatch, marker):
+    from backend.app import supervisor as sv
+    terminal = NudgeTerminal(success_after=None, marker=marker)
+    monkeypatch.setattr(sv._sp, "run", terminal)
+    monkeypatch.setattr("time.sleep", lambda _: None)
+    assert not sv._send_agent_nudge("[RESEARCH EVENT] r1 completed\nKeep training intact.")
+    assert terminal.enters == 2 and terminal.clears == 1 and not terminal.draft
+    assert not sv._agent_has_draft(terminal.screen().lower())
+
+
+@pytest.mark.parametrize("edited", ["My unrelated operator instruction", "[RESEARCH EVENT] r1 completed BUT DO NOT SEND THIS"])
+def test_historical_marker_or_edited_draft_never_qualifies_for_retry_or_cleanup(monkeypatch, edited):
+    from backend.app import supervisor as sv
+    terminal = NudgeTerminal(success_after=None)
+    terminal.history = "› [RESEARCH EVENT] r1 completed\nOld response\n"
+    terminal.edit_after_enter = edited
+    monkeypatch.setattr(sv._sp, "run", terminal)
+    monkeypatch.setattr("time.sleep", lambda _: None)
+    assert not sv._send_agent_nudge("[RESEARCH EVENT] r1 completed")
+    assert terminal.enters == 1 and terminal.clears == 0 and terminal.draft == edited
+
+
+def test_nudge_preserves_draft_written_after_supervisor_idle_check(monkeypatch):
+    from backend.app import supervisor as sv
+    terminal = NudgeTerminal()
+    terminal.draft = "Operator is still editing this"
+    monkeypatch.setattr(sv._sp, "run", terminal)
+    assert not sv._send_agent_nudge("[RESEARCH EVENT] r1 completed")
+    assert not any(cmd[:2] == ["tmux", "send-keys"] for cmd in terminal.calls)
+    assert terminal.draft == "Operator is still editing this"
+
+
+def test_matching_scrollback_without_cursor_ownership_is_never_cleared(monkeypatch):
+    from backend.app import supervisor as sv
+    terminal = NudgeTerminal(success_after=None)
+    terminal.history = "Historical output\n"
+    terminal.cursor_override = 0
+    monkeypatch.setattr(sv._sp, "run", terminal)
+    monkeypatch.setattr("time.sleep", lambda _: None)
+    assert not sv._send_agent_nudge("[RESEARCH EVENT] r1 completed")
+    assert terminal.enters == 1 and terminal.clears == 0
+
+
+def test_installed_codex_clears_failed_multiline_draft_without_inference(arui_env, tmp_path, monkeypatch):
+    """Exercise real native editing while deliberately dropping both Enters."""
+    import shlex
+    import shutil
+    import subprocess
+    import time
+    if not shutil.which('codex'):
+        pytest.skip('optional installed Codex integration')
+    from backend.app.agent_cli import command
+    from backend.app import supervisor as sv
+    workspace, home = tmp_path / 'project', tmp_path / 'private-codex'
+    workspace.mkdir(); home.mkdir()
+    _, cli = command('gpt-6-astra', 'medium', workspace=workspace)
+    cli += ' -c ' + shlex.quote('model_providers.arui_openai.base_url="http://127.0.0.1:9/v1"')
+    run = subprocess.run
+    run(['tmux', 'new-session', '-d', '-s', 'nudge-probe', '-x', '100', '-y', '35',
+         '-c', str(workspace), '-e', f'CODEX_HOME={home}', '-e', 'OPENAI_API_KEY=unused-fixture-key', cli],
+        capture_output=True, check=True)
+    start = time.monotonic()
+    while time.monotonic() - start < 12:
+        pane = run(['tmux', 'capture-pane', '-p', '-t', '=nudge-probe:'], capture_output=True, text=True).stdout
+        if 'Do you trust the contents' in pane:
+            run(['tmux', 'send-keys', '-t', '=nudge-probe:', 'Enter'], capture_output=True)
+        if 'Ask Codex to do anything' in pane and time.monotonic() - start > 3:
+            break
+        time.sleep(.1)
+    else:
+        pytest.fail('private Codex prompt did not become ready')
+    enters = []
+    def lose_enter(cmd, **kwargs):
+        if cmd[:4] == ['tmux', 'send-keys', '-t', '=nudge-probe:'] and cmd[-1] == 'Enter':
+            enters.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'')
+        return run(cmd, **kwargs)
+    monkeypatch.setattr(sv._sp, 'run', lose_enter)
+    message = '[RESEARCH EVENT] synthetic result completed\nKeep all valid training running.\nInspect the saved result next.'
+    assert not sv._send_agent_nudge(message, session='nudge-probe')
+    deadline, prompt = time.monotonic() + 3, None
+    while time.monotonic() < deadline:
+        pane = sv._nudge_pane('=nudge-probe:')
+        prompt = sv._nudge_prompt(pane or '')
+        if prompt and not prompt[0]:
+            break
+        time.sleep(.1)
+    assert len(enters) == 2 and prompt and not prompt[0]
+    assert run(['tmux', 'has-session', '-t', '=nudge-probe'], capture_output=True).returncode == 0
 
 
 def test_idle_nudge_waits_within_grace():

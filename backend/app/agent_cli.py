@@ -147,7 +147,8 @@ def _binary(provider: str) -> str:
     return shlex.quote(str(binary))
 
 
-def command(model: str, effort: str = "", prompt: str = "", *, workspace: str | Path | None = None) -> tuple[str, str]:
+def command(model: str, effort: str = "", prompt: str = "", *, workspace: str | Path | None = None,
+            resume_session_id: str | None = None) -> tuple[str, str]:
     """Return ``(provider, shell_command)`` for an interactive coding CLI.
 
     Claude Code is fed after boot because of its consent screens. Codex and
@@ -157,6 +158,16 @@ def command(model: str, effort: str = "", prompt: str = "", *, workspace: str | 
     provider = provider_for(model)
     if not provider:
         raise AgentCLIUnavailable(f"unknown model provider for {model!r}")
+    if provider == "openai" and effort and effort not in efforts_for(model):
+        raise AgentCLIUnavailable(f"Reasoning effort {effort!r} is not supported by the selected model {model!r}")
+    if resume_session_id:
+        import uuid
+        if provider != "openai" or workspace is None:
+            raise AgentCLIUnavailable("Native continuation requires a verified Codex workspace session")
+        try:
+            resume_session_id = str(uuid.UUID(resume_session_id))
+        except (ValueError, TypeError, AttributeError):
+            raise AgentCLIUnavailable("A valid explicit Codex session ID is required") from None
     binary = _binary(provider)
     qmodel = shlex.quote(model)
     if provider in {"opencode", "flint"}:
@@ -181,7 +192,8 @@ def command(model: str, effort: str = "", prompt: str = "", *, workspace: str | 
         # definition fixes the vendor/endpoint and reads only the supplied key.
         endpoint = ('{name="OpenAI",base_url="https://api.openai.com/v1",'
                     'env_key="OPENAI_API_KEY",wire_api="responses",requires_openai_auth=false}')
-        cmd = (f"{binary} --dangerously-bypass-approvals-and-sandbox "
+        launch = f"{binary} resume" if resume_session_id else binary
+        cmd = (f"{launch} --dangerously-bypass-approvals-and-sandbox "
                f"--no-alt-screen -c check_for_update_on_startup=false --model {qmodel} "
                "-c 'model_provider=\"arui_openai\"' "
                f"-c {shlex.quote('model_providers.arui_openai=' + endpoint)}")
@@ -197,6 +209,8 @@ def command(model: str, effort: str = "", prompt: str = "", *, workspace: str | 
                 cmd += f" -c {shlex.quote(trust)}"
         if effort in efforts_for(model):
             cmd += f" -c model_reasoning_effort={shlex.quote(effort)}"
+        if resume_session_id:
+            cmd += f" --cd {shlex.quote(str(Path(workspace).resolve()))} {shlex.quote(resume_session_id)}"
         if prompt:
             cmd += f" {shlex.quote(prompt)}"
         return provider, cmd

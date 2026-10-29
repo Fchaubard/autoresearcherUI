@@ -38,7 +38,7 @@ def test_running_model_switch_restarts_only_changed_role_and_keeps_run(
         client, setting_setter, make_project, make_run, monkeypatch):
     from backend.app.db import SessionLocal
     from backend.app.models import Run
-    setting_setter("onboarding", {"research_agent_model": "gpt-5.6-sol"})
+    setting_setter("onboarding", {"research_agent_model": "gpt-5.6-sol", "author_agent_model": "claude-opus-5"})
     make_project()
     run = make_run(status="running")
     run_id = run.id
@@ -86,7 +86,48 @@ def test_pending_intent_survives_apply_exception(client, setting_setter, monkeyp
     monkeypatch.setattr(runtime_settings, "apply_pending", fail)
     response = client.put("/api/settings", json={"purpose": "new"}).json()
     assert response["status"] == "partial"
-    assert saved("settings.pending_agents") == {"roles": ["agent"]}
+    assert saved("settings.pending_agents")["roles"] == ["agent"]
+
+
+def test_settings_save_waits_for_pending_apply_and_preserves_new_intent(
+        arui_env, setting_setter, fake_subprocess, monkeypatch):
+    """A second save cannot be erased by a previous background apply."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from backend.app import api, runtime_settings, tmux_safe, research_processes, agent_watcher
+    setting_setter('onboarding', {'purpose': 'first'})
+    setting_setter('settings.pending_agents', {'roles': ['agent']})
+    monkeypatch.setattr(tmux_safe, 'pane_alive', lambda role: True)
+    monkeypatch.setattr(research_processes, 'active_session_workloads', lambda role: [])
+    applying, release, transaction_entered = threading.Event(), threading.Event(), threading.Event()
+    calls = []
+    def restart(*args, **kwargs):
+        calls.append(args)
+        if len(calls) == 1:
+            applying.set()
+            assert release.wait(5)
+            return True
+        return False  # The newer request must remain pending after this attempt.
+    monkeypatch.setattr(agent_watcher, '_restart_session', restart)
+    original = api._save_live_settings_locked
+    def transaction(payload):
+        transaction_entered.set()
+        return original(payload)
+    monkeypatch.setattr(api, '_save_live_settings_locked', transaction)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(runtime_settings.apply_pending)
+        assert applying.wait(5)
+        second = pool.submit(api._save_live_settings, {'purpose': 'second'})
+        try:
+            assert not transaction_entered.wait(.15), 'save entered while old apply still owns the lock'
+            assert saved()['purpose'] == 'first'
+        finally:
+            release.set()
+        assert first.result(timeout=5)['applied'] == ['agent']
+        result, _ = second.result(timeout=5)
+    assert result['saved'] and result['pending_agents'] == ['agent']
+    assert saved()['purpose'] == 'second'
+    assert saved('settings.pending_agents')['roles'] == ['agent']
 
 
 def test_refreshes_runtime_key_and_masks_new_provider_secrets(client, setting_setter, monkeypatch):

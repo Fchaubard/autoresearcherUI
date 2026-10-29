@@ -33,7 +33,7 @@ test('all new models appear in all seven roles and save while research is active
   await expect(page.locator('#setting-research_agent_effort')).toHaveValue('');
   await page.locator('#setting-purpose').fill('Edited while experiments run');
   await page.getByRole('button',{name:'Save settings',exact:true}).click();
-  await expect(page.locator('.set-status')).toContainText('experiments continue');
+  await expect(page.locator('.set-status')).toContainText('Research continued from saved project state');
   const saved = mock.requests.find(r => r.path === '/settings' && r.method === 'PUT');
   expect(saved.body.settings.research_agent_model).toBe('opencode/nemotron-3.5-lightning-free');
   expect(saved.body.settings.purpose).toBe('Edited while experiments run');
@@ -49,7 +49,7 @@ test('plain-text server error preserves settings drafts and retry succeeds', asy
     if (route.request().method() !== 'PUT') return route.fallback();
     saves++;
     return saves === 1 ? route.fulfill({status:500,contentType:'text/plain',body:'Internal Server Error'})
-      : route.fulfill({contentType:'application/json',body:JSON.stringify({status:'ok',saved:true,pending_agents:['agent']})});
+      : route.fulfill({contentType:'application/json',body:JSON.stringify({status:'ok',saved:true,pending_agents:['agent'],pending_reasons:{agent:'research_paused'}})});
   });
   await open(page); await page.locator('#setting-purpose').fill('Keep my unsaved research notes');
   await page.getByRole('button',{name:'Save settings',exact:true}).click();
@@ -74,7 +74,7 @@ test('partial apply has an actionable retry without losing edits', async ({page}
   await expect(page.locator('.set-status')).toContainText('could not restart');
   await expect(page.locator('#setting-purpose')).toHaveValue('Preserved after partial apply');
   await page.getByRole('button',{name:'Retry applying settings',exact:true}).click();
-  await expect(page.locator('.set-status')).toContainText('experiments continue');
+  await expect(page.locator('.set-status')).toContainText('Research continued from saved project state');
   expect(saves).toBe(2); expect(mock.errors).toEqual([]);
 });
 

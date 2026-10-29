@@ -246,7 +246,7 @@ def test_auth_zombie_rate_limited(watcher_env, monkeypatch):
 
 
 def test_missing_only_restart_preserves_concurrently_recovered_session(
-        watcher_env, monkeypatch):
+        arui_env, watcher_env, monkeypatch):
     """Supervisor and watcher can observe the same outage. After one wins the
     restart lock, the loser must not kill the fresh replacement."""
     import subprocess as _sp

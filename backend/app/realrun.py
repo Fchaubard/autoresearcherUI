@@ -17,6 +17,7 @@ from .agent import RealAgent
 from .config import DATA_DIR, PORT, ROOT, workspace_dir
 from .db import SessionLocal
 from .models import Event, Project, Setting
+from .agent_wait import POLICY as _COST_POLICY
 
 _agent: RealAgent | None = None
 _EXPECTED_KEY = "research_agent_expected"
@@ -216,10 +217,11 @@ three pass.
   recorded, request the council review:
         curl -sS -X POST $ARUI_INGEST_URL/api/council/bless \
             -H "Authorization: Bearer $ARUI_INGEST_TOKEN"
-    Poll every ~10 seconds until status is decided:
+    Inspect status once, then register /api/agent/wait and finish your turn
+    while the review is pending. The server wakes you when it changes:
         curl -sS $ARUI_INGEST_URL/api/council/bless/status
        Possible values:
-         - "pending"      → review in flight; keep polling
+         - "pending"      → review in flight; register an event wait
          - "approved"     → training runs are now unlocked
          - "rejected"     → STOP; read the `blockers` list, fix every
                             blocker in the code. After any non-trivial
@@ -725,14 +727,16 @@ e.g. a `1 hour` policy means a 10-hour training schedule will be killed
 early, so prefer short, decisive experiments. Read `$ARUI_KILL_CRITERIA`
 when designing each new run so you respect the researcher's budget.
 {scope_brief}
-{instructions}"""
+{instructions}
+
+{_COST_POLICY}"""
 
 
 def _resume_prompt(cfg: dict) -> str:
     metric = cfg.get('metric', 'val_loss')
     return f"""You are RESUMING an autonomous ML research project after a
-server move. The full prior state — code, logs, checkpoints, databases — has
-been restored into this directory.
+settings change, service restart or server move. Existing code, logs,
+checkpoints and database history remain in this workspace.
 
 # Purpose
 {cfg.get('purpose', '')}
@@ -747,16 +751,20 @@ wording in dashboard labels.
 
 # You are RESUMING — do NOT restart from scratch
 First reconstruct where the research stands:
-  - read program.md, ideas.md and agent.log in this directory;
-  - curl -s $ARUI_INGEST_URL/api/runs — every completed run, its status
-    (kept/crashed) and headline_metric;
-  - curl -s $ARUI_INGEST_URL/api/project — baseline_metric and best_metric.
+  - read ARUI_HANDOFF.md and AGENT_STATE.md if present, and the current program.md;
+  - GET $ARUI_INGEST_URL/api/agent/context with Authorization: Bearer
+    $ARUI_INGEST_TOKEN for active runs and recent outcomes;
+  - retrieve only relevant sections of ideas.md, lessons.md and log tails
+    when the summary leaves an unresolved question. Do not ingest the entire
+    transcript or all historical runs.
 Then write a short status summary: what is done, the best result so far, which
-runs were interrupted by the move, and what to try next.
+runs are still active or were interrupted, and what to try next.
 
-Runs that were mid-flight when the server was archived are now marked
-"crashed". If such a run has a usable checkpoint in ckpts/, continue it as a
-NEW run rather than editing the old one.
+Trust the current run ledger and process state. A settings change does not
+stop experiments: preserve workers that are still running, and never launch
+duplicate copies. If a run was actually interrupted and is recorded as
+crashed, a usable checkpoint can be continued as a NEW run rather than
+rewriting the old record.
 
 # Then continue the research
 Work the ideas.md queue and keep going. Every experiment logs via the arui SDK
@@ -765,7 +773,10 @@ its own tmux session named after the run id. If this node has GPUs, SATURATE
 them — run `nvidia-smi` and keep every idle GPU running an experiment at all
 times; the instant one frees up, launch the next idea on it. On a CPU-only node
 (see COMPUTE CONTEXT) skip the GPU-saturation rule and make CPU-sized progress
-instead. Do not stop — keep researching.
+instead. Keep researching; use registered event waits while independent
+experiments run and no useful preparation remains.
+
+{_COST_POLICY}
 """
 
 
@@ -777,9 +788,16 @@ def claude_binary_present() -> bool:
     return shutil.which("claude") is not None
 
 
-def start_real(cfg: dict, resume: bool = False) -> RealAgent:
+def start_real(cfg: dict, resume: bool = False, *, continuation: dict | None = None) -> RealAgent:
     """Create (or, on resume, reuse) the project and launch the agent."""
     global _agent
+    if continuation is None:
+        from .agent_sessions import recovery_conversation, ConversationUnavailable
+        continuation = recovery_conversation("agent")
+        if continuation:
+            if cfg.get("research_agent_model") != continuation.get("target_model", continuation["model"]):
+                raise ConversationUnavailable("Saved conversation recovery does not match the selected model.")
+            resume = True
     # Once this function is invoked, onboarding/scoping has committed to an
     # autonomous run. Persist the contract *before* any binary/auth/tmux work
     # so even an initial launch exception is recoverable by the supervisor.
@@ -910,8 +928,8 @@ def start_real(cfg: dict, resume: bool = False) -> RealAgent:
                          created_at=_iso()))
     db.add(Event(id="ev-" + os.urandom(4).hex(), type="run_started",
                  severity="info", actor="system",
-                 message=(f"Resumed the research agent for '{name}' after a "
-                          f"server move." if resume else
+                 message=(f"Resumed the research agent for '{name}' in its "
+                          f"existing workspace." if resume else
                           f"Launched the autonomous research agent for "
                           f"'{name}'."), created_at=_iso()))
     db.commit()
@@ -933,8 +951,10 @@ def start_real(cfg: dict, resume: bool = False) -> RealAgent:
         model=cfg.get("research_agent_model", "claude-opus-5"),
         effort=cfg.get("research_agent_effort", "high"),
         openai_key=cfg.get("openai_token", ""),
-        gemini_key=cfg.get("gemini_token", ""))
+        gemini_key=cfg.get("gemini_token", ""), continuation=continuation)
     _agent.start()
+    from . import agent_wait
+    agent_wait.cancel()
     set_expected(True, reason="research agent launched")
     # Kick off the council-led watchdog review in the background. The
     # review is idempotent (skips if already done), so calling it on

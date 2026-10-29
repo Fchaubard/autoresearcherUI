@@ -82,7 +82,7 @@ def test_local_flint_coding_and_advisors(arui_env, monkeypatch):
     assert provider["models"]["local"]["modelID"] == "RecursiveSI/flint"
     assert provider["models"]["local"]["capabilities"]["tools"] is True
     seen = []
-    def post(url, body, headers):
+    def post(url, body, headers, **kwargs):
         seen.append((url, body, headers))
         return {"choices": [{"message": {"content": '{"ok":true}'}}]}
     monkeypatch.setattr(council, "_post_json_retry", post)
@@ -171,12 +171,14 @@ def test_unavailable_model_is_reported_without_silent_substitution(arui_env):
 def test_local_missing_endpoint_does_not_report_missing_cloud_key(arui_env, monkeypatch):
     from backend.app import pi
     monkeypatch.delenv("ARUI_FLINT_BASE_URL", raising=False)
+    monkeypatch.setenv("ARUI_FLINT_MODE", "external")
     with pytest.raises(RuntimeError, match="server URL"):
         pi._call("flint/local", "system", "user")
 
 
 def test_flint_context_limits_fit_small_servers_and_allow_explicit_override(arui_env, monkeypatch):
     from backend.app.provider_config import flint_limits
+    monkeypatch.setenv("ARUI_FLINT_MODE", "external")
     monkeypatch.delenv("ARUI_FLINT_CONTEXT_TOKENS", raising=False)
     monkeypatch.delenv("ARUI_FLINT_MAX_OUTPUT_TOKENS", raising=False)
     assert flint_limits() == (16384, 8192)

@@ -1015,3 +1015,23 @@ def test_sessions_create_catastrophic_failure_returns_json_not_html(
     body = r.json()
     assert body["ok"] is False
     assert "tmux" in body["error"] or "failed" in body["error"]
+
+
+@pytest.mark.parametrize('state,expected', [
+    ({'status':'busy','error':'A different review is running'},409),
+    ({'status':'error','error':'Worker could not start'},503),
+    ({'status':'pending','coalesced':True},200),
+])
+def test_completion_review_rejection_and_coalescing_do_not_emit_duplicate_declaration(client, monkeypatch, state, expected):
+    from backend.app import council
+    from backend.app.db import SessionLocal
+    from backend.app.models import Event
+    monkeypatch.setattr(council, 'review_completion_async', lambda **_: state)
+    response = client.post('/api/research/conclude', json={
+        'summary':'A bounded research result', 'answer_to_purpose':'YES_PARTIAL',
+        'evidence':['r1'], 'recommendation':'NEED_MORE_DATA',
+    })
+    assert response.status_code == expected
+    assert response.json()['ok'] is (expected == 200)
+    with SessionLocal() as db:
+        assert db.query(Event).filter(Event.type == 'research_concluded').count() == 0

@@ -227,7 +227,8 @@ _BROKEN_RUNTIME_MARKERS = (
 
 
 def _restart_session(session: str, resume: bool = False,
-                     only_if_missing: bool = False) -> bool:
+                     only_if_missing: bool = False,
+                     continuation: dict | None = None) -> bool:
     """Kill+respawn the named agent session via its restart endpoint.
     Returns True on success."""
     try:
@@ -237,16 +238,48 @@ def _restart_session(session: str, resume: bool = False,
                 alive = _sp.run(["tmux", "has-session", "-t", session],
                                 capture_output=True, timeout=4)
                 if alive.returncode == 0:
-                    return True
+                    from .agent_sessions import resume_intent, confirm_resume
+                    from .tmux_safe import pane_alive
+                    if not resume_intent(session) or confirm_resume(session):
+                        return True
+                    if pane_alive(session):
+                        foreground = _sp.run(['tmux', 'display-message', '-p', '-t', '=' + session + ':',
+                                              '#{pane_current_command}'], capture_output=True, text=True, timeout=4)
+                        if foreground.returncode or foreground.stdout.strip() not in _SHELL_COMMANDS:
+                            # A replacement is still starting. Do not kill it.
+                            return True
             from . import notify, research_processes
             if (notify.research_paused() or notify.research_halted()[0]
                     or research_processes.active_session_workloads(session)):
                 return False
+            from .agent_sessions import recovery_conversation, remember_resume, confirm_resume
+            if continuation is None or continuation.get('_recovery'):
+                continuation = recovery_conversation(session)
+            if continuation is not None:
+                if not continuation.get('_recovery'):
+                    from .agent_sessions import revalidate
+                    revalidate(session, continuation)
+                # If spawning fails, every automatic retry must reuse this
+                # exact conversation instead of silently starting fresh.
+                remember_resume(session, continuation)
+                resume = True
             if session == "author":
                 from . import author_agent
+                if continuation:
+                    from .db import SessionLocal
+                    from .models import Setting
+                    with SessionLocal() as db:
+                        row = db.query(Setting).filter_by(key="onboarding").first()
+                        cfg = row.value if row and isinstance(row.value, dict) else {}
+                    selected = cfg.get("author_agent_model") or cfg.get("research_agent_model") or "claude-opus-5"
+                    if selected != continuation.get("target_model", continuation["model"]):
+                        return False
                 _sp.run(["tmux", "kill-session", "-t", "author"],
                         capture_output=True, timeout=5)
-                result = author_agent.start()
+                result = (author_agent.start(continuation=continuation)
+                          if continuation else author_agent.start())
+                if continuation:
+                    confirm_resume(session)
                 return isinstance(result, dict) and result.get("status") in {"started", "already_running"}
             elif session == "agent":
                 from . import realrun
@@ -264,8 +297,15 @@ def _restart_session(session: str, resume: bool = False,
                                       cfg, agent=True)
                         and not os.environ.get("ARUI_CLAUDE_BIN")):
                     return False
+                if continuation and cfg.get("research_agent_model") != continuation.get("target_model", continuation["model"]):
+                    return False
                 _sp.run(["tmux", "kill-session", "-t", "agent"],
                         capture_output=True, timeout=5)
+                if continuation:
+                    started = realrun.start_real(cfg, resume=resume,
+                                                 continuation=continuation) is not None
+                    confirm_resume(session)
+                    return started
                 return realrun.start_real(cfg, resume=resume) is not None
     except Exception as e:                              # noqa: BLE001
         from .safe_errors import describe
@@ -445,6 +485,29 @@ def _check_pending_settings() -> dict:
         return {"applied": [], "pending": [], "warnings": ["Saved settings could not be applied yet."]}
 
 
+def _check_resume_recovery(session: str) -> None:
+    """A failed native replacement must never fall through to a fresh CLI."""
+    from .agent_sessions import resume_intent, confirm_resume
+    from .tmux_safe import pane_alive
+    if not resume_intent(session) or confirm_resume(session):
+        return
+    if pane_alive(session):
+        import subprocess as _sp
+        result = _sp.run(['tmux', 'display-message', '-p', '-t', '=' + session + ':',
+                          '#{pane_current_command}'], capture_output=True, text=True, timeout=4)
+        if result.returncode or result.stdout.strip() not in _SHELL_COMMANDS:
+            return
+    now = time.time()
+    if now - _last_restart.get(session, 0.0) < _RESTART_COOLDOWN_S:
+        return
+    _last_restart[session] = now
+    if _restart_session(session, resume=True, only_if_missing=True):
+        _emit('conversation_recovered', 'info', f'Recovered {session} using its saved conversation.')
+    else:
+        _emit('conversation_recovery_pending', 'warning',
+              f'The saved {session} conversation remains pending; no fresh conversation was substituted.')
+
+
 def start(sessions: Iterable[str] = ("agent", "author")) -> None:
     """Spawn the background watcher. Idempotent; safe to call from
     main.py lifespan. Sessions default to the two agent tmux names."""
@@ -461,6 +524,7 @@ def start(sessions: Iterable[str] = ("agent", "author")) -> None:
             try:
                 _check_pending_settings()
                 for s in sess_list:
+                    _check_resume_recovery(s)
                     _scan_session(s)
                     _check_boot_prompt(s)
                     _check_dead_repl(s)

@@ -111,18 +111,19 @@ def _validate(role: str, raw: dict, parsed: dict) -> list[str]:
 
 
 def probe_role(model: str, role: str, *, timeout: int = 90,
-               max_output_tokens: int = 4096) -> dict:
+               max_output_tokens: int = 4096, compact_fixture: bool = False) -> dict:
     """One role cell. Call in a fresh process; backend imports bind DB paths."""
     started = time.monotonic()
     result = {"model": model, "role": role,
               "tested_at": dt.datetime.now(dt.timezone.utc).isoformat(),
               "timeout_seconds": timeout, "max_output_tokens": max_output_tokens,
+              "fixture_style": "compact" if compact_fixture else "substantive",
               "inference": "real", "fallback_allowed": False}
     with tempfile.TemporaryDirectory(prefix="arui-advisor-") as temp:
         base = Path(temp)
         os.environ.update(ARUI_DATA_DIR=str(base / "data"),
                           ARUI_WORKSPACE_DIR=str(base / "workspace"),
-                          ARUI_DISABLE_BG="1", ARUI_TELEMETRY_DISABLED="1",
+                          ARUI_DISABLE_BG="1", ARUI_TELEMETRY_DISABLED="1", ARUI_VERIFICATION="1",
                           TMUX="", TMUX_TMPDIR=str(base / "tmux"), PWD=str(base))
         (base / "tmux").mkdir(mode=0o700)
         # Imports happen only AFTER isolation. This function does not invoke
@@ -153,7 +154,7 @@ def probe_role(model: str, role: str, *, timeout: int = 90,
         original_timeout, original_retry = council._TIMEOUT, council._RETRY_DELAYS
         council._TIMEOUT, council._RETRY_DELAYS = timeout, ()
 
-        def observed_post(url, body, headers):
+        def observed_post(url, body, headers, **request_options):
             body = json.loads(json.dumps(body))
             endpoint = urlsplit(url).path
             request_model = body.get("model") or endpoint.split("/models/")[-1].split(":")[0]
@@ -168,7 +169,9 @@ def probe_role(model: str, role: str, *, timeout: int = 90,
                 body["max_tokens"] = min(body.get("max_tokens", max_output_tokens), max_output_tokens)
             requests.append(entry)
             try:
-                data = original_post(url, body, headers)
+                if "timeout" in request_options:
+                    request_options["timeout"] = min(request_options["timeout"], timeout)
+                data = original_post(url, body, headers, **request_options)
                 entry["http_status"] = 200
                 if isinstance(data.get("model"), str):
                     entry["response_model"] = data["model"]
@@ -179,12 +182,20 @@ def probe_role(model: str, role: str, *, timeout: int = 90,
                 entry.update(_error_metadata(exc))
                 raise
 
+        def fixture_user(user):
+            if not compact_fixture:
+                return user
+            return user + ("\n\nThis is a bounded protocol-verification fixture. Use the smallest valid response "
+                           "consistent with the supplied evidence and the required schema. Preserve every required "
+                           "field and learning marker. Keep each explanation to one short sentence, use empty "
+                           "optional arrays, and propose at most one idea. Do not expand the research problem.")
+
         def observed_call(chosen, effort, system, user):
             dispatches.append(chosen)
             if chosen != model:
                 raise RuntimeError("Forbidden model fallback detected")
             try:
-                answer = original_call(chosen, effort, system, user)
+                answer = original_call(chosen, effort, system, fixture_user(user))
                 outputs.append(answer)
                 return answer
             except Exception as exc:
@@ -197,7 +208,7 @@ def probe_role(model: str, role: str, *, timeout: int = 90,
             if chosen != model:
                 raise RuntimeError("Forbidden model fallback detected")
             try:
-                answer = original_text_call(chosen, system, user)
+                answer = original_text_call(chosen, system, fixture_user(user))
                 outputs.append(answer)
                 return answer
             except Exception as exc:
@@ -300,10 +311,12 @@ def _kill_worker_tree(proc):
             pass
 
 
-def _subprocess_cell(model, role, timeout, max_output_tokens):
+def _subprocess_cell(model, role, timeout, max_output_tokens, compact_fixture=False):
     started = time.monotonic()
     command = [sys.executable, str(Path(__file__).resolve()), "--worker", "--model", model,
                "--role", role, "--timeout", str(timeout), "--max-output-tokens", str(max_output_tokens)]
+    if compact_fixture:
+        command.append("--compact-fixture")
     proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                             start_new_session=True)
     try:
@@ -328,12 +341,14 @@ def main():
     parser.add_argument("--timeout", type=int, default=90)
     parser.add_argument("--max-output-tokens", type=int, default=4096)
     parser.add_argument("--concurrency", type=int, choices=(1, 2), default=2)
+    parser.add_argument("--compact-fixture", action="store_true",
+                        help="Request minimal synthetic answers while preserving production role system prompts")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--resume", action="store_true", help="Keep completed cells in the output file")
     args = parser.parse_args()
     if args.worker:
         result = probe_role(args.model[0], args.role[0], timeout=args.timeout,
-                            max_output_tokens=args.max_output_tokens)
+                            max_output_tokens=args.max_output_tokens, compact_fixture=args.compact_fixture)
         print(json.dumps(result), flush=True)
         return 0
     if args.credentials_db:
@@ -346,7 +361,7 @@ def main():
     results = json.loads(target.read_text()).get("results", []) if args.resume and target.exists() else []
     done = {(r["model"], r["role"]) for r in results}
     with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
-        cells = [pool.submit(_subprocess_cell, model, role, args.timeout, args.max_output_tokens)
+        cells = [pool.submit(_subprocess_cell, model, role, args.timeout, args.max_output_tokens, args.compact_fixture)
                  for model in selected for role in roles if (model, role) not in done]
         for cell in as_completed(cells):
             result = cell.result()

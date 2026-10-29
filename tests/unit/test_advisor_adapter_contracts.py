@@ -216,7 +216,7 @@ def test_explicit_both_reviewers_disabled_is_visible_optout(arui_env, setting_se
     assert council._bless_state_get()["reason"] == "reviewers_explicitly_disabled"
     entered = []
     monkeypatch.setattr(council, "_auto_enter_paper_after_approval", lambda *args: entered.append(args))
-    council._completion_review_worker_inner([], "synthetic", "synthetic", "WRITE_PAPER")
+    council._completion_review_worker([], "synthetic", "synthetic", "WRITE_PAPER")
     result = council._conclusion_state_get()
     assert result["status"] == "skipped"
     assert result["council_verdict"]["verdict"] == "SKIPPED"
@@ -229,7 +229,7 @@ def test_completion_missing_reviewer_never_auto_enters_paper(arui_env, monkeypat
     monkeypatch.setattr(council, "_call_reviewer", lambda slot, *args: {"verdict": "APPROVED"} if slot == "gemini" else None)
     entered = []
     monkeypatch.setattr(council, "_auto_enter_paper_after_approval", lambda *args: entered.append(args))
-    council._completion_review_worker_inner([], "synthetic", "synthetic", "WRITE_PAPER")
+    council._completion_review_worker([], "synthetic", "synthetic", "WRITE_PAPER")
     result = council._conclusion_state_get()
     assert result["status"] == "error" and result["incomplete"] is True
     assert result["council_verdict"]["missing_reviewers"] == ["openai"]
@@ -256,14 +256,16 @@ def test_flint_advisor_uses_configured_local_completion_budget(arui_env, monkeyp
     monkeypatch.setenv("ARUI_FLINT_BASE_URL", "http://127.0.0.1:30000/v1")
     monkeypatch.setenv("ARUI_FLINT_MODEL", "flint-test")
     monkeypatch.setenv("ARUI_FLINT_MAX_OUTPUT_TOKENS", "6000")
+    monkeypatch.setenv("ARUI_FLINT_TIMEOUT_SECONDS", "1800")
     calls = []
-    def post(url, body, headers):
-        calls.append((url, body))
+    def post(url, body, headers, **kwargs):
+        calls.append((url, body, kwargs))
         return {"choices": [{"message": {"content": '{"ok":true}'}}]}
     monkeypatch.setattr(council, "_post_json_retry", post)
     assert council._call_model("flint/local", "", "Return JSON.", "Check the fixture.") == '{"ok":true}'
     assert calls[0][1]["model"] == "flint-test"
     assert calls[0][1]["max_tokens"] == 6000
+    assert calls[0][2] == {"timeout": 1800}
 
 
 def test_opencode_advisor_inherits_bounded_request_timeout(arui_env, monkeypatch):
@@ -279,7 +281,7 @@ def test_opencode_advisor_inherits_bounded_request_timeout(arui_env, monkeypatch
 def test_flint_exhausted_reasoning_budget_is_actionable_error(arui_env, monkeypatch, content):
     from backend.app import council
     monkeypatch.setenv("ARUI_FLINT_BASE_URL", "http://127.0.0.1:30000/v1")
-    monkeypatch.setattr(council, "_post_json_retry", lambda *args: {"choices": [
+    monkeypatch.setattr(council, "_post_json_retry", lambda *args, **kwargs: {"choices": [
         {"message": {"content": content, "reasoning_content": "private reasoning"}, "finish_reason": "length"}]})
     with pytest.raises(RuntimeError, match="output budget"):
         council._call_additional_model("flint/local", "system", "user")

@@ -33,6 +33,8 @@ from .models import (ChatMessage, Event, Gpu, Idea, JournalEntry,
                      PaperVersion, Project, Run, Setting)
 
 router = APIRouter(prefix="/api")
+from .flint_routes import router as _flint_router
+router.include_router(_flint_router)
 _rng = random.Random()
 _RUNTIME_TOKEN_ENV: set[str] = set()
 
@@ -1783,6 +1785,17 @@ async def research_conclude(request: Request):
              ("recommendation must be WRITE_PAPER|"
               "NEED_ORTHOGONAL_DIRECTION|NEED_MORE_DATA")},
             status_code=400)
+    state = _c.review_completion_async(
+        evidence_run_ids=[str(x) for x in evidence],
+        summary=summary,
+        answer_to_purpose=answer,
+        recommendation=recommendation)
+    if state.get("status") in {"busy", "error"}:
+        return JSONResponse({"ok": False, "conclusion": state,
+                             "error": state.get("error") or "Completion review could not start."},
+                            status_code=409 if state["status"] == "busy" else 503)
+    if state.get("coalesced"):
+        return {"ok": True, "conclusion": state}
     # Emit Event so it shows up in the Summary feed live.
     db = SessionLocal()
     try:
@@ -1796,11 +1809,6 @@ async def research_conclude(request: Request):
         db.commit()
     finally:
         db.close()
-    state = _c.review_completion_async(
-        evidence_run_ids=[str(x) for x in evidence],
-        summary=summary,
-        answer_to_purpose=answer,
-        recommendation=recommendation)
     try:
         bus.publish("events", "research_health", {})
     except Exception:
@@ -2103,6 +2111,33 @@ async def council_review_now(request: Request):
     return out or {"status": "no_review"}
 
 
+@router.get("/agent/context")
+def agent_context():
+    from . import agent_wait
+    return agent_wait.context()
+
+
+@router.get("/agent/wait")
+def agent_wait_status():
+    from . import agent_wait
+    return agent_wait.status()
+
+
+@router.post("/agent/wait")
+async def agent_wait_arm(request: Request):
+    from . import agent_wait
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError("JSON object required")
+        summary = body.get("summary", "")
+        if not isinstance(summary, str):
+            raise ValueError("summary must be text")
+        return agent_wait.arm(summary, int(body.get("seconds", 900)))
+    except (ValueError, TypeError) as exc:
+        return JSONResponse({"status": "error", "detail": str(exc)}, status_code=409)
+
+
 @router.post("/agent/send")
 async def agent_send(request: Request):
     """Type a message into the agent's Claude Code tmux session."""
@@ -2112,10 +2147,9 @@ async def agent_send(request: Request):
         return {"ok": False, "error": "empty"}
     if not _tmux_alive("agent"):
         return {"ok": False, "error": "no agent session is running"}
-    subprocess.run(["tmux", "send-keys", "-t", "agent", "-l", text],
-                   capture_output=True)
-    subprocess.run(["tmux", "send-keys", "-t", "agent", "Enter"],
-                   capture_output=True)
+    delivered = await asyncio.to_thread(_deliver_agent_message, text)
+    if not delivered["ok"]:
+        return delivered
     db = SessionLocal()
     msg = ChatMessage(id=f"cm-{_rng.randrange(16**8):08x}", role="researcher",
                       content=text, created_at=_iso())
@@ -2124,6 +2158,30 @@ async def agent_send(request: Request):
     payload = msg.dict()
     db.close()
     bus.publish("chat", "chat", payload)
+    return {"ok": True}
+
+
+def _deliver_agent_message(text: str) -> dict:
+    from . import agent_wait
+    with agent_wait.delivery_lock():
+        return _deliver_agent_message_locked(text)
+
+
+def _deliver_agent_message_locked(text: str) -> dict:
+    from . import agent_wait
+    try:
+        target = "=agent:"
+        written = subprocess.run(["tmux", "send-keys", "-t", target, "-l", text],
+                                 capture_output=True, timeout=4)
+        if written.returncode != 0:
+            return {"ok": False, "error": "The agent message could not be delivered. Retry."}
+        submitted = subprocess.run(["tmux", "send-keys", "-t", target, "Enter"],
+                                   capture_output=True, timeout=4)
+        if submitted.returncode != 0:
+            return {"ok": False, "error": "The agent message could not be submitted. Check the terminal before retrying."}
+    except (OSError, subprocess.TimeoutExpired):
+        return {"ok": False, "error": "The agent message could not be submitted. Check the terminal before retrying."}
+    agent_wait.cancel()  # Clear the wait only after successful delivery.
     return {"ok": True}
 
 
@@ -2199,21 +2257,25 @@ async def agent_keys(request: Request):
         "\x1b[5~": "PPage", "\x1b[6~": "NPage",
     }
     if data in SPECIALS:
-        subprocess.run(["tmux", "send-keys", "-t", sess, SPECIALS[data]],
-                       capture_output=True)
-        return {"ok": True, "kind": "special"}
-    # Ctrl-A..Ctrl-Z (0x01..0x1A) → C-a..C-z
-    if len(data) == 1 and 1 <= ord(data) <= 26:
-        sym = "C-" + chr(ord(data) + ord('a') - 1)
-        subprocess.run(["tmux", "send-keys", "-t", sess, sym],
-                       capture_output=True)
-        return {"ok": True, "kind": "ctrl"}
-    # Literal multi-char paste: send the whole buffer with -l so tmux
-    # does NOT interpret it as keysym names (e.g., "Enter" inside the
-    # paste would otherwise fire an Enter).
-    subprocess.run(["tmux", "send-keys", "-t", sess, "-l", data],
-                   capture_output=True)
-    return {"ok": True, "kind": "literal"}
+        keys, kind = [SPECIALS[data]], "special"
+    elif len(data) == 1 and 1 <= ord(data) <= 26:
+        keys, kind = ["C-" + chr(ord(data) + ord('a') - 1)], "ctrl"
+    else:
+        keys, kind = ["-l", data], "literal"
+    def deliver():
+        from . import agent_wait
+        with agent_wait.delivery_lock():
+            try:
+                result = subprocess.run(["tmux", "send-keys", "-t", "=" + sess + ":", *keys],
+                                        capture_output=True, timeout=4)
+                if result.returncode != 0:
+                    return {"ok": False, "error": "Terminal input could not be delivered."}
+            except (OSError, subprocess.TimeoutExpired):
+                return {"ok": False, "error": "Terminal input could not be delivered."}
+            if sess == "agent" and keys == ["Enter"]:
+                agent_wait.cancel()
+            return {"ok": True, "kind": kind}
+    return await asyncio.to_thread(deliver)
 
 
 @router.post("/agent/paste_oauth")
@@ -2474,6 +2536,13 @@ async def put_settings(request: Request):
 
 
 def _save_live_settings(payload: dict) -> tuple[dict, str]:
+    """Serialize saves and deferred application so newer intent cannot be lost."""
+    from . import runtime_settings
+    with runtime_settings._LOCK:
+        return _save_live_settings_locked(payload)
+
+
+def _save_live_settings_locked(payload: dict) -> tuple[dict, str]:
     """Commit form and watchdog edits together before applying agent changes."""
     from sqlalchemy import text
     from . import runtime_settings
@@ -2558,6 +2627,8 @@ def _save_live_settings(payload: dict) -> tuple[dict, str]:
         from .provider_config import ENV_FIELDS
         explicit_credentials = {field for field in ENV_FIELDS if cur.get(field)}
         _apply_tokens_to_env(force_fields=changed | explicit_credentials)
+        from .flint_manager import start_if_selected
+        start_if_selected()
     except Exception as e:                              # noqa: BLE001
         warnings.append("Settings saved, but provider configuration could not be applied. Retry Save.")
     try:
@@ -2569,6 +2640,7 @@ def _save_live_settings(payload: dict) -> tuple[dict, str]:
     return ({"status": "partial" if warnings else "ok", "saved": True,
              "applied_agents": applied["applied"], "pending_agents": applied["pending"],
              "pending_reasons": applied.get("pending_reasons", {}),
+             "context_preservation": applied.get("context_preservation", {}),
              "warnings": warnings}, str(cur.get("passcode") or "") if "passcode" in changed else "")
 
 

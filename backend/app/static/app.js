@@ -4120,9 +4120,11 @@ const OB_FIELDS = [
   ['gemini_token', 'Gemini token (optional)', 'password', ''],
   ['openai_token', 'OpenAI token (optional)', 'password', ''],
   ['opencode_token', 'OpenCode key (optional for free models)', 'password', ''],
-  ['flint_base_url', 'Local Flint server URL', 'text', 'http://127.0.0.1:8080/v1'],
-  ['flint_model', 'Flint served model name', 'text', 'flint'],
-  ['flint_token', 'Flint server token (if required)', 'password', ''],
+  ['flint_mode', 'Local Flint setup', 'select', 'managed|external'],
+  ['flint_device', 'Flint hardware', 'select', 'auto|cpu'],
+  ['flint_base_url', 'External Flint server URL', 'text', 'http://127.0.0.1:8080/v1'],
+  ['flint_model', 'External server model name', 'text', 'flint'],
+  ['flint_token', 'External server token (if required)', 'password', ''],
   // Which model runs the SCOPING phase (the pre-research literature review +
   // plan critique + the back-and-forth chat). Gemini is the default — it's
   // fast, which matters because the plan re-synthesizes after every message.
@@ -4261,6 +4263,7 @@ const OB_FIELDS = [
    {form, inp} where inp is a map of field-key -> input element. Pre-fills
    from /api/onboarding/defaults and (optionally) overrides from `initial`. */
 function buildSettingsForm({ initial = {}, hideFields = [] } = {}) {
+  initial = { ...initial, flint_mode: initial.flint_mode || (initial.flint_base_url ? 'external' : 'managed') };
   const hide = new Set(hideFields);
   const form = el('div', 'onb-card');
   const inp = {};
@@ -4346,6 +4349,7 @@ function buildSettingsForm({ initial = {}, hideFields = [] } = {}) {
       inp[k].value = v;
     }
   });
+  attachManagedFlint(form, inp);
   // Replace fallback lists with the server's canonical model registry. Keep
   // the selected value (including custom/legacy IDs) when rebuilding.
   api('/models').then(cat => {
@@ -4393,6 +4397,69 @@ function buildSettingsForm({ initial = {}, hideFields = [] } = {}) {
     });
   }).catch(() => {});
   return { form, inp };
+}
+
+const FLINT_ROLE_FIELDS = ['research_agent_model', 'author_agent_model', 'scoping_model',
+  'council_gemini_model', 'council_openai_model', 'council_claude_model', 'pi_agent_model'];
+function usesManagedFlint(cfg) {
+  return cfg.flint_mode !== 'external' && FLINT_ROLE_FIELDS.some(key => cfg[key] === 'flint/local');
+}
+function attachManagedFlint(form, inp) {
+  if (!inp.flint_mode) return;
+  inp.flint_mode.options[0].textContent = 'Automatic local setup';
+  inp.flint_mode.options[1].textContent = 'Use an external server (advanced)';
+  inp.flint_device.options[0].textContent = 'Idle GPU when available, otherwise CPU';
+  inp.flint_device.options[1].textContent = 'CPU only — keep GPUs for experiments';
+  const card = el('div', 'flint-setup');
+  card.append(el('strong', '', 'Local Flint'));
+  card.append(el('p', 'muted', 'Select Flint in any model dropdown to install and start it. The app manages its server and reuses the 26 GB download. Running experiments stay in place.'));
+  const status = el('div', 'flint-setup-status', 'Checking local setup…');
+  status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
+  const progress = document.createElement('progress'); progress.max = 1; progress.hidden = true;
+  const actions = el('div', 'flint-setup-actions');
+  const start = el('button', 'btn xs', 'Prepare Flint'); start.type = 'button';
+  const stop = el('button', 'btn xs', 'Stop Flint'); stop.type = 'button'; stop.hidden = true;
+  actions.append(start, stop); card.append(status, progress, actions);
+  inp.flint_mode.closest('.onb-field').after(card);
+  let timer, busy = false;
+  const cfg = () => Object.fromEntries(Object.entries(inp).map(([key, value]) => [key, value.value]));
+  const render = state => {
+    status.textContent = state.detail || 'Local setup status is unavailable.';
+    const working = ['checking', 'downloading', 'verifying', 'building', 'starting', 'stopping', 'waiting_for_resources'].includes(state.status);
+    progress.hidden = !working;
+    if (typeof state.progress === 'number') progress.value = state.progress; else progress.removeAttribute('value');
+    start.disabled = busy || working || state.status === 'ready';
+    start.textContent = state.status === 'error' ? 'Retry setup' : state.status === 'ready' ? 'Flint ready' : 'Prepare Flint';
+    stop.hidden = !working && state.status !== 'ready';
+    stop.disabled = busy;
+    clearTimeout(timer);
+    if (working || state.status === 'ready') timer = setTimeout(() => { if (form.isConnected) refresh(); }, 3000);
+  };
+  const refresh = async () => {
+    try { render(await api('/flint/status')); }
+    catch (error) { status.textContent = 'Could not read Flint status: ' + error.message; }
+  };
+  const prepare = async () => {
+    if (busy || inp.flint_mode.value === 'external') return;
+    busy = true; start.disabled = true;
+    try { const state = await post('/flint/prepare', { device: inp.flint_device.value }); busy = false; render(state); }
+    catch (error) { busy = false; start.disabled = false; status.textContent = 'Flint setup failed: ' + error.message; }
+  };
+  start.onclick = prepare;
+  stop.onclick = async () => {
+    busy = true; stop.disabled = true;
+    try { const state = await post('/flint/stop', {}); busy = false; render(state); }
+    catch (error) { busy = false; stop.disabled = false; status.textContent = 'Could not stop Flint: ' + error.message; }
+  };
+  const visibility = () => {
+    const external = inp.flint_mode.value === 'external';
+    card.hidden = external;
+    inp.flint_device.closest('.onb-field').hidden = external;
+    ['flint_base_url', 'flint_model', 'flint_token'].forEach(key => inp[key].closest('.onb-field').hidden = !external);
+  };
+  inp.flint_mode.addEventListener('change', () => { visibility(); if (usesManagedFlint(cfg())) prepare(); });
+  FLINT_ROLE_FIELDS.forEach(key => inp[key]?.addEventListener('change', () => { if (usesManagedFlint(cfg())) prepare(); }));
+  visibility(); refresh();
 }
 
 function onboarding(initial = {}) {
@@ -4637,10 +4704,21 @@ PASSCODE=`;
       inp[tokenField]?.focus();
       return;
     }
-    if (requiredProvider === 'flint' && !/^https?:\/\//i.test(cfg.flint_base_url || '')) {
+    if (requiredProvider === 'flint' && cfg.flint_mode === 'external' && !/^https?:\/\//i.test(cfg.flint_base_url || '')) {
       await aruiAlert('Enter the URL of your running Flint server before starting.',
         { title: 'Flint server required' });
       inp.flint_base_url?.focus(); return;
+    }
+    if (usesManagedFlint(cfg)) {
+      try {
+        const state = await post('/flint/prepare', { device: cfg.flint_device || 'auto' });
+        if (state.status !== 'ready') {
+          await aruiAlert((state.detail || 'Flint is starting.') + ' Continue when Local Flint shows ready.', { title: 'Local Flint setup' });
+          return;
+        }
+      } catch (error) {
+        await aruiAlert('Could not prepare Flint: ' + error.message, { title: 'Local Flint setup' }); return;
+      }
     }
     // PRE-FLIGHT TOKEN VALIDATION. Probe every configured provider in
     // parallel and report results back. Required tokens (Claude) that
@@ -5688,19 +5766,14 @@ async function openSettings() {
         body: JSON.stringify({ settings: upd, watchdog: wdUpdate }),
       }).then(readApiResponse);
       if (r && r.status === 'ok') {
-        status.textContent = r.pending_agents?.length
-          ? Object.values(r.pending_reasons || {}).includes('active_experiments')
-            ? 'Saved. Model changes will apply automatically when the agent’s current experiments finish.'
-            : 'Saved. Model changes will apply when research resumes.'
-          : r.applied_agents?.length
-          ? 'Saved. Updated agent sessions restarted; experiments continue.' : 'Saved ✓';
+        status.textContent = settingsSaveMessage(r);
         save.textContent = 'Saved ✓';
         save.disabled = false;
         if (S.project) {
           api('/project').then(project => { S.project = project; }).catch(() => {});
         }
       } else if (r && r.saved) {
-        status.textContent = (r.warnings || ['Saved, but some changes could not be applied.']).join(' ');
+        status.textContent = settingsSaveMessage(r) + ' ' + (r.warnings || []).join(' ');
         save.disabled = false; save.textContent = 'Retry applying settings';
       } else {
         status.textContent = 'Save failed: ' + ((r && r.detail) || '?');
@@ -5713,6 +5786,23 @@ async function openSettings() {
   };
   actions.append(save, status);
   m.append(actions);
+}
+
+function settingsSaveMessage(result) {
+  const messages = ['Saved.'];
+  (result.applied_agents || []).forEach(role => {
+    const label = role === 'author' ? 'Author' : 'Research';
+    messages.push(result.context_preservation?.[role] === 'native_conversation'
+      ? `${label} conversation resumed.` : `${label} continued from saved project state.`);
+  });
+  const reasons = new Set(Object.values(result.pending_reasons || {}));
+  if (reasons.has('conversation_unavailable')) messages.push('The original agent is still running because its conversation could not be verified. The effort change remains pending.');
+  if (reasons.has('model_starting')) messages.push('Flint is preparing. The current agent stays running until the local model is ready.');
+  if (reasons.has('model_unavailable')) messages.push('Flint is not ready. The current agent stays running; check Local Flint setup and retry.');
+  if (reasons.has('active_experiments')) messages.push('Model changes will apply automatically when the agent’s current experiments finish.');
+  if (reasons.has('research_paused')) messages.push('Pending model changes will apply when research resumes.');
+  if (result.pending_agents?.length && !reasons.size) messages.push('Agent changes are pending.');
+  return messages.join(' ');
 }
 
 /* ── archive ──────────────────────────────────────────────────────────── */

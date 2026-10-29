@@ -202,9 +202,15 @@ def check_opencode(token: str, model: str | None = None) -> dict:
 
 def check_flint(cfg: dict) -> dict:
     """Check the served model and tool-call protocol needed by coding roles."""
-    from .provider_config import flint_config
+    from .provider_config import flint_config, flint_managed, flint_timeout
     t0 = time.time()
     try:
+        budget = _TIMEOUT
+        if flint_managed(cfg):
+            from .flint_manager import manager
+            if not manager().is_ready():
+                return _result(False, manager().status()["detail"], t0, model_ok=False)
+            budget = min(180, flint_timeout(cfg))
         url, model, token = flint_config(cfg)
         headers = {"Authorization": f"Bearer {token}"} if token else {}
         with urllib.request.urlopen(urllib.request.Request(url + "/models", headers=headers),
@@ -221,7 +227,7 @@ def check_flint(cfg: dict) -> dict:
                                "type": "object", "properties": {"ok": {"type": "boolean"}},
                                "required": ["ok"]}}}],
                 "tool_choice": {"type": "function", "function": {"name": "arui_ping"}}}
-        remaining = max(0.2, _TIMEOUT - (time.time() - t0))
+        remaining = max(0.2, budget - (time.time() - t0))
         req = urllib.request.Request(url + "/chat/completions", data=json.dumps(body).encode(),
                                      headers={**headers, "Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=remaining) as resp:
@@ -364,13 +370,18 @@ def check_all(cfg: dict) -> dict:
     if "flint" in selected_providers or cfg.get("flint_base_url"):
         jobs["flint"] = (check_flint, (cfg,))
     out: dict[str, dict] = {}
+    budget = _TIMEOUT + 4
+    if "flint" in jobs:
+        from .provider_config import flint_managed, flint_timeout
+        if flint_managed(cfg):
+            budget = max(budget, min(180, flint_timeout(cfg)) + 4)
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
             futures = {ex.submit(fn, *args): name
                        for name, (fn, args) in jobs.items()}
             try:
                 for fut in concurrent.futures.as_completed(
-                        futures, timeout=_TIMEOUT + 4):
+                        futures, timeout=budget):
                     name = futures[fut]
                     try:
                         out[name] = fut.result()
@@ -384,8 +395,8 @@ def check_all(cfg: dict) -> dict:
                     if name not in out:
                         out[name] = {"ok": False, "model_ok": None,
                                      "detail": "timed out — no response in "
-                                               f"{int(_TIMEOUT + 4)}s",
-                                     "latency_ms": int((_TIMEOUT + 4) * 1000)}
+                                               f"{int(budget)}s",
+                                     "latency_ms": int(budget * 1000)}
     except Exception as e:                                 # noqa: BLE001
         for name in jobs:
             out.setdefault(name, {"ok": False, "model_ok": None,

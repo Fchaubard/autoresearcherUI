@@ -36,6 +36,7 @@ from .db import SessionLocal
 from .models import ChatMessage, Event, Gpu, Idea, Project, Run, Setting
 from .model_registry import efforts_for, provider_for
 from .provider_config import provider_ready
+from . import advisory_usage, review_cache
 
 # ── env / keys ────────────────────────────────────────────────────────────
 _KEYS_PATH = ROOT / ".deploy" / "keys.env"
@@ -850,7 +851,7 @@ def _build_context(run_id: str) -> dict | None:
                 "status": run.status,
                 "headline_metric": run.headline_metric,
                 "baseline_delta": run.baseline_delta,
-                "config": run.config if isinstance(run.config, dict) else {},
+                "config": review_cache.experiment_config(run.config),
             },
             "aggregate": stats,
             "all_prior_runs_count": len(others),
@@ -862,6 +863,10 @@ def _build_context(run_id: str) -> dict | None:
             "pending_total_count": len(ideas),
             "lessons_so_far": _read_lessons(max_chars=6000),
         }
+        if run.status in {"crashed", "failed"}:
+            evidence = _crash_evidence(run.id, _settings())
+            if evidence:
+                ctx["this_run"]["failure_evidence"] = evidence["text"]
         return ctx
     finally:
         db.close()
@@ -873,15 +878,29 @@ _TIMEOUT = 240
 _RETRY_DELAYS = (4, 10, 25)             # backoff for 429s
 
 
-def _post_json(url: str, body: dict, headers: dict) -> dict:
+def _post_json(url: str, body: dict, headers: dict, *, timeout: float | None = None) -> dict:
     req = urllib.request.Request(
         url, data=json.dumps(body).encode("utf-8"),
         headers={"Content-Type": "application/json", **headers})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="ignore"))
+    started = time.monotonic()
+    status, request_id = None, ""
+    try:
+        with urllib.request.urlopen(req, timeout=_TIMEOUT if timeout is None else timeout) as resp:
+            status = getattr(resp, "status", 200)
+            response_headers = getattr(resp, "headers", {})
+            request_id = response_headers.get("x-request-id", response_headers.get("request-id", ""))
+            result = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        advisory_usage.record(url, body, started=started, data=result,
+                              status=status, request_id=request_id)
+        return result
+    except Exception as exc:
+        advisory_usage.record(url, body, started=started,
+                              status=getattr(exc, "code", status), request_id=request_id,
+                              error_type=type(exc).__name__)
+        raise
 
 
-def _post_json_retry(url: str, body: dict, headers: dict) -> dict:
+def _post_json_retry(url: str, body: dict, headers: dict, *, timeout: float | None = None) -> dict:
     """POST with retry on 429 (rate limit) and 5xx (transient). Other HTTP
     errors propagate so the caller records an incomplete selected-model call.
 
@@ -898,7 +917,8 @@ def _post_json_retry(url: str, body: dict, headers: dict) -> dict:
         if d:
             time.sleep(d)
         try:
-            return _post_json(url, body, headers)
+            with advisory_usage.context(attempt=i + 1):
+                return _post_json(url, body, headers, **({"timeout": timeout} if timeout is not None else {}))
         except urllib.error.HTTPError as e:
             last_exc = e
             if e.code == 429 or 500 <= e.code < 600:
@@ -953,7 +973,7 @@ def _call_additional_model(model: str, system: str, user: str) -> str:
     if provider_for(model) == "opencode":
         from .opencode_runtime import complete
         return complete(model, system, user, timeout=_TIMEOUT)
-    from .provider_config import flint_config, flint_limits
+    from .provider_config import flint_config, flint_limits, flint_timeout
     url, served_model, token = flint_config()
     body = {"model": served_model,
             "messages": [{"role": "system", "content": system},
@@ -964,7 +984,8 @@ def _call_additional_model(model: str, system: str, user: str) -> str:
     # Flint servers differ in structured-output support. Council/PI already
     # parse and validate their response; do not force unsupported JSON mode.
     data = _post_json_retry(url + "/chat/completions", body,
-                           {"Authorization": f"Bearer {token}"} if token else {})
+                           {"Authorization": f"Bearer {token}"} if token else {},
+                           timeout=flint_timeout())
     choice = data["choices"][0]
     if choice.get("finish_reason") == "length":
         raise ModelOutputBudgetError()
@@ -1207,7 +1228,16 @@ def _call_reviewer(reviewer: str, system: str, user: str, cfg: dict
         _reviewer_failure(reviewer, cfg, missing, "not_configured")
         return None
     try:
-        text = _CALLERS[reviewer](system, user, cfg)
+        operation = ("code_bless" if system == _BLESS_SYSTEM else
+                     "completion_review" if system == _COMPLETION_REVIEW_SYSTEM else
+                     "scoping" if system == _SCOPE_SYSTEM else
+                     "strategic_review" if system == STRATEGIC_SYSTEM else "run_review")
+        role = {"gemini": "reviewer1", "openai": "reviewer2", "claude": "tiebreaker"}[reviewer]
+        if operation == "scoping":
+            role = "scoping"
+        with advisory_usage.context(role=role, operation=operation,
+                                    trigger_id=cfg.get("_usage_trigger_id", "")):
+            text = _CALLERS[reviewer](system, user, cfg)
     except urllib.error.HTTPError as exc:
         kind = "auth_failed" if exc.code in (401, 403) else "rate_limited" if exc.code == 429 else "call_failed"
         _reviewer_failure(reviewer, cfg, f"HTTP {exc.code}", kind)
@@ -1273,10 +1303,11 @@ def _ctx_text(ctx: dict) -> str:
         "===\n" + json.dumps(ctx, indent=2, default=str))
 
 
-def deliberate(run_id: str) -> dict | None:
+def deliberate(run_id: str, *, cfg: dict | None = None) -> dict | None:
     """Full debate orchestrator. Returns the final aggregate review (with
     rounds embedded under 'rounds') or None if nothing could be produced."""
-    cfg = _settings()
+    cfg = dict(_settings() if cfg is None else cfg)
+    cfg["_usage_trigger_id"] = run_id
     reviewers = configured_reviewers(cfg)
     if not reviewers:
         return None
@@ -1514,7 +1545,7 @@ def _build_strategic_context(batch_run_ids: list[str]) -> dict | None:
                     "id": r.id, "name": r.run_name, "status": r.status,
                     "headline_metric": r.headline_metric,
                     "baseline_delta": r.baseline_delta,
-                    "config": r.config if isinstance(r.config, dict) else {},
+                    "config": review_cache.experiment_config(r.config),
                 }
                 for r in batch
             ],
@@ -1625,6 +1656,7 @@ def strategic_review(batch_run_ids: list[str]) -> dict | None:
     """
     cfg = _settings()
     configured = configured_reviewers(cfg)
+    cfg["_usage_trigger_id"] = "batch-" + review_cache.digest(batch_run_ids)[:24]
     if not configured:
         _emit_token_failure_event("strategic", "not_configured", "No strategic reviewer is enabled")
         return None
@@ -1888,11 +1920,34 @@ def _worth_reviewing(run_id: str) -> bool:
 
 def _worker(run_id: str) -> None:
     try:
-        review = deliberate(run_id)
-        if not review:
-            return
-        _persist(run_id, review)
-        _apply_to_ideas_md(review)
+        cfg = _settings()
+        key = _crash_review_key(run_id, cfg)
+        # Only evidenced, equivalent failures share a diagnosis. Successful
+        # or novel runs always retain the normal research review policy.
+        if key:
+            with review_cache.single_flight("crash:" + key):
+                cached = review_cache.get("crash", key)
+                if cached:
+                    review = dict(cached["review"])
+                    review.update(reused_from_run_id=cached["run_id"],
+                                  original_reviewed_at=review.get("reviewed_at"),
+                                  reviewed_at=_iso(), cached=True,
+                                  rerank_pending=[], veto=[], new_ideas=[])
+                    _persist(run_id, review, reused=True)
+                    return
+                review = deliberate(run_id, cfg=cfg)
+                if review:
+                    _persist(run_id, review)
+                    _apply_to_ideas_md(review)
+                    review_cache.put("crash", key, {
+                        "run_id": run_id,
+                        "review": {k: v for k, v in review.items() if k != "rounds"}})
+        else:
+            review = deliberate(run_id, cfg=cfg)
+            if not review:
+                return
+            _persist(run_id, review)
+            _apply_to_ideas_md(review)
     finally:
         with _INFLIGHT_LOCK:
             _INFLIGHT.discard(run_id)
@@ -1902,7 +1957,88 @@ def _iso() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat()
 
 
-def _persist(run_id: str, review: dict) -> None:
+def _review_policy(cfg: dict, *, tiebreaker: bool = False) -> dict:
+    slots = configured_reviewers(cfg)
+    if tiebreaker and cfg.get("council_enable_claude_tiebreaker", True):
+        slots.append("claude")
+    policy = {slot: {"model": cfg.get(f"council_{slot}_model") or DEFAULTS[f"council_{slot}_model"],
+                     "effort": cfg.get(f"council_{slot}_effort") or DEFAULTS[f"council_{slot}_effort"]}
+              for slot in slots}
+    from .provider_config import config_value
+    for selection in policy.values():
+        if selection["model"] == "flint/local":
+            # The local alias can serve different explicitly configured
+            # checkpoints/endpoints. A cache key must distinguish them.
+            selection["local_configuration"] = review_cache.digest({
+                field: config_value(field, cfg) for field in
+                ("flint_mode", "flint_base_url", "flint_model", "flint_context_tokens", "flint_max_output_tokens")})
+    return policy
+
+
+def _crash_review_key(run_id: str, cfg: dict) -> str | None:
+    """Exact source/config plus a concrete exception; never group vague exits."""
+    if not re.fullmatch(r"[A-Za-z0-9_.=\-]+", run_id):
+        return None
+    with SessionLocal() as db:
+        run = db.query(Run).filter(Run.id == run_id).first()
+        if not run or run.status not in {"crashed", "failed"}:
+            return None
+        config = review_cache.experiment_config(run.config)
+        source = config.get("source_sha256") or config.get("runner_sha256") or run.git_commit
+        # No trustworthy source identity means a fresh review. A generic
+        # process-exit code is not evidence that two bugs have the same cause.
+        if not source:
+            return None
+        project_id = run.project_id
+    failure = _crash_evidence(run_id, cfg)
+    if not failure:
+        return None
+    # Preserve numeric exception arguments, line numbers and hyperparameters;
+    # they can distinguish genuinely different failures.
+    volatile = {"gpu_index", "process_exit_at", "status_before_process_exit",
+                "output_dir", "source_snapshot", "tracking", "resumed_server",
+                "what", "name"}
+    experiment = {k: v for k, v in config.items() if k not in volatile}
+    if isinstance(experiment.get("command"), str):
+        experiment["command"] = experiment["command"].replace(run_id, "<run>")
+    return review_cache.digest({"project": project_id, "source": source,
+                                "exception": failure["signature"], "experiment": experiment,
+                                "reviewers": _review_policy(cfg, tiebreaker=True),
+                                "debate": [cfg.get("run_debate", True), cfg.get("debate_max_rounds", 3)],
+                                "prompts": [SYSTEM, DEBATE_SYSTEM, TIEBREAKER_SYSTEM]})
+
+
+def _crash_evidence(run_id: str, cfg: dict) -> dict | None:
+    """A bounded final traceback, excluding unrelated console text and secrets."""
+    if not re.fullmatch(r"[A-Za-z0-9_.=\-]+", run_id):
+        return None
+    try:
+        with (DATA_DIR / "run_logs" / f"{run_id}.log").open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            stream.seek(max(0, stream.tell() - 64000))
+            tail = stream.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    tail = re.sub(r"\x1b\[[0-9;]*m", "", tail)
+    blocks = tail.rsplit("Traceback (most recent call last):", 1)
+    matches = list(re.finditer(r"(?:^|\n)(?:[\w.]+(?:Error|Exception)|Exception): [^\n]+", blocks[-1]))
+    if not matches:
+        return None
+    final = matches[-1]
+    evidence = ("Traceback (most recent call last):" + blocks[-1][:final.end()]
+                if len(blocks) == 2 else final.group().strip())
+    from .agent_sessions import _redact
+    provider_secrets = {key: value for key, value in os.environ.items()
+                        if key in {"GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY",
+                                   "ANTHROPIC_API_KEY", "OPENCODE_API_KEY", "ARUI_FLINT_API_KEY"}}
+    evidence = _redact(evidence, {**cfg, **provider_secrets})
+    identity = evidence.replace(run_id, "<run>")
+    identity = re.sub(r"0x[0-9a-fA-F]+", "<address>", identity)
+    visible = evidence if len(evidence) <= 6000 else "[Earlier traceback frames omitted]\n" + evidence[-5960:]
+    return {"text": visible, "signature": review_cache.digest(identity)}
+
+
+def _persist(run_id: str, review: dict, *, reused: bool = False) -> None:
     """Stash the review on run.config so /api/runs returns it, mirror the
     learning onto its Idea, and emit a feed event."""
     db = SessionLocal()
@@ -1918,7 +2054,7 @@ def _persist(run_id: str, review: dict) -> None:
         cfg["review"] = {k: v for k, v in review.items() if k != "rounds"}
         cfg["reviews"] = review              # full debate history
         run.config = cfg
-        if run.idea_id:
+        if run.idea_id and not reused:
             idea = db.query(Idea).filter(Idea.id == run.idea_id).first()
             if idea and (review.get("learning") or "").strip():
                 idea.conclusion = review["learning"].strip()
@@ -1926,9 +2062,11 @@ def _persist(run_id: str, review: dict) -> None:
             f"Council reviewed {run.run_name}")
         if review.get("agreement") is False:
             msg = "[tiebreaker] " + msg
+        if reused:
+            msg = f"Reused matching crash diagnosis from {review['reused_from_run_id']}: " + msg
         db.add(Event(
             id="ev-" + os.urandom(4).hex(),
-            type="council_reviewed", severity="info",
+            type="council_review_reused" if reused else "council_reviewed", severity="info",
             actor="council:" + (review.get("reviewer") or "?"),
             run_id=run.id,
             message=msg, created_at=_iso()))
@@ -1937,10 +2075,11 @@ def _persist(run_id: str, review: dict) -> None:
         db.close()
     # Append the review's learning to lessons.md so future reviews see it.
     try:
-        _append_lesson(
-            reviewer=(review.get("reviewer") or "?"),
-            run_name=captured_run_name,
-            learning=review.get("learning") or "")
+        if not reused:
+            _append_lesson(
+                reviewer=(review.get("reviewer") or "?"),
+                run_name=captured_run_name,
+                learning=review.get("learning") or "")
     except Exception as e:                              # noqa: BLE001
         print(f"[council] _append_lesson failed: {e}", flush=True)
     try:
@@ -2393,33 +2532,11 @@ def _collect_codebase(workspace: str | os.PathLike) -> str:
     ws = Path(str(workspace))
     if not ws.exists():
         return ""
-    SKIP_DIRS = {"__pycache__", ".git", ".venv", "venv", "data", "ckpts",
-                 "checkpoints", "runs", "wandb", "node_modules"}
-    EXT = {".py", ".md", ".yaml", ".yml", ".json", ".toml", ".cfg", ".sh"}
     MAX_BYTES_PER_FILE = 64_000
     MAX_TOTAL = 320_000
     chunks: list[str] = []
     total = 0
-    for p in sorted(ws.rglob("*")):
-        if not p.is_file():
-            continue
-        # SKIP_DIRS must match only directory components RELATIVE to
-        # the workspace, not absolute-path ancestors. Every
-        # autoresearcherUI workspace lives under data/workspace/...
-        # by setup convention, so a naive `part in SKIP_DIRS for part
-        # in p.parts` skipped EVERY file because the ancestor "data"
-        # always matched. Council then saw an empty codebase and
-        # auto-rejected (the bug Francois hit on 2026-05-31, found
-        # and one-line-fixed by the research agent in-flight).
-        try:
-            rel_parts = p.relative_to(ws).parts
-        except ValueError:
-            continue                                # outside workspace
-        if any(part in SKIP_DIRS for part in rel_parts[:-1]):
-            continue
-        if p.suffix.lower() not in EXT and p.name not in (
-                "Dockerfile", "Makefile"):
-            continue
+    for p in review_cache.source_files(str(ws)):
         try:
             text = p.read_text(errors="ignore")
         except OSError:
@@ -2715,8 +2832,11 @@ def is_code_blessed() -> bool:
     the selected reviewers' verdicts.
     """
     state = _bless_state_get()
-    if not configured_reviewers(_settings()):
+    cfg = _settings()
+    if not configured_reviewers(cfg):
         return True  # explicit opt-out, independent of credential readiness
+    if state.get("reviewers") is not None and state["reviewers"] != _review_policy(cfg):
+        return False
     return state.get("status") == "approved" and not state.get("auto")
 
 
@@ -2763,8 +2883,48 @@ def seed_task_blockers(meta: dict | None) -> list[str]:
     return out
 
 
-def _bless_worker(workspace: str, bless_meta: dict | None = None) -> None:
+_BLESS_LOCK = threading.RLock()
+_BLESS_ACTIVE_KEY: str | None = None
+
+
+def _bless_request(workspace: str, bless_meta: dict | None = None) -> dict:
     cfg = _settings()
+    before = review_cache.source_fingerprint(workspace)
+    code = _collect_codebase(workspace)
+    source = review_cache.source_fingerprint(workspace)
+    if before != source:
+        raise RuntimeError("Source changed while preparing code review; submit again once edits finish")
+    key = review_cache.digest({"workspace": str(Path(workspace).resolve()),
+                               "source": source, "prompt": [_BLESS_SYSTEM, code],
+                               "reviewers": _review_policy(cfg), "seed_gate": bless_meta})
+    cfg["_usage_trigger_id"] = key
+    return {"key": key, "source": source, "code": code, "cfg": cfg,
+            "preflight": review_cache.digest(_preflight_state_get())}
+
+
+def _bless_worker(workspace: str, bless_meta: dict | None = None,
+                  request: dict | None = None) -> None:
+    global _BLESS_ACTIVE_KEY
+    try:
+        request = request or _bless_request(workspace, bless_meta)
+        _bless_worker_inner(workspace, bless_meta, request=request)
+        state = _bless_state_get()
+        if state.get("status") in {"approved", "rejected"} and state.get("review_key") == request["key"]:
+            review_cache.put("code_bless", request["key"], state)
+    except Exception as exc:
+        _bless_state_set({"status": "error", "incomplete": True,
+                          "error": "Code review could not complete: " + _model_error_detail(exc),
+                          "summary": "Code review did not complete; no approval was granted",
+                          "blockers": [], "suggestions": [], "verdicts": {}})
+    finally:
+        with _BLESS_LOCK:
+            if request and _BLESS_ACTIVE_KEY == request["key"]:
+                _BLESS_ACTIVE_KEY = None
+
+
+def _bless_worker_inner(workspace: str, bless_meta: dict | None = None,
+                       *, request: dict) -> None:
+    cfg = request["cfg"]
     reviewers = configured_reviewers(cfg)
     # ─── seed-task gate (RESEARCH_IMPROVEMENT_PLAN #7) ─────────────────
     # Deterministic check — runs BEFORE the LLM call so the agent gets
@@ -2794,7 +2954,7 @@ def _bless_worker(workspace: str, bless_meta: dict | None = None) -> None:
             "missing_reviewers": [], "blockers": [], "suggestions": [], "verdicts": {},
         })
         return
-    code = _collect_codebase(workspace)
+    code = request["code"]
     if not code:
         _bless_state_set({
             "status": "rejected", "blockers": [
@@ -2858,6 +3018,24 @@ def _bless_worker(workspace: str, bless_meta: dict | None = None) -> None:
                           "blockers": [], "suggestions": []})
         _emit_token_failure_event("council", "incomplete", message)
         return
+    if review_cache.source_fingerprint(workspace) != request["source"]:
+        _bless_state_set({"status": "error", "incomplete": True,
+                          "error": "Source changed during code review; submit the current code for review",
+                          "summary": "The reviewed source is no longer current; approval was not applied",
+                          "blockers": [], "suggestions": [], "verdicts": verdicts})
+        return
+    if _review_policy(_settings()) != _review_policy(cfg):
+        _bless_state_set({"status": "error", "incomplete": True,
+                          "error": "Selected reviewers changed during code review; submit again with the current settings",
+                          "summary": "Review settings changed; the old selection's approval was not applied",
+                          "blockers": [], "suggestions": [], "verdicts": verdicts})
+        return
+    if review_cache.digest(_preflight_state_get()) != request["preflight"]:
+        _bless_state_set({"status": "error", "incomplete": True,
+                          "error": "Pre-flight evidence changed during code review; submit again after checks finish",
+                          "summary": "Pre-flight evidence changed; approval was not applied",
+                          "blockers": [], "suggestions": [], "verdicts": verdicts})
+        return
     # Aggregate: ALL configured reviewers completed. Any blocker from any
     # reviewer is included in the blocker list shown to the agent.
     working = [r for r, v in verdicts.items() if v.get("approved") is not None]
@@ -2878,6 +3056,8 @@ def _bless_worker(workspace: str, bless_meta: dict | None = None) -> None:
         "blockers": blockers,
         "suggestions": suggestions,
         "verdicts": verdicts,
+        "review_key": request["key"], "source_hash": request["source"],
+        "reviewers": _review_policy(cfg), "reviewed_at": _iso(), "cached": False,
     })
     # Emit an Event so it shows up in the Summary feed live.
     try:
@@ -2967,13 +3147,35 @@ def bless_async(workspace: str, bless_meta: dict | None = None) -> dict:
             "seed_task_gate": True,
         })
         return bless_status()
-    _bless_state_set({"status": "pending",
-                      "summary": "Council is reviewing the codebase…",
-                      "blockers": [], "suggestions": [], "verdicts": {}})
-    threading.Thread(target=_bless_worker,
-                     args=(workspace, bless_meta),
-                     daemon=True, name="council-bless").start()
-    return bless_status()
+    global _BLESS_ACTIVE_KEY
+    try:
+        request = _bless_request(workspace, bless_meta)
+    except (OSError, RuntimeError):
+        return {"status": "error", "error": "Source could not be read consistently; retry after edits finish"}
+    with _BLESS_LOCK:
+        if _BLESS_ACTIVE_KEY is not None:
+            if _BLESS_ACTIVE_KEY == request["key"]:
+                return {**bless_status(), "coalesced": True}
+            return {"status": "busy", "error": "A different code review is in progress; retry when it finishes"}
+        cached = review_cache.get("code_bless", request["key"])
+        if cached:
+            cached.update(cached=True, reused_at=_iso(),
+                          summary="Reused identical code review: " + cached.get("summary", ""))
+            _bless_state_set(cached)
+            return bless_status()
+        _BLESS_ACTIVE_KEY = request["key"]
+        _bless_state_set({"status": "pending",
+                          "summary": "Council is reviewing the codebase…",
+                          "review_key": request["key"],
+                          "blockers": [], "suggestions": [], "verdicts": {}})
+        try:
+            threading.Thread(target=_bless_worker,
+                             args=(workspace, bless_meta, request),
+                             daemon=True, name="council-bless").start()
+        except Exception:
+            _BLESS_ACTIVE_KEY = None
+            raise
+        return bless_status()
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -3017,6 +3219,43 @@ def bless_async(workspace: str, bless_meta: dict | None = None) -> dict:
 
 
 _RESEARCH_CONCLUSION_KEY = "research_conclusion"
+_COMPLETION_LOCK = threading.RLock()
+_COMPLETION_ACTIVE_THREAD: threading.Thread | None = None
+_COMPLETION_ACTIVE_KEY: str | None = None
+_COMPLETION_HEARTBEAT_SEC = 30
+
+
+def completion_review_active() -> bool:
+    """A slow live reviewer is not an orphan, even if a lease write failed."""
+    with _COMPLETION_LOCK:
+        return bool(_COMPLETION_ACTIVE_THREAD
+                    and _COMPLETION_ACTIVE_THREAD.is_alive())
+
+
+def _completion_claim(evidence_run_ids, summary, answer_to_purpose, recommendation):
+    return {"summary": (summary or "")[:4000],
+            "answer_to_purpose": answer_to_purpose or "",
+            "evidence": list(evidence_run_ids or [])[:200],
+            "recommendation": recommendation or ""}
+
+
+def _completion_current(review_id: str) -> bool:
+    with _COMPLETION_LOCK:
+        current = _conclusion_state_get()
+        return (current.get("review_id") == review_id
+                and current.get("status") == "pending")
+
+
+def _completion_update(review_id: str, changes: dict) -> bool:
+    """An operator rejection invalidates the worker's right to apply a verdict."""
+    with _COMPLETION_LOCK:
+        current = _conclusion_state_get()
+        if (current.get("review_id") != review_id
+                or current.get("status") != "pending"):
+            return False
+        current.update(changes)
+        _conclusion_state_set(current)
+        return True
 
 
 _COMPLETION_REVIEW_SYSTEM = (
@@ -3156,13 +3395,14 @@ def clear_conclusion(reason: str = "") -> dict:
 
     Leaves a small audit Event so the timeline shows the rejection.
     Returns the cleared state."""
-    prev = _conclusion_state_get()
-    _conclusion_state_set({"status": "none",
-                           "cleared_at":
-                               dt.datetime.now(dt.timezone.utc).isoformat(),
-                           "cleared_reason": (reason or "")[:500],
-                           "previous": prev if prev.get("status") != "none"
-                                       else None})
+    with _COMPLETION_LOCK:
+        prev = _conclusion_state_get()
+        _conclusion_state_set({"status": "none",
+                               "cleared_at":
+                                   dt.datetime.now(dt.timezone.utc).isoformat(),
+                               "cleared_reason": (reason or "")[:500],
+                               "previous": prev if prev.get("status") != "none"
+                                           else None})
     try:
         db = SessionLocal()
         try:
@@ -3224,7 +3464,7 @@ def _build_completion_review_context(evidence_run_ids: list[str],
             "headline_metric": r.headline_metric,
             "baseline_delta": r.baseline_delta,
             "final_metrics": _final_metrics(r.id),
-            "config": r.config if isinstance(r.config, dict) else {},
+            "config": review_cache.experiment_config(r.config),
         } for r in ev_runs]
         # All runs as compact one-liners (frontier-movers first, crashed
         # next) so the reviewer can sanity-check the claim.
@@ -3265,31 +3505,67 @@ def _build_completion_review_context(evidence_run_ids: list[str],
 
 def _completion_review_worker(evidence_run_ids: list[str], summary: str,
                                 answer_to_purpose: str,
-                                recommendation: str) -> None:
+                                recommendation: str, *, review_id: str | None = None,
+                                cfg: dict | None = None) -> None:
     """Resilient wrapper around the real review. Holds a lifecycle lease so the
     supervisor can tell whether this worker is alive (and re-trigger if it was
     orphaned by a crash / restart). ALWAYS writes a terminal verdict — even if
     the inner review raises — so the conclusion never stays 'pending' forever
     and the agent never polls a verdict that never comes."""
+    global _COMPLETION_ACTIVE_THREAD, _COMPLETION_ACTIVE_KEY
+    from . import lifecycle
+    owner = threading.current_thread()
+    with _COMPLETION_LOCK:
+        if (_COMPLETION_ACTIVE_THREAD is not None
+                and _COMPLETION_ACTIVE_THREAD is not owner
+                and _COMPLETION_ACTIVE_THREAD.is_alive()):
+            return
+        _COMPLETION_ACTIVE_THREAD = owner
+        if review_id is not None and not _completion_current(review_id):
+            _COMPLETION_ACTIVE_THREAD = None
+            _COMPLETION_ACTIVE_KEY = None
+            return
+        cfg = cfg if cfg is not None else _settings()
+        if review_id is None:
+            # Direct synchronous invocations use the same ownership contract.
+            review_id = os.urandom(12).hex()
+            claim = _completion_claim(evidence_run_ids, summary, answer_to_purpose, recommendation)
+            _conclusion_state_set({**claim, "status": "pending", "review_id": review_id,
+                                   "conclude_at": dt.datetime.now(dt.timezone.utc).isoformat()})
+            _COMPLETION_ACTIVE_KEY = review_cache.digest({"claim": claim, "policy": _review_policy(cfg)})
+    stop_heartbeat = threading.Event()
+
+    def heartbeat():
+        while not stop_heartbeat.wait(_COMPLETION_HEARTBEAT_SEC):
+            try:
+                with _COMPLETION_LOCK:
+                    if stop_heartbeat.is_set():
+                        return
+                    lifecycle.lease_heartbeat("completion_review")
+            except Exception:
+                # Local thread ownership still prevents duplicate inference.
+                pass
+
+    heartbeat_thread = threading.Thread(target=heartbeat, daemon=True,
+                                        name="council-completion-heartbeat")
     try:
-        from . import lifecycle
-        lifecycle.lease_acquire("completion_review")
-    except Exception:                                   # noqa: BLE001
-        pass
-    try:
-        _completion_review_worker_inner(evidence_run_ids, summary,
-                                        answer_to_purpose, recommendation)
-    except Exception as e:                              # noqa: BLE001
-        import traceback
-        traceback.print_exc()
-        print(f"[council] completion review worker crashed: {e}", flush=True)
         try:
-            existing = _conclusion_state_get()
-            existing.update({
+            lifecycle.lease_acquire("completion_review")
+            heartbeat_thread.start()
+        except Exception:
+            pass
+        _completion_review_worker_inner(evidence_run_ids, summary,
+                                        answer_to_purpose, recommendation,
+                                        review_id=review_id, cfg=cfg)
+    except Exception as e:                              # noqa: BLE001
+        detail = _model_error_detail(e)
+        print(f"[council] completion review worker crashed: {detail}", flush=True)
+        try:
+            _completion_update(review_id, {
                 "status": "needs_more",
                 "council_verdict": {
                     "verdict": "NEEDS_MORE",
-                    "reasons": [f"completion review errored ({e}); the "
+                    "reasons": [f"completion review errored ({detail}); the "
                                 "supervisor will not leave you blocked"],
                     "missing_evidence": ["the automated review failed — submit "
                                          "a tighter conclusion or run more "
@@ -3299,36 +3575,41 @@ def _completion_review_worker(evidence_run_ids: list[str], summary: str,
                     "reviewed_at":
                         dt.datetime.now(dt.timezone.utc).isoformat()},
             })
-            _conclusion_state_set(existing)
         except Exception:                               # noqa: BLE001
             pass
     finally:
-        try:
-            from . import lifecycle
-            lifecycle.lease_release("completion_review")
-        except Exception:                               # noqa: BLE001
-            pass
+        stop_heartbeat.set()
+        if heartbeat_thread.ident is not None:
+            heartbeat_thread.join(timeout=2)
+        with _COMPLETION_LOCK:
+            try:
+                lifecycle.lease_release("completion_review")
+            except Exception:                               # noqa: BLE001
+                pass
+            if _COMPLETION_ACTIVE_THREAD is owner:
+                _COMPLETION_ACTIVE_THREAD = None
+                _COMPLETION_ACTIVE_KEY = None
 
 
 def _completion_review_worker_inner(evidence_run_ids: list[str], summary: str,
                                       answer_to_purpose: str,
-                                      recommendation: str) -> None:
-    cfg = _settings()
+                                      recommendation: str, *, review_id: str,
+                                      cfg: dict) -> None:
+    if not _completion_current(review_id):
+        return
     reviewers = configured_reviewers(cfg)
     if not reviewers:
-        existing = _conclusion_state_get()
         message = "Completion review disabled; operator can switch to paper mode"
-        existing.update({"status": "skipped", "reason": "reviewers_explicitly_disabled",
-                         "council_verdict": {"verdict": "SKIPPED", "summary": message,
-                                             "missing_reviewers": [], "verdicts": {}}})
-        _conclusion_state_set(existing)
-        _emit_completion_event("research_completion_skipped", message)
+        if _completion_update(review_id, {
+                "status": "skipped", "reason": "reviewers_explicitly_disabled",
+                "council_verdict": {"verdict": "SKIPPED", "summary": message,
+                                    "missing_reviewers": [], "verdicts": {}}}):
+            _emit_completion_event("research_completion_skipped", message)
         return
     ctx = _build_completion_review_context(
         evidence_run_ids, summary, answer_to_purpose, recommendation)
     if ctx is None:
-        existing = _conclusion_state_get()
-        existing.update({
+        _completion_update(review_id, {
             "status": "rejected",
             "council_verdict": {
                 "verdict": "REJECTED",
@@ -3340,7 +3621,6 @@ def _completion_review_worker_inner(evidence_run_ids: list[str], summary: str,
                     dt.datetime.now(dt.timezone.utc).isoformat(),
             },
         })
-        _conclusion_state_set(existing)
         return
     user_prompt = (
         "Review the agent's claim that the project Purpose has been "
@@ -3349,6 +3629,8 @@ def _completion_review_worker_inner(evidence_run_ids: list[str], summary: str,
         + json.dumps(ctx, indent=2, default=str))[:60000]
     verdicts: dict[str, dict] = {}
     for reviewer in reviewers:
+        if not _completion_current(review_id):
+            return
         v = _call_reviewer(reviewer, _COMPLETION_REVIEW_SYSTEM,
                             user_prompt, cfg)
         if not v:
@@ -3369,12 +3651,11 @@ def _completion_review_worker_inner(evidence_run_ids: list[str], summary: str,
     if missing:
         details = [f"{r}: {cfg.get('council_' + r + '_model') or DEFAULTS['council_' + r + '_model']}" for r in missing]
         message = "Required completion review incomplete: " + ", ".join(details)
-        existing = _conclusion_state_get()
-        existing.update({"status": "error", "incomplete": True, "error": message,
-                         "council_verdict": {"verdict": "INCOMPLETE", "summary": message,
-                                             "missing_reviewers": missing, "verdicts": verdicts}})
-        _conclusion_state_set(existing)
-        _emit_completion_event("research_completion_incomplete", message)
+        if _completion_update(review_id, {
+                "status": "error", "incomplete": True, "error": message,
+                "council_verdict": {"verdict": "INCOMPLETE", "summary": message,
+                                    "missing_reviewers": missing, "verdicts": verdicts}}):
+            _emit_completion_event("research_completion_incomplete", message)
         return
     # Aggregate: ALL configured reviewers must say APPROVED. Otherwise it's
     # either REJECTED or NEEDS_MORE (worst wins).
@@ -3400,8 +3681,7 @@ def _completion_review_worker_inner(evidence_run_ids: list[str], summary: str,
             summaries.append(f"[{r}] {v.get('summary')}")
     status_out = ("approved" if final_verdict == "APPROVED"
                   else "rejected")
-    existing = _conclusion_state_get()
-    existing.update({
+    changes = {
         "status": status_out,
         "council_verdict": {
             "verdict": final_verdict,
@@ -3411,8 +3691,7 @@ def _completion_review_worker_inner(evidence_run_ids: list[str], summary: str,
             "verdicts": verdicts,
             "reviewed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         },
-    })
-    _conclusion_state_set(existing)
+    }
     # When the council REJECTED or said NEEDS_MORE we want the agent to
     # immediately turn the missing_evidence into directives so the loop
     # restarts itself without the operator. We don't auto-upsert (that
@@ -3423,11 +3702,12 @@ def _completion_review_worker_inner(evidence_run_ids: list[str], summary: str,
            if final_verdict == "APPROVED" else
            f"Research conclusion {final_verdict} — "
            f"{len(missing_agg)} missing-evidence item(s) returned.")
-    _emit_completion_event(
-        "research_completion_reviewed", msg, severity=sev)
-    if final_verdict == "APPROVED":
-        _auto_enter_paper_after_approval(recommendation,
-                                         "\n".join(summaries))
+    with _COMPLETION_LOCK:
+        if not _completion_update(review_id, changes):
+            return
+        _emit_completion_event("research_completion_reviewed", msg, severity=sev)
+        if final_verdict == "APPROVED":
+            _auto_enter_paper_after_approval(recommendation, "\n".join(summaries))
 
 
 def _auto_enter_paper_after_approval(recommendation: str,
@@ -3492,42 +3772,55 @@ def review_completion_async(evidence_run_ids: list[str],
                               recommendation: str = "") -> dict:
     """Kick off an async council review of the agent's conclusion.
 
-    Sets ``research_conclusion`` to ``pending`` immediately and spawns a
-    background worker thread. The worker writes the verdict back into
-    the same Setting row when it's done."""
-    # Persist the agent's claim BEFORE we run the review — the dashboard
-    # shows it immediately so the user can see what the agent is
-    # asserting while the council deliberates.
-    now = dt.datetime.now(dt.timezone.utc).isoformat()
-    _conclusion_state_set({
-        "status": "pending",
-        "summary": (summary or "")[:4000],
-        "answer_to_purpose": answer_to_purpose or "",
-        "evidence": list(evidence_run_ids or [])[:200],
-        "recommendation": recommendation or "",
-        "conclude_at": now,
-    })
-    # Observability: mark the phase + announce the launch so the activity feed
-    # and emails show the council is reviewing (not a mysterious "idle").
-    try:
-        from . import lifecycle
-        lifecycle.set_phase(lifecycle.PHASE_CONCLUSION_REVIEW)
-        lifecycle.emit_event(
-            "council_launch",
-            "Council review launched: evaluating the research conclusion "
-            f"({len(evidence_run_ids or [])} runs of evidence)",
-            severity="info", actor="council")
-    except Exception:                                   # noqa: BLE001
-        pass
-    import os
-    if not os.environ.get("ARUI_DISABLE_BG"):       # unit tests: no leaked daemons
-        threading.Thread(target=_completion_review_worker,
-                         args=(list(evidence_run_ids or []),
-                               summary or "",
-                               answer_to_purpose or "",
-                               recommendation or ""),
-                         daemon=True, name="council-completion").start()
-    return conclusion_state()
+    Identical in-flight submissions share the existing review. A different
+    claim receives an explicit busy response; it never replaces work that
+    is already calling the selected reviewers. Completed claims are not
+    cached: newly submitted conclusions still receive their required review.
+    """
+    global _COMPLETION_ACTIVE_THREAD, _COMPLETION_ACTIVE_KEY
+    cfg = _settings()
+    claim = _completion_claim(evidence_run_ids, summary, answer_to_purpose, recommendation)
+    key = review_cache.digest({"claim": claim, "policy": _review_policy(cfg)})
+    with _COMPLETION_LOCK:
+        if completion_review_active():
+            current = conclusion_state()
+            if key == _COMPLETION_ACTIVE_KEY and current.get("status") == "pending":
+                return {**current, "coalesced": True}
+            return {"status": "busy",
+                    "error": "A different completion review is still running; retry when it finishes.",
+                    "active_review_id": current.get("review_id")}
+        now = dt.datetime.now(dt.timezone.utc).isoformat()
+        review_id = os.urandom(12).hex()
+        _conclusion_state_set({**claim, "status": "pending", "review_id": review_id,
+                               "conclude_at": now})
+        try:
+            from . import lifecycle
+            lifecycle.set_phase(lifecycle.PHASE_CONCLUSION_REVIEW)
+            lifecycle.emit_event(
+                "council_launch",
+                "Council review launched: evaluating the research conclusion "
+                f"({len(claim['evidence'])} runs of evidence)",
+                severity="info", actor="council")
+        except Exception:
+            pass
+        if not os.environ.get("ARUI_DISABLE_BG"):  # tests explicitly opt into workers
+            worker = threading.Thread(
+                target=_completion_review_worker,
+                args=(claim["evidence"], claim["summary"],
+                      claim["answer_to_purpose"], claim["recommendation"]),
+                kwargs={"review_id": review_id, "cfg": cfg},
+                daemon=True, name="council-completion")
+            _COMPLETION_ACTIVE_THREAD = worker
+            _COMPLETION_ACTIVE_KEY = key
+            try:
+                worker.start()
+            except Exception as exc:
+                _COMPLETION_ACTIVE_THREAD = None
+                _COMPLETION_ACTIVE_KEY = None
+                _completion_update(review_id, {
+                    "status": "error", "incomplete": True,
+                    "error": "Completion review could not start: " + _model_error_detail(exc)})
+        return conclusion_state()
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -3806,7 +4099,8 @@ def scope_chat(history: list[dict], synthesis: dict, papers: list[dict],
     if missing:
         raise RuntimeError(f"Scoping model {model} failed: {missing}")
     try:
-        return _call_text_model(model, sys, user)
+        with advisory_usage.context(role="scoping", operation="chat"):
+            return _call_text_model(model, sys, user)
     except Exception as exc:
         from .safe_errors import describe
         status = getattr(exc, "code", None) or getattr(exc, "status", None)
