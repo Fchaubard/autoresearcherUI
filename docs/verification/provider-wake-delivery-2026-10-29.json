@@ -1,0 +1,78 @@
+{
+  "recorded_at": "2026-10-29T19:44:42.990386+00:00",
+  "scope": "Actual installed interactive CLI delivery behavior in private tmux sessions; no production sessions touched.",
+  "method": {
+    "tmux_dimensions": {
+      "columns": 140,
+      "rows": 40
+    },
+    "environment": "Private workspace/configuration/session database; dummy credentials; model endpoints redirected to local HTTP server that rejects inference.",
+    "capture": "Plain and styled terminal captures plus cursor position; no prompt text retained in this receipt.",
+    "delivery": "Production supervisor sender with tmux routed to the private socket. Enter commands were intercepted and reported successful without reaching the CLI, reproducing lost-Enter delivery.",
+    "requests_to_loopback": 0,
+    "remote_inference_performed": false,
+    "paid_calls": 0
+  },
+  "results": [
+    {
+      "provider": "opencode",
+      "cli_version": "2.0.29",
+      "ui_mode": "mini --standalone",
+      "status": "passed",
+      "empty_input_recognized": true,
+      "matching_placeholder_typed_as_operator_draft": {
+        "home_key_pressed": true,
+        "classified_empty": false,
+        "sender_returned": false,
+        "keys_sent": 0,
+        "draft_preserved": true
+      },
+      "multiline_event_with_two_lost_enter_keys": {
+        "sender_returned": false,
+        "enter_attempts": 2,
+        "cleanup_key": "Ctrl-C",
+        "input_empty_after_cleanup": true,
+        "cli_alive_after_cleanup": true
+      },
+      "subsequent_delivery_attempt_after_cleanup": {
+        "attempted": true,
+        "enter_keys_deliberately_lost_again": 2,
+        "sender_returned": false,
+        "input_empty_after_cleanup": true,
+        "cli_alive_after_cleanup": true
+      }
+    },
+    {
+      "provider": "gemini",
+      "cli_version": "0.66.0",
+      "ui_mode": "--screen-reader --approval-mode=yolo",
+      "status": "passed",
+      "empty_input_recognized": true,
+      "matching_placeholder_typed_as_operator_draft": {
+        "home_key_pressed": true,
+        "classified_empty": false,
+        "sender_returned": false,
+        "keys_sent": 0,
+        "draft_preserved": true
+      },
+      "multiline_event_with_two_lost_enter_keys": {
+        "sender_returned": false,
+        "enter_attempts": 2,
+        "cleanup_key": "Ctrl-C",
+        "input_empty_after_cleanup": true,
+        "cli_alive_after_cleanup": true
+      },
+      "subsequent_delivery_attempt_after_cleanup": {
+        "attempted": true,
+        "enter_keys_deliberately_lost_again": 2,
+        "sender_returned": false,
+        "input_empty_after_cleanup": true,
+        "cli_alive_after_cleanup": true
+      }
+    }
+  ],
+  "limitations": [
+    "Lost-Enter recovery and operator-draft preservation were tested against real terminal UIs. Successful model inference was intentionally not part of this offline delivery check.",
+    "CLI formatting is version dependent; unknown input formats remain conservative failures."
+  ]
+}

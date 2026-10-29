@@ -489,6 +489,7 @@ def _agent_idle_prompt(pane_low: str) -> bool:
             or "bypass permissions on" in pane_low
             or "auto mode on" in pane_low
             or "ask anything, / for commands" in pane_low
+            or "\nyolo mode " in pane_low
             or "enter to select" in pane_low
             or "\n❯ " in pane_low
             or "\n› " in pane_low
@@ -569,25 +570,39 @@ def _agent_idle_save(v: dict | None) -> None:
 def _nudge_prompt(pane: str) -> tuple[str, int, int] | None:
     """Extract the last visible input box, not a marker in old scrollback."""
     lines = pane.splitlines()
-    starts = [(i, _re.match(r'^\s*[❯›>]\s?(.*)$', line)) for i, line in enumerate(lines)]
+    starts = [(i, _nudge_prompt_line(line)) for i, line in enumerate(lines)]
     starts = [(i, hit) for i, hit in starts if hit]
     if not starts:
         return None
     start, hit = starts[-1]
-    body = [hit.group(1)]
+    # OpenCode repeats its left border on every line of a multiline input.
+    # Keep the complete editable block, not just the final bordered line.
+    if hit.group('prefix').lstrip().startswith('┃'):
+        while start and lines[start - 1].lstrip().startswith('┃'):
+            start -= 1
+        hit = _nudge_prompt_line(lines[start])
+    body = [hit.group('body')]
     end = len(lines)
     for i in range(start + 1, len(lines)):
         line = lines[i].strip()
         lower = line.lower()
         if (line.startswith(('─', '━', '═', '╰', '└')) or
                 any(token in lower for token in ('bypass permissions', 'shift+tab to cycle',
-                    'context left', '? for shortcuts', 'auto mode on')) or
+                    'context left', '? for shortcuts', 'auto mode on', 'ctrl+p menu')) or
                 _re.match(r'^(?:gpt-|claude-|opus |sonnet |fable |gemini-)', lower)):
             end = i
             break
-        body.append(lines[i])
+        continuation = _nudge_prompt_line(lines[i])
+        body.append(continuation.group('body') if continuation and
+                    continuation.group('prefix').lstrip().startswith('┃') else lines[i])
     text = ' '.join(' '.join(body).split())
     return text, start, end
+
+
+def _nudge_prompt_line(line: str):
+    # Gemini's production --screen-reader view has no arrow. OpenCode mini
+    # uses a vertical input border; both formats are from installed CLIs.
+    return _re.match(r'^(?P<prefix>\s*(?:[❯›>┃]\s?|YOLO mode ))(?P<body>.*)$', line, _re.I)
 
 
 def _nudge_pane(target: str, *, joined: bool = True, styled: bool = False) -> str | None:
@@ -606,17 +621,19 @@ def _nudge_pane(target: str, *, joined: bool = True, styled: bool = False) -> st
 
 def _nudge_placeholder(text: str) -> bool:
     low = text.lower()
-    return (low in {'ask codex to do anything', 'ask anything, / for commands'} or
+    return (low in {'ask codex to do anything', 'ask anything, / for commands',
+                   'ask anything, / for commands, @ for context…',
+                   'type your message or @path/to/file'} or
             bool(_re.fullmatch(r'try "[^"\n]+"', low)))
 
 
-def _dim_placeholder_line(line: str, column: int) -> bool:
+def _dim_placeholder_line(line: str, column: int, *, muted_palette: int | None = None) -> bool:
     """Require placeholder styling, even if an operator has pressed Home.
 
-    Codex and Claude paint suggestions dimly; ordinary editable text is not
-    dim. Unknown rendering is preserved as a draft rather than guessed empty.
+    Codex/Claude use dim; provider-specific muted palettes are accepted only
+    for verified input frames. Unknown rendering is preserved as a draft.
     """
-    dim, offset, seen = False, 0, False
+    dim, foreground, offset, seen = False, None, 0, False
     for part in _re.split(r'(\x1b\[[0-9;]*m)', line):
         if part.startswith('\x1b['):
             codes = [int(v or '0') for v in part[2:-1].split(';')]
@@ -625,18 +642,27 @@ def _dim_placeholder_line(line: str, column: int) -> bool:
                 code = codes[index]
                 # RGB/indexed color components are not display attributes.
                 if code in (38, 48, 58) and index + 1 < len(codes):
+                    if code == 38:
+                        foreground = (codes[index + 2] if codes[index + 1] == 5
+                                      and index + 2 < len(codes) else None)
                     index += 5 if codes[index + 1] == 2 else 3
                     continue
                 if code in (0, 22):
                     dim = False
                 elif code == 2:
                     dim = True
+                if code in (0, 39):
+                    foreground = None
+                elif 30 <= code <= 37:
+                    foreground = code - 30
+                elif 90 <= code <= 97:
+                    foreground = code - 90 + 8
                 index += 1
             continue
         for char in part:
             if offset >= column and not char.isspace():
                 seen = True
-                if not dim:
+                if not dim and (muted_palette is None or foreground != muted_palette):
                     return False
             offset += 1
     return seen
@@ -660,15 +686,32 @@ def _nudge_input_empty(target: str, pane: str) -> bool:
         if not current or current[0].lower() != prompt[0].lower():
             return False
         line = plain.splitlines()[current[1]]
-        prefix = _re.match(r'^\s*[❯›>]\s?', line)
+        prefix = _nudge_prompt_line(line)
         if not prefix:
             return False
         cursor = _sp.run(['tmux', 'display-message', '-p', '-t', target,
                           '#{cursor_y} #{cursor_x}'], capture_output=True, timeout=4)
         row, column = map(int, cursor.stdout.split())
-        if cursor.returncode or row != current[1] or column != prefix.end():
+        if cursor.returncode or row != current[1]:
             return False
-        if not _dim_placeholder_line(raw.splitlines()[row], column):
+        # OpenCode mini uses its muted palette (8), not SGR dim; typed text
+        # uses palette 255. Only accept that style for its bordered input.
+        frame = prefix.group('prefix').lstrip()
+        palette = 8 if frame.startswith('┃') else None
+        input_column = prefix.end('prefix')
+        styled_line = raw.splitlines()[row]
+        if frame == 'YOLO mode ':
+            # Gemini screen-reader mode paints its caret as an inverse blank
+            # at the input start; tmux's hardware cursor stays after the hint.
+            # A typed matching draft is palette 231, with its caret on a real
+            # character at Home, so neither can masquerade as this placeholder.
+            if (column != len(line.rstrip()) or
+                    not _re.match(r'^YOLO mode \x1b\[7m \x1b\[0m', styled_line)):
+                return False
+            palette = 248
+        elif column != input_column:
+            return False
+        if not _dim_placeholder_line(styled_line, input_column, muted_palette=palette):
             return False
         # Exact styled recapture also catches a user replacing the suggestion
         # with the same words while the cursor was being inspected.
