@@ -4,15 +4,16 @@ from subprocess import CompletedProcess
 import pytest
 
 
-@pytest.mark.parametrize("sender", ["pi", "watchdog"])
+@pytest.mark.parametrize("sender", ["pi", "watchdog", "monitor", "author"])
 @pytest.mark.parametrize("outcome", ["accepted", "second_enter", "lost_enter", "operator_draft", "edited_draft", "capture_failed"])
 def test_advisor_wait_wake_requires_verified_acceptance(
         arui_env, make_project, make_run, monkeypatch, sender, outcome):
-    from backend.app import agent_wait, pi, supervisor
+    from backend.app import agent_wait, pi, supervisor, monitor, author_agent
     from backend.app.watchdog import runner
     make_project()
     make_run(status="running")
     agent_wait.arm("Await experiment completion.")
+    monkeypatch.setattr(author_agent, '_tmux_alive', lambda _: True)
     message = "[WATCHDOG] Inspect this run." if sender == "watchdog" else "Inspect this run before the next batch."
     draft = "Keep this operator draft intact" if outcome == "operator_draft" else ""
     busy = False
@@ -31,26 +32,31 @@ def test_advisor_wait_wake_requires_verified_acceptance(
                     else "› " + draft + "\nbypass permissions on\n")
             return CompletedProcess(cmd, 0, stdout=pane.encode())
         if cmd[:2] == ["tmux", "display-message"]:
+            if cmd[-1] == '#{pane_width} #{pane_height}':
+                return CompletedProcess(cmd, 0, stdout=b'100 35')
+            if cmd[-1] == '#{cursor_y} #{cursor_x}':
+                return CompletedProcess(cmd, 0, stdout=f'0 {2 + len(draft)}'.encode())
             return CompletedProcess(cmd, 0, stdout=b"0\n")
-        assert cmd[:4] == ["tmux", "send-keys", "-t", "=agent:"]
+        assert cmd[:4] == ["tmux", "send-keys", "-t", "=author:" if sender == 'author' else "=agent:"]
         if "-l" in cmd:
             draft = cmd[-1]
         elif cmd[-1] == "Enter":
             enters += 1
             if outcome == "accepted" or (outcome == "second_enter" and enters == 2):
                 draft, busy = "", True
-        elif cmd[-1] == "C-c":
+        elif cmd[-1] == "C-u":
             assert draft == message, "An unrelated operator draft must never be cleared"
             draft = ""
         return CompletedProcess(cmd, 0, stdout=b"")
 
     monkeypatch.setattr(supervisor._sp, "run", terminal)
     monkeypatch.setattr("time.sleep", lambda _: None)
-    send = pi._send_to_agent if sender == "pi" else runner._page_agent
+    send = {'pi': pi._send_to_agent, 'watchdog': runner._page_agent,
+            'monitor': monitor.message_agent, 'author': author_agent.send}[sender]
     accepted = outcome in {"accepted", "second_enter"}
     assert send(message) is accepted
     if accepted:
-        assert agent_wait.status() == {}
+        assert (agent_wait.status().get('status') == 'waiting') is (sender == 'author')
         assert enters == (2 if outcome == "second_enter" else 1)
     else:
         assert agent_wait.status()["status"] == "waiting"
@@ -62,18 +68,20 @@ def test_advisor_wait_wake_requires_verified_acceptance(
             assert enters == 2 and draft == ""
 
 
-def test_paper_pi_send_does_not_cancel_research_wait(arui_env, make_project, make_run, monkeypatch):
+def test_paper_pi_send_does_not_cancel_research_wait(arui_env, make_project, make_run, monkeypatch, nudge_terminal):
     from backend.app import agent_wait, pi
     make_project()
     make_run(status="running")
     agent_wait.arm("Await research experiment.")
     commands = []
+    native = nudge_terminal(success_after=1)
 
     def terminal(cmd, **kwargs):
         commands.append(cmd)
-        return CompletedProcess(cmd, 0)
+        return native(cmd, **kwargs)
 
     monkeypatch.setattr(pi.subprocess, "run", terminal)
+    monkeypatch.setattr('time.sleep', lambda _: None)
     assert pi._send_to_agent("Paper intervention", session="author")
     assert agent_wait.status()["status"] == "waiting"
-    assert all(cmd[3] == "=author:" for cmd in commands)
+    assert all(cmd[3] == "=author:" for cmd in commands if cmd[:2] == ['tmux', 'send-keys'])

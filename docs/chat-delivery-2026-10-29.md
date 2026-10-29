@@ -26,6 +26,17 @@ keeps the input draft and displays the error. Long messages keep their complete
 text in private workspace files; the native CLI receives a short reference that
 can be inspected for safe Enter retry. Messages are saved to chat only after
 verified submission or queuing. Busy state alone does not establish queuing.
+Ordinary Send never uses cancellation keys. A narrow terminal can hide the
+busy indicator, so uncertain queued-versus-started state is reported simply as
+accepted after the input has been consumed.
+
+Pause retains its intentional interruption behavior and writes a unique short
+status marker with private pane ownership metadata. Resume removes only that
+exact owned marker at the end of the input, then uses verified delivery. An
+edited or legacy draft is preserved and a failed resume is reported explicitly;
+the response separately identifies whether the research pause gate was cleared.
+The supervisor also stops using unchanged terminal pixels as proof that a turn
+is stuck: a cropped healthy turn receives a bounded visibility warning.
 
 Regression coverage uses real xterm rendering in WebKit and Chromium, including
 keyboard resize, reading history, Send, author routing, hung requests, disposal,

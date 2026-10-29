@@ -168,6 +168,7 @@ def test_cycle_paper_happy_path(arui_env, setting_setter, db_session,
                 "messages": ["queue ablation Y", "kill pr-abc"]}
     monkeypatch.setattr(pi, "_call",
                          lambda model, sys, user: json.dumps(payload))
+    monkeypatch.setattr(pi, '_send_to_agent', lambda text, session='agent': True)
     out = pi.cycle_paper()
     assert out is not None
     assert out["concerns"] == "All looks good."

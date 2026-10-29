@@ -37,6 +37,9 @@ def provider_terminal(nudge_terminal):
             return 'workspace\ngemini-3.8-flash\nYOLO Ctrl+Y\nYOLO mode ' + body + '\n'
 
         def __call__(self, command, **kwargs):
+            if command[:2] == ['tmux', 'display-message'] and command[-1] in {
+                    '#{pane_width} #{pane_height}', '#{pane_current_path}'}:
+                return super().__call__(command, **kwargs)
             if command[:2] == ['tmux', 'capture-pane']:
                 self.calls.append(command)
                 return CompletedProcess(command, 0, stdout=self.screen(styled='-e' in command).encode())

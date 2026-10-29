@@ -156,12 +156,15 @@ def _loop() -> None:
         time.sleep(_POLL_SEC)
 
 
-def message_agent(text: str) -> None:
-    """Type a line into the live agent's tmux session."""
-    subprocess.run(["tmux", "send-keys", "-t", "agent", "-l", text],
-                   capture_output=True, timeout=10)
-    subprocess.run(["tmux", "send-keys", "-t", "agent", "Enter"],
-                   capture_output=True, timeout=10)
+def message_agent(text: str) -> bool:
+    """Notify the existing research conversation without stranding a draft."""
+    from . import agent_wait
+    from .supervisor import deliver_agent_message
+    with agent_wait.delivery_lock():
+        delivered = bool(deliver_agent_message(text))
+        if delivered:
+            agent_wait.cancel()
+        return delivered
 
 
 # ──────────────────────────── GPU telemetry ────────────────────────────────

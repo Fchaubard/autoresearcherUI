@@ -2665,7 +2665,7 @@ function createRailTerm(session) {
      xterm fires onResize after FitAddon.fit() with the new (cols,
      rows). We debounce by 200ms so a drag-resize doesn't fire 60
      POSTs/sec, and POST to /api/agent/resize which calls
-     `tmux resize-window` + sends Ctrl-L so Claude redraws clean. */
+     `tmux resize-window`; its native resize signal redraws the CLI. */
   let _resizeTimer = null, _lastSize = '';
   const pushSize = (cols, rows) => {
     if (_stopped) return;
@@ -2680,7 +2680,7 @@ function createRailTerm(session) {
   };
   t.onResize(({ cols, rows }) => pushSize(cols, rows));
   // After the initial fit (which fires onResize), Claude may already
-  // have drawn at the old size. Force one more push + Ctrl-L just to
+  // have drawn at the old size. Force one more size push just to
   // be sure the dimensions match before the user looks at the term.
   const initialSize = setTimeout(() => {
     if (t.cols && t.rows) pushSize(t.cols, t.rows);

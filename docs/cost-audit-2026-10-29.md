@@ -195,8 +195,9 @@ checks experiment and code-review state, delivers a bounded change message to
 the existing conversation, and clears the wait only after delivery succeeds.
 Metric updates alone do not wake it. A default 15-minute safety reassessment
 is bounded to 5–30 minutes. Generic idle nudges respect this intentional wait;
-dead-process and frozen-turn recovery remain active. Worker processes and GPU
-dispatch continue independently. Operator messages and substantive PI
+dead-process recovery remains active. An unchanged cropped terminal emits a
+bounded warning instead of cancelling potentially healthy work. Worker processes
+and GPU dispatch continue independently. Operator messages and substantive PI
 interventions can wake the conversation immediately.
 
 `GET /api/agent/context` returns a bounded current-state summary and the last

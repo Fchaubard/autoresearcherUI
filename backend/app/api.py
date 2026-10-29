@@ -16,7 +16,7 @@ import subprocess
 import threading
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -67,10 +67,8 @@ def _poke_author_to_integrate(run_id: str, metric: float | None,
         "consider queueing the next dataset/seed.")
     msg = " ".join(parts)
     try:
-        subprocess.run(["tmux", "send-keys", "-t", "author", "-l", msg],
-                       capture_output=True, timeout=8)
-        subprocess.run(["tmux", "send-keys", "-t", "author", "Enter"],
-                       capture_output=True, timeout=8)
+        if not author_agent.send(msg):
+            print('[paper] author integration message was not accepted', flush=True)
     except Exception as e:
         print(f"[paper] poke author tmux failed: {e}", flush=True)
 
@@ -776,8 +774,12 @@ async def post_phase(request: Request):
 
 
 @router.get("/chat")
-def list_chat(db: Session = Depends(get_session)):
-    rows = db.query(ChatMessage).order_by(ChatMessage.created_at).all()
+def list_chat(db: Session = Depends(get_session), limit: int | None = Query(None, ge=1, le=500)):
+    query = db.query(ChatMessage)
+    if limit is not None:
+        rows = list(reversed(query.order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc()).limit(limit).all()))
+    else:
+        rows = query.order_by(ChatMessage.created_at, ChatMessage.id).all()
     return [m.dict() for m in rows]
 
 
@@ -1424,11 +1426,9 @@ async def agent_resize(request: Request):
     line wraps mid-character and the terminal looks like garbage.
 
     The frontend hooks xterm's onResize after FitAddon.fit() and
-    POSTs the new (cols, rows) here. We:
-      1. tmux resize-window -x cols -y rows -t <session>
-      2. send Ctrl-L so Claude clears + redraws at the new size
-         (its in-place spinner / status bar are positioned with
-         absolute escapes that don't auto-reflow).
+    POSTs the new (cols, rows) here. tmux resize-window delivers the native
+    resize signal so the CLI redraws. Do not inject Ctrl-L: Codex rejects it
+    during active work, printing an error on every phone keyboard resize.
 
     Body: {"session": "agent"|"author"|<run_id>, "cols": N, "rows": N}
     """
@@ -1462,9 +1462,6 @@ async def agent_resize(request: Request):
             ["tmux", "resize-pane", "-t", sess, "-x", str(cols),
              "-y", str(rows)],
             capture_output=True, text=True, timeout=4)
-    # Ctrl-L → Claude redraws at the new dimensions.
-    subprocess.run(["tmux", "send-keys", "-t", sess, "C-l"],
-                   capture_output=True)
     # Cache for restart restoration — when the agent is respawned via
     # /api/agent/restart, RealAgent.start() will re-apply these so the
     # new pane comes up at the rail's actual width (instead of the
@@ -2158,39 +2155,23 @@ async def agent_send(request: Request):
     payload = msg.dict()
     db.close()
     bus.publish("chat", "chat", payload)
-    return {"ok": True}
+    return {"ok": True, "delivery": delivered["delivery"], "message": payload}
 
 
-def _deliver_agent_message(text: str) -> dict:
+def _deliver_agent_message(text: str, session: str = "agent") -> dict:
     from . import agent_wait
     with agent_wait.delivery_lock():
-        return _deliver_agent_message_locked(text)
+        return _deliver_agent_message_locked(text, session)
 
 
-def _deliver_agent_message_locked(text: str) -> dict:
-    from . import agent_wait
-    if agent_wait.status().get("status") == "waiting":
-        # A parked CLI needs verified acceptance, not just tmux's successful
-        # key write: a lost Enter must not discard its durable event wait.
-        from . import supervisor
-        if not supervisor._send_agent_nudge(text):
-            return {"ok": False, "error": "The waiting agent has not accepted the message. Its wait was preserved; check the terminal and retry."}
+def _deliver_agent_message_locked(text: str, session: str = "agent") -> dict:
+    from . import agent_wait, supervisor
+    delivery = supervisor.deliver_agent_message(text, session=session)
+    if not delivery:
+        return {"ok": False, "error": "The agent has not accepted the message. Your draft and any research wait were preserved; inspect the terminal and retry."}
+    if session == "agent":
         agent_wait.cancel()
-        return {"ok": True}
-    try:
-        target = "=agent:"
-        written = subprocess.run(["tmux", "send-keys", "-t", target, "-l", text],
-                                 capture_output=True, timeout=4)
-        if written.returncode != 0:
-            return {"ok": False, "error": "The agent message could not be delivered. Retry."}
-        submitted = subprocess.run(["tmux", "send-keys", "-t", target, "Enter"],
-                                   capture_output=True, timeout=4)
-        if submitted.returncode != 0:
-            return {"ok": False, "error": "The agent message could not be submitted. Check the terminal before retrying."}
-    except (OSError, subprocess.TimeoutExpired):
-        return {"ok": False, "error": "The agent message could not be submitted. Check the terminal before retrying."}
-    agent_wait.cancel()  # Clear the wait only after successful delivery.
-    return {"ok": True}
+    return {"ok": True, "delivery": delivery}
 
 
 @router.get("/agent/oauth_url")
@@ -4810,13 +4791,23 @@ def paper_author_terminal(tail: int = 200):
 @router.post("/paper/author/send")
 async def paper_author_send(request: Request):
     """Send a message to the Author Agent (typed by the user in the rail)."""
-    from . import author_agent
     body = await _safe_json(request)
     text = (body.get("text") or "").strip()
     if not text:
         return {"ok": False, "detail": "text required"}
-    ok = author_agent.send(text)
-    return {"ok": bool(ok), "sent": text[:120]}
+    if not _tmux_alive("author"):
+        return {"ok": False, "error": "no author session is running"}
+    delivered = await asyncio.to_thread(_deliver_agent_message, text, "author")
+    if not delivered["ok"]:
+        return delivered
+    with SessionLocal() as db:
+        message = ChatMessage(id=f"cm-{_rng.randrange(16**8):08x}", role="researcher",
+                              content=text, created_at=_iso())
+        db.add(message)
+        db.commit()
+        payload = message.dict()
+    bus.publish("chat", "chat", payload)
+    return {"ok": True, "delivery": delivered["delivery"], "message": payload}
 
 
 def _paper_resume_config() -> dict:

@@ -356,6 +356,40 @@ def research_paused() -> bool:
 _AGENT_TMUX_SESSIONS = ("agent", "author")
 
 
+def _pause_draft_path(session: str):
+    if session not in _AGENT_TMUX_SESSIONS:
+        raise ValueError("Unknown agent session")
+    return DATA_DIR / f"pause-draft-{session}.json"
+
+
+def _pause_pane_identity(session: str) -> str:
+    import subprocess as _sp
+    result = _sp.run(["tmux", "display-message", "-p", "-t", f"={session}:",
+                      "#{pane_id} #{pane_pid}"], capture_output=True, text=True, timeout=4)
+    value = result.stdout.decode() if isinstance(result.stdout, bytes) else result.stdout
+    if result.returncode or not value or len(value.split()) != 2:
+        raise OSError("Agent pane identity is unavailable")
+    return value.strip()
+
+
+def _record_pause_draft(session: str, text: str, identity: str) -> None:
+    import tempfile
+    path = _pause_draft_path(session)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=DATA_DIR,
+                                         prefix=".pause-draft-", delete=False) as handle:
+            temporary = handle.name
+            os.fchmod(handle.fileno(), 0o600)
+            json.dump({"text": text, "pane": identity}, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def _tmux_session_alive(session: str) -> bool:
     """True iff a tmux session by that name exists. Best-effort: returns
     False if tmux is not installed (e.g. unit-test environment)."""
@@ -382,23 +416,31 @@ def _tmux_interrupt_agent(session: str, message: str) -> bool:
     net and must NEVER raise into the pause endpoint."""
     try:
         import subprocess as _sp
-        if not _tmux_session_alive(session):
-            return False
-        # Double Ctrl-C halts Claude Code's current tool call + clears the
-        # input. A small sleep between them lets the REPL register the
-        # first signal before the second arrives.
-        _sp.run(["tmux", "send-keys", "-t", session, "C-c"],
-                capture_output=True)
-        time.sleep(0.15)
-        _sp.run(["tmux", "send-keys", "-t", session, "C-c"],
-                capture_output=True)
-        time.sleep(0.15)
-        # Type the message literally (no Enter) so it shows in the prompt
-        # buffer as a status line for the next operator.
-        if message:
-            _sp.run(["tmux", "send-keys", "-t", session, "-l", message],
-                    capture_output=True)
-        return True
+        from . import agent_wait, supervisor
+        with agent_wait.delivery_lock():
+            if not _tmux_session_alive(session):
+                return False
+            _pause_draft_path(session).unlink(missing_ok=True)
+            target = f"={session}:"
+            # Pause is an intentional interruption; ordinary Send/Resume
+            # never sends these cancellation keys.
+            for _ in range(2):
+                interrupted = _sp.run(["tmux", "send-keys", "-t", target, "C-c"],
+                                      capture_output=True, timeout=4)
+                if interrupted.returncode:
+                    return False
+                time.sleep(0.15)
+            pane = supervisor._nudge_pane(target)
+            if message and pane is not None and supervisor._nudge_input_empty(target, pane):
+                # Keep the status marker fully visible on phones. The reason
+                # remains in the persisted pause/halt state and dashboard.
+                marker = "[ARUI paused " + os.urandom(4).hex() + "]"
+                _record_pause_draft(session, marker, _pause_pane_identity(session))
+                written = _sp.run(["tmux", "send-keys", "-t", target, "-l", marker],
+                                  capture_output=True, timeout=4)
+                if written.returncode:
+                    _pause_draft_path(session).unlink(missing_ok=True)
+            return True
     except Exception as e:                                  # noqa: BLE001
         print(f"[notify] tmux interrupt failed for {session}: {e}",
               flush=True)
@@ -410,15 +452,29 @@ def _tmux_resume_agent(session: str, message: str) -> bool:
     the agent's tmux pane + presses Enter so the agent's next REPL turn
     picks it up. Best-effort, never raises."""
     try:
-        import subprocess as _sp
-        if not _tmux_session_alive(session):
-            return False
-        if message:
-            _sp.run(["tmux", "send-keys", "-t", session, "-l", message],
-                    capture_output=True)
-            _sp.run(["tmux", "send-keys", "-t", session, "Enter"],
-                    capture_output=True)
-        return True
+        from . import agent_wait, supervisor
+        with agent_wait.delivery_lock():
+            if not message or not _tmux_session_alive(session):
+                return False
+            target = f"={session}:"
+            path = _pause_draft_path(session)
+            if path.exists():
+                # A legacy, edited, or replacement-pane draft is never owned
+                # merely because it resembles a pause notice in scrollback.
+                if path.is_symlink() or path.stat().st_size > 1024:
+                    return False
+                record = json.loads(path.read_text(encoding="utf-8"))
+                pane = supervisor._nudge_pane(target)
+                if (record.get("pane") == _pause_pane_identity(session) and pane is not None
+                        and supervisor._owns_nudge_draft(target, pane, record.get("text", ""), allow_busy=True)):
+                    supervisor._clear_failed_nudge(target, record["text"], allow_busy=True)
+            delivered = supervisor.deliver_agent_message(message, session=session)
+            if not delivered:
+                return False
+            path.unlink(missing_ok=True)
+            if session == "agent":
+                agent_wait.cancel()
+            return True
     except Exception as e:                                  # noqa: BLE001
         print(f"[notify] tmux resume failed for {session}: {e}", flush=True)
         return False
@@ -443,15 +499,20 @@ def _apply_pause_to_agent_tmux(reason: str = "") -> list[str]:
     return hit
 
 
-def _apply_resume_to_agent_tmux() -> list[str]:
+def _apply_resume_to_agent_tmux() -> dict:
     """Type a resume message into every live agent tmux session. Called
     by set_research_paused(False) and set_research_halted(False)."""
     msg = ("@arui: research is UNPAUSED — resume the directive queue.")
     hit: list[str] = []
+    failed: list[str] = []
     for sess in _AGENT_TMUX_SESSIONS:
+        if not _tmux_session_alive(sess):
+            continue
         if _tmux_resume_agent(sess, msg):
             hit.append(sess)
-    return hit
+        else:
+            failed.append(sess)
+    return {"resumed": hit, "failed": failed}
 
 
 def set_research_paused(paused: bool) -> dict:
@@ -525,7 +586,10 @@ def set_research_paused(paused: bool) -> dict:
             from . import runtime_settings
             applied = runtime_settings.apply_pending()
             warnings.extend(applied.get("warnings", []))
-            sessions_hit = _apply_resume_to_agent_tmux()
+            resumed = _apply_resume_to_agent_tmux()
+            sessions_hit = resumed["resumed"]
+            errors.extend(f"Resume was not accepted by {session}; its existing terminal input was preserved. Inspect the terminal and retry."
+                          for session in resumed["failed"])
     except Exception as e:                                  # noqa: BLE001
         errors.append(f"Cannot update agent pause state: {_safe_error(e)}")
         print(f"[notify] set_research_paused tmux side-effect failed: {_safe_error(e)}",
@@ -659,7 +723,10 @@ def set_research_halted(halted: bool, reason: str = "") -> dict:
             from . import runtime_settings
             applied = runtime_settings.apply_pending()
             warnings.extend(applied.get("warnings", []))
-            sessions_hit = _apply_resume_to_agent_tmux()
+            resumed = _apply_resume_to_agent_tmux()
+            sessions_hit = resumed["resumed"]
+            errors.extend(f"Resume was not accepted by {session}; its existing terminal input was preserved. Inspect the terminal and retry."
+                          for session in resumed["failed"])
     except Exception as e:                                  # noqa: BLE001
         print(f"[notify] set_research_halted tmux interrupt failed: {_safe_error(e)}",
               flush=True)

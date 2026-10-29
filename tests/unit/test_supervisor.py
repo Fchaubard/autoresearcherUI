@@ -325,7 +325,7 @@ def test_nudge_retries_enter_when_text_remains_in_prompt(monkeypatch, marker, nu
     assert any("-J" in cmd for cmd in terminal.calls if cmd[:2] == ["tmux", "capture-pane"])
 
 
-@pytest.mark.parametrize("failed_key", ["Escape", "-l", "Enter"])
+@pytest.mark.parametrize("failed_key", ["-l", "Enter"])
 def test_nudge_never_claims_delivery_after_failed_tmux_send(monkeypatch, failed_key, nudge_terminal):
     from backend.app import supervisor as sv
     terminal = nudge_terminal(failed_key=failed_key)
@@ -397,19 +397,53 @@ def test_nudge_preserves_draft_written_after_supervisor_idle_check(monkeypatch, 
     assert terminal.draft == "Operator is still editing this"
 
 
-def test_nudge_preserves_operator_draft_that_appears_after_escape(monkeypatch, nudge_terminal):
-    from backend.app import supervisor as sv
+def test_nudge_preserves_operator_draft_that_appears_during_message_preparation(monkeypatch, nudge_terminal):
+    from backend.app import supervisor as sv, agent_inbox
     terminal = nudge_terminal()
-    def run(command, **kwargs):
-        result = terminal(command, **kwargs)
-        if command[:2] == ['tmux', 'send-keys'] and command[-1] == 'Escape':
-            terminal.draft = 'Operator started typing during the repaint'
-        return result
-    monkeypatch.setattr(sv._sp, 'run', run)
+    def prepare(text, session, **kwargs):
+        terminal.draft = 'Operator started typing during preparation'
+        return text
+    monkeypatch.setattr(agent_inbox, 'delivery_text', prepare)
+    monkeypatch.setattr(sv._sp, 'run', terminal)
     monkeypatch.setattr('time.sleep', lambda _: None)
     assert not sv._send_agent_nudge('[RESEARCH EVENT] r1 completed')
-    assert terminal.draft == 'Operator started typing during the repaint'
-    assert [cmd[-1] for cmd in terminal.calls if cmd[:2] == ['tmux', 'send-keys']] == ['Escape']
+    assert terminal.draft == 'Operator started typing during preparation'
+    assert not any(cmd[:2] == ['tmux', 'send-keys'] for cmd in terminal.calls)
+
+
+def test_send_waits_for_native_input_to_render_before_enter(monkeypatch, nudge_terminal):
+    from backend.app import supervisor as sv
+    from subprocess import CompletedProcess
+    terminal = nudge_terminal(success_after=1)
+    pending_frames = 3
+    def run(command, **kwargs):
+        nonlocal pending_frames
+        if command[:2] == ['tmux', 'capture-pane'] and terminal.draft and not terminal.enters and pending_frames:
+            pending_frames -= 1
+            return CompletedProcess(command, 0, stdout='› \nbypass permissions on\n'.encode())
+        if command[:2] == ['tmux', 'send-keys'] and command[-1] == 'Enter':
+            assert pending_frames == 0
+        return terminal(command, **kwargs)
+    monkeypatch.setattr(sv._sp, 'run', run)
+    monkeypatch.setattr('time.sleep', lambda _: None)
+    assert sv.deliver_agent_message('Wait for the native input buffer to finish repainting.') == 'submitted'
+    assert terminal.enters == 1
+
+
+def test_busy_placeholder_remains_empty_when_other_output_repaints(monkeypatch, nudge_terminal):
+    from backend.app import supervisor as sv
+    terminal = nudge_terminal()
+    terminal.placeholder = 'Ask Codex to do anything'
+    frames = 0
+    def run(command, **kwargs):
+        nonlocal frames
+        if command[:2] == ['tmux', 'capture-pane']:
+            frames += 1
+            terminal.history = f'Working ({frames}s · esc to interrupt)\n'
+        return terminal(command, **kwargs)
+    monkeypatch.setattr(sv._sp, 'run', run)
+    assert sv._nudge_input_empty('=agent:', terminal.screen(), allow_busy=True)
+    assert frames >= 2
 
 
 @pytest.mark.parametrize('marker,placeholder', [
@@ -421,6 +455,15 @@ def test_painted_placeholder_is_empty_only_with_cursor_and_style_evidence(monkey
     terminal = nudge_terminal(success_after=1, marker=marker)
     terminal.placeholder = placeholder
     terminal.history = '› An earlier operator instruction\nCompleted it.\n'
+    def screen():
+        # Native clients retain a current empty composer while working. Its
+        # painted placeholder, rather than a historical prompt, proves input
+        # consumption after Enter.
+        history = ('› An earlier operator instruction\nCompleted it.\n'
+                   + ('Working (3s · esc to interrupt)\n' if terminal.busy else ''))
+        terminal.history = history
+        return history + marker + ' ' + (terminal.draft or placeholder) + '\nbypass permissions on\n'
+    terminal.screen = screen
     monkeypatch.setattr(sv._sp, 'run', terminal)
     monkeypatch.setattr('time.sleep', lambda _: None)
     assert sv._nudge_prompt(terminal.screen())[0] == placeholder
@@ -498,7 +541,7 @@ def test_matching_scrollback_without_cursor_ownership_is_never_cleared(monkeypat
     monkeypatch.setattr(sv._sp, "run", terminal)
     monkeypatch.setattr("time.sleep", lambda _: None)
     assert not sv._send_agent_nudge("[RESEARCH EVENT] r1 completed")
-    assert terminal.enters == 1 and terminal.clears == 0
+    assert terminal.enters == 0 and terminal.clears == 0
 
 
 def test_installed_codex_clears_failed_multiline_draft_without_inference(arui_env, tmp_path, monkeypatch):
@@ -753,17 +796,17 @@ def test_autonomy_nudge_is_objective_neutral():
         assert leaked_domain not in low
 
 
-def test_frozen_codex_pending_turn_is_cancelled_and_refed(
-        arui_env, monkeypatch):
+def test_unchanged_narrow_pending_turn_preserves_healthy_work_and_warns_once(
+        arui_env, monkeypatch, tmp_path):
     import datetime as dt
     import backend.app.supervisor as sv
-    from backend.app import notify, council
+    from backend.app import notify, council, lifecycle
     monkeypatch.delenv("ARUI_DISABLE_BG", raising=False)
     monkeypatch.setattr(notify, "research_halted", lambda: (False, ""))
     monkeypatch.setattr(notify, "research_paused", lambda: False)
     monkeypatch.setattr(council, "conclusion_state", lambda: {"status": "none"})
     monkeypatch.setattr(sv, "_agent_alive", lambda: True)
-    pane = "unchanged output\n\ntab to queue message   35% context left"
+    pane = "\n› My operator draft\n\ntab to queue message"
     monkeypatch.setattr(sv, "_agent_pane_low", lambda: pane)
     fingerprint = sv._hashlib.sha256(pane.encode()).hexdigest()
     old = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1)).isoformat()
@@ -775,9 +818,17 @@ def test_frozen_codex_pending_turn_is_cancelled_and_refed(
     tmux = []
     monkeypatch.setattr(sv._sp, "run",
                         lambda cmd, **kwargs: tmux.append(cmd))
-    sv._supervise_research_agent()
-    assert sent == ["nudge"]
-    assert any(cmd[-1] == "Escape" for cmd in tmux)
+    events = []
+    monkeypatch.setattr(lifecycle, 'emit_event', lambda *args, **kwargs: events.append(args))
+    # Worker results can advance while the native TUI is clipped to five rows.
+    progress = tmp_path / 'training-progress.json'
+    for step in range(3):
+        progress.write_text(str(step))
+        sv._supervise_research_agent()
+    assert progress.read_text() == '2'
+    assert sent == [] and tmux == []
+    assert len(events) == 1 and events[0][0] == 'agent_turn_visibility_limited'
+    assert sv._agent_idle_state()['pending_fingerprint'] == fingerprint
 
 
 def test_first_park_tick_waits_then_nudges():

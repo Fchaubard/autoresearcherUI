@@ -295,6 +295,10 @@ class NudgeTerminal:
                                         self.marker + ' \x1b[2m' + self.placeholder + '\x1b[0m')
             return CompletedProcess(cmd, 0, stdout=screen.encode())
         if cmd[:2] == ["tmux", "display-message"]:
+            if cmd[-1] == '#{pane_width} #{pane_height}':
+                return CompletedProcess(cmd, 0, stdout=b'100 35')
+            if cmd[-1] == '#{pane_current_path}':
+                return CompletedProcess(cmd, 0, stdout=str(self.workspace).encode())
             cursor = len(self.history.splitlines()) + max(1, len(self.draft.splitlines())) - 1
             row = cursor if self.cursor_override is None else self.cursor_override
             column = 2 + len(self.draft.split('\n')[-1]) if self.cursor_x_override is None else self.cursor_x_override
@@ -311,12 +315,15 @@ class NudgeTerminal:
                 self.draft = self.edit_after_enter
             elif self.success_after is not None and self.enters >= self.success_after:
                 self.draft, self.busy = "", True
-        elif cmd[-1] == "C-c":
+        elif cmd[-1] in {"C-c", "C-u"}:
             self.draft = ""
             self.clears += 1
         return CompletedProcess(cmd, 0, stdout=b"")
 
 
 @pytest.fixture
-def nudge_terminal():
-    return NudgeTerminal
+def nudge_terminal(tmp_path):
+    class Terminal(NudgeTerminal):
+        workspace = tmp_path / 'terminal-workspace'
+    Terminal.workspace.mkdir()
+    return Terminal

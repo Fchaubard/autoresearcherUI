@@ -119,11 +119,13 @@ def test_agent_resize_calls_tmux_resize_window(client, fake_subprocess):
     body = r.json()
     assert body["ok"] is True
     assert body["cols"] == 110 and body["rows"] == 38
-    # Confirm we issued resize-window AND a Ctrl-L redraw.
+    # Confirm the requested native size, without synthetic input keys.
     cmds = [" ".join(c["args"]) for c in fake_subprocess]
     assert any("resize-window" in c and "-x 110" in c and "-y 38" in c
                for c in cmds), cmds
-    assert any("send-keys" in c and "C-l" in c for c in cmds), cmds
+    # Resizing already delivers SIGWINCH; injected keys can interrupt input
+    # or print a native CLI error while a turn is in progress.
+    assert not any("send-keys" in c for c in cmds), cmds
 
 
 def test_agent_resize_rejects_out_of_range_dimensions(client, fake_subprocess):

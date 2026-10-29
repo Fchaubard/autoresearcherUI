@@ -927,11 +927,8 @@ def stop() -> dict:
 def send(text: str) -> bool:
     if not _tmux_alive(SESSION):
         return False
-    subprocess.run(["tmux", "send-keys", "-t", SESSION, "-l", text],
-                   capture_output=True, timeout=8)
-    subprocess.run(["tmux", "send-keys", "-t", SESSION, "Enter"],
-                   capture_output=True, timeout=8)
-    return True
+    from .supervisor import deliver_agent_message
+    return bool(deliver_agent_message(text, session=SESSION))
 
 
 def terminal_tail(n: int = 200) -> str:

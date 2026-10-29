@@ -200,14 +200,14 @@ def test_pi_delivery_cancels_wait_only_after_success(arui_env, monkeypatch):
     seed(arui_env)
     from backend.app import agent_wait, pi, supervisor
     agent_wait.arm("Await result")
-    monkeypatch.setattr(supervisor, "_send_agent_nudge", lambda *args, **kwargs: False)
+    monkeypatch.setattr(supervisor, "deliver_agent_message", lambda *args, **kwargs: None)
     assert not pi._send_to_agent("A concrete intervention")
     assert agent_wait.status()["status"] == "waiting"
     verified = []
     def succeeds(text, session):
         verified.append((text, session))
-        return True
-    monkeypatch.setattr(supervisor, "_send_agent_nudge", succeeds)
+        return 'submitted'
+    monkeypatch.setattr(supervisor, "deliver_agent_message", succeeds)
     assert pi._send_to_agent("A concrete intervention")
     assert agent_wait.status() == {}
     assert verified == [("A concrete intervention", "agent")]
@@ -269,7 +269,7 @@ def test_unsent_event_draft_keeps_wait_registered(arui_env, monkeypatch, nudge_t
     assert terminal.enters == 3 and agent_wait.status() == {}
 
 
-def test_registered_wait_does_not_suppress_frozen_turn_recovery(arui_env, monkeypatch):
+def test_registered_wait_and_turn_are_preserved_when_pending_pane_is_unchanged(arui_env, monkeypatch):
     seed(arui_env)
     from backend.app import agent_wait, supervisor
     agent_wait.arm("Await baseline.")
@@ -287,7 +287,8 @@ def test_registered_wait_does_not_suppress_frozen_turn_recovery(arui_env, monkey
     monkeypatch.setattr(supervisor._sp, "run", lambda *_, **__: None)
     monkeypatch.setattr(supervisor, "_should_nudge_idle_agent", lambda *_, **__: pytest.fail("idle nudge"))
     supervisor._supervise_research_agent()
-    assert sent == ["recovery"]
+    assert sent == []
+    assert agent_wait.status()['status'] == 'waiting'
 
 
 @pytest.mark.parametrize('fails', [False, True])
@@ -337,5 +338,5 @@ def test_operator_and_pi_delivery_wait_for_supervisor_transaction(arui_env, monk
         assert agent_wait.status()['status'] == 'waiting'
     assert completed.wait(3)
     thread.join(timeout=3)
-    assert result == ([{'ok': True}] if sender == 'api' else [True])
+    assert result == ([{'ok': True, 'delivery': 'submitted'}] if sender == 'api' else [True])
     assert agent_wait.status() == {}

@@ -472,23 +472,8 @@ def _send_to_agent(text: str, session: str = "agent") -> bool:
 def _send_to_agent_locked(text: str, session: str) -> bool:
     try:
         from . import agent_wait
-        if session == "agent" and agent_wait.status().get("status") == "waiting":
-            from .supervisor import _send_agent_nudge
-            # A registered idle wait needs verified CLI acceptance, not just
-            # successful tmux writes. Preserve the wait and any operator draft
-            # if the CLI loses Enter or its prompt cannot be inspected.
-            if not _send_agent_nudge(text, session=session):
-                return False
-            agent_wait.cancel()
-            return True
-        target = "=" + session + ":"
-        written = subprocess.run(["tmux", "send-keys", "-t", target, "-l", text],
-                                 capture_output=True, timeout=8)
-        if written.returncode != 0:
-            return False
-        submitted = subprocess.run(["tmux", "send-keys", "-t", target, "Enter"],
-                                   capture_output=True, timeout=8)
-        if submitted.returncode != 0:
+        from .supervisor import deliver_agent_message
+        if not deliver_agent_message(text, session=session):
             return False
         if session == "agent":
             agent_wait.cancel()
