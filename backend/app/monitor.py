@@ -649,7 +649,7 @@ def _enrich_runs() -> None:
 # ───────────────────────────── gpu nudge ───────────────────────────────────
 
 def _nudge_idle_gpus() -> None:
-    """If GPUs have sat idle for a while, tell the agent to fill them."""
+    """Ask for useful progress when GPUs have sat idle for a while."""
     global _last_nudge, _idle_since
     db = SessionLocal()
     try:
@@ -673,10 +673,14 @@ def _nudge_idle_gpus() -> None:
     idx = ", ".join(str(g.index) for g in idle)
     try:
         message_agent(
-            f"{len(idle)} GPUs are sitting idle ({idx}). Launch experiments "
-            f"on them right now — every idle GPU must be running one of your "
-            f"experiments. Pull the next ideas from ideas.md and start each "
-            f"in its own tmux session. Do not leave GPUs idle.")
+            f"{len(idle)} GPUs are idle ({idx}). Re-read the current operator "
+            "purpose, instructions and active directives before choosing work. "
+            "Launch ready, reviewed, independent experiments that advance that "
+            "purpose within the remaining budget; preserve healthy workers. "
+            "If nothing valid is ready, resolve the specific harness, data or "
+            "review blocker and report it. Never revive superseded ideas, "
+            "duplicate runs or add filler just to occupy GPUs. Honor explicit "
+            "pause/halt, campaign limits and registered event waits.")
         print(f"[monitor] nudged agent — {len(idle)} GPUs idle", flush=True)
     except Exception as e:                           # noqa: BLE001
         print(f"[monitor] nudge send error: {e}", flush=True)

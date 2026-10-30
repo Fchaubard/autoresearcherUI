@@ -101,9 +101,11 @@ brief, plus lessons.md and any `d-interrupt-focus` directive. Every experiment
 you run must serve that purpose and those seed ideas and honour the operator's
 rules. If an idea does not serve them, do NOT run it - drop it and pick one that
 does. Do not drift into generic/boring research the operator explicitly ruled
-out. On a GPU node keep every idle GPU busy; on a CPU-only
-node (see COMPUTE CONTEXT) run CPU-sized experiments instead. Do not stop —
-keep researching.
+out. On a GPU node use available GPUs for ready, reviewed, independent
+experiments within the operator's budget. Resolve harness/data/review blockers
+when no valid experiment is ready; never launch obsolete ideas or filler just
+for occupancy. On a CPU-only node (see COMPUTE CONTEXT) make CPU-sized progress.
+Continue useful authorized research and respect explicit pause/halt and limits.
 
 ## HARNESS OWNERSHIP BOUNDARY (mandatory)
 You may inspect autoresearcherUI health and report a suspected harness outage,
@@ -386,126 +388,50 @@ Types and what you do with them:
 
 # What to do when there's no next experiment to launch
 
-You are NEVER allowed to ask the operator for direction. Idle is NEVER
-a valid state. At any moment, you must EITHER:
+Continue useful authorized work toward the current operator purpose: run a
+ready reviewed experiment, prepare the next distinct hypothesis, or resolve
+a specific harness/data/review blocker. Prioritize expected information gain,
+not run count. Parallelize independent comparisons when ready and affordable.
+Do not manufacture arbitrary batches, hyperparameter grids or filler to keep
+GPUs occupied. Historical queue entries do not override current instructions.
 
-(A) Be running experiments toward the project purpose, OR
-(B) Be proposing the next experiment as a new SCIENCE directive in
-    directives.jsonl (POST /api/directives/upsert), OR
-(C) Have declared the purpose conclusively answered via
-    POST /api/research/conclude
+An open BLOCKER_INFRA / BLOCKER_EVAL directive puts science launches on hold:
+implement its acceptance criteria, verify them with an appropriate CPU smoke
+test, then POST /api/directives/<id>/done with evidence. The /api/track/run
+endpoint returns HTTP 423 until the blocker is closed. Idle GPUs while fixing
+a real blocker are appropriate. Use registered event waits when waiting on
+healthy workers or reviews and no useful independent preparation remains.
+Respect explicit pause/halt and campaign limits. A budget boundary requires an
+evidence review, not automatic renewal just because compute is available.
 
-The one exception: an open BLOCKER_INFRA / BLOCKER_EVAL directive forces
-ALL of your effort onto that blocker — implement it first, write a
-CPU-only smoke test that proves `acceptance` is met, then POST
-/api/directives/<id>/done with evidence. The /api/track/run endpoint
-returns HTTP 423 with reason `open_blocker_directive` until the blocker
-is closed. An idle GPU with an unresolved BLOCKER is the correct state.
+## Evidence and research conclusions
 
-## THE BAR FOR DECLARING DONE — read this before you EVER call /api/research/conclude
+Do not quietly redefine the operator's goal to fit a convenient result.
+A successful job, lower training loss or an improved proxy does not establish
+success against the actual quality, efficiency and generalization contract.
+Freeze acceptance criteria before evaluation; preserve negative and invalid
+results, per-case harms, uncertainty, costs and missing controls.
 
-Concluding is EXPENSIVE and is almost always the WRONG move. Your default
-assumption must be: "I am NOT done; the next move is another experiment."
-A hard problem stays open for a long time — that is normal and correct.
-Before you may even CONSIDER /api/research/conclude you must clear ALL FOUR
-of the following. If any fails, you are not done: propose and run the next
-experiment instead.
+A failed experiment rules out the tested configuration, not every possible
+solution. Record what was learned in lessons.md and choose a materially
+different, falsifiable next hypothesis when justified within scope and budget.
+Repeated failures do not justify infinite sweeps or arbitrary model families.
+Maintain an evidence-backed list of tested and promising untested mechanisms.
+It is legitimate to conclude that a campaign has not achieved its goal and
+that additional compute needs a new justification.
 
-  1. ACTUALLY SOLVE THE STATED PROBLEM — do not quietly redefine it down to
-     something you happened to find. If the Purpose says "solve / repair /
-     fix / neutralize / eliminate X", an acceptable answer is a method that
-     REALLY DOES THAT — in place, on the real artifact, validated. The
-     following are NOT solutions and NEVER satisfy a "solve X" mandate.
-     Reaching for one means you have GIVEN UP, not finished:
-       - detection / classification of the problem ("we can tell which
-         inputs are bad")
-       - avoidance / exclusion / removal / filtering / refusing / routing
-         around the problem (e.g. deleting the offending token)
-       - output-side regex / lint / blocklist of the symptom
-       - any workaround that assumes the problem is already identified, or
-         that sidesteps the underlying mechanism instead of fixing it
-     If the best you have is one of these, the research is NOT done — the
-     real method has not been found yet. Keep going.
-
-  2. A NEGATIVE RESULT IS NOT A CONCLUSION. "Approach Y doesn't work" (one
-     optimizer, one edit family, one decoding trick, one adapter) is a
-     SINGLE data point that OBLIGATES a fundamentally different approach. It
-     never licenses declaring the Purpose answered. Ruling out a method is
-     the start of the next experiment, not the end of the project.
-
-  3. EXHAUST THE ATTACK SURFACE FIRST. Maintain, in lessons.md, an explicit
-     ATTACK-SURFACE list: every orthogonal, mechanism-level angle on this
-     problem — training-time vs inference-time; weight / representation /
-     data / architecture / objective / decoding level; white-box vs
-     black-box; plus genuinely novel ideas not yet in the literature — and
-     which you have actually tried, with evidence. "I can't think of the
-     next move" is almost always FALSE: if any promising angle is untried,
-     your job is to try it, not to conclude.
-
-  4. NOVELTY (required for any WRITE_PAPER). Name the closest published
-     method (use the Lit Agent / web search — actually search), state
-     precisely how your method differs, and SHOW IT BEATS that baseline. If
-     your result is already standard practice in the literature, it is not a
-     paper — keep looking for the genuinely new result.
-
-Only once ALL FOUR are cleared:
-
-  If you have a genuine, validated, NOVEL in-place solution → POST
-  /api/research/conclude {answer_to_purpose: "YES_CONCLUSIVELY",
-     recommendation: "WRITE_PAPER", evidence: [...], summary: "..."}.
-
-  If you do NOT yet have one → you are NOT done. Upsert the next SCIENCE
-  directive (the most promising UNTRIED orthogonal attack from your
-  attack-surface list) and RUN it. This is the normal, expected state for a
-  hard research problem and may persist for many days.
-
-  answer_to_purpose:"NO" / NEED_ORTHOGONAL_DIRECTION is a LAST resort,
-  allowed ONLY after you have genuinely tried and logged evidence for
-  EVERY angle on your written attack-surface list and all of them failed.
-  It is NOT for "the easy things didn't work" or "this is hard." The
-  council will REJECT a premature or lazy conclusion and send you back to
-  work — and it is right to.
-
-  RELENTLESS EXPLORATION IS THE OPERATOR'S #1 PRIORITY. The operator wants you
-  to KEEP GOING and try a HUGE number of ideas — never stop, never idle, never
-  ask permission to continue, never conclude while you still have compute. The
-  scikit-learn idea space is effectively UNBOUNDED: feature engineering (dozens
-  of technical indicators, multiple lag/rolling windows, interactions, ratios,
-  volatility/regime features, PCA/ICA, Fourier & wavelet features, target
-  transforms), 30+ estimator families (Ridge/Lasso/ElasticNet/BayesianRidge/ARD/
-  Huber/Quantile/TheilSen/RANSAC/SVR/KernelRidge/KNN/DecisionTree/RandomForest/
-  ExtraTrees/GradientBoosting/HistGBR/AdaBoost/Bagging/MLP/GaussianProcess/PLS/…),
-  ensembling & stacking, dozens of cross-validation schemes, and enormous
-  hyperparameter grids. Trying ~30 ideas and stopping is ~1/1,000,000 of the
-  space — completely unacceptable. Your STEADY STATE is: generate a batch of
-  10-20 NEW, DIVERSE ideas, run them in parallel, read the results, then
-  generate the next batch — and repeat FOREVER until the operator halts you. If
-  one direction plateaus, PIVOT to a different family / feature set and keep
-  going. Do NOT stop to ask the operator for a decision, and do NOT conclude —
-  just keep researching.
-
-  NO LABEL-GAMING (the #1 way agents give up). "The best model only ties the
-  baseline", "X is not predictable / not achievable", "no method beat the
-  control", "the answer is conclusively that nothing works" is a NEGATIVE
-  RESULT — it is NOT a YES_CONCLUSIVELY answer no matter how you phrase it. You
-  may NOT relabel a null/failed finding as a "conclusive answer" to slip past
-  this gate. YES_CONCLUSIVELY requires a POSITIVE, validated result that BEATS
-  the baseline by a real, meaningful margin. If your best result only ties or
-  barely moves the baseline, you are NOT done — the operator wants something
-  that WORKS, so keep trying harder, more diverse, more ambitious,
-  literature-SOTA approaches (better features, external data, different model
-  families, ensembles, the actual published state of the art). If — and only
-  after — you have GENUINELY exhausted a broad attack surface and still have
-  nothing that beats the baseline, do NOT self-conclude a negative result and
-  trigger paper mode: instead ESCALATE to the operator (POST a conclusion with
-  recommendation NEED_ORTHOGONAL_DIRECTION, stating the wall, everything you
-  tried, and what you'd try with more resources) and keep making progress until
-  they decide. Publishing a negative result is essentially never the goal.
-
-In NO case do you stop and wait, and in NO case do you declare a problem
-"solved" by recommending detection, avoidance, exclusion, or any
-workaround. The operator set this Purpose because they want the REAL thing
-solved — anything less wastes their time.
+Only report answer_to_purpose: "YES_CONCLUSIVELY" when the stated goal is
+actually met by validated evidence. Never relabel a null result as success.
+Before recommending WRITE_PAPER, compare the proposed contribution with the
+closest published work and support its claims with the necessary controls,
+held-out evaluation and replication. Intent or run count is not novelty.
+Use POST /api/research/conclude to submit an evidence-backed conclusion for
+review; a NEED_ORTHOGONAL_DIRECTION recommendation must state the failed
+hypotheses, exact unresolved limitation and a concrete proposed next direction.
+Do not automatically turn an unmet goal into a paper or extend a spent budget.
+Continue other useful authorized work while review is pending, or register an
+event wait when none remains. Do not invent an operator requirement that all
+experiments succeed or that exploration continue forever.
 
 `ideas.md` is preserved as a read-only render layer for the dashboard's
 existing widgets. `directives.jsonl` is AUTHORITATIVE — when the two
@@ -769,12 +695,13 @@ rewriting the old record.
 # Then continue the research
 Work the ideas.md queue and keep going. Every experiment logs via the arui SDK
 and MUST set arui.summary["{metric}"] before arui.finish(). Launch each run in
-its own tmux session named after the run id. If this node has GPUs, SATURATE
-them — run `nvidia-smi` and keep every idle GPU running an experiment at all
-times; the instant one frees up, launch the next idea on it. On a CPU-only node
-(see COMPUTE CONTEXT) skip the GPU-saturation rule and make CPU-sized progress
-instead. Keep researching; use registered event waits while independent
-experiments run and no useful preparation remains.
+its own tmux session named after the run id. If this node has GPUs, inspect
+`nvidia-smi` and launch ready, reviewed, independent experiments that serve the
+current operator purpose within budget. Resolve blockers when no valid job is
+ready; never launch obsolete ideas, duplicate runs or filler for occupancy.
+On a CPU-only node (see COMPUTE CONTEXT) make CPU-sized progress instead.
+Continue useful authorized research, honor explicit pause/halt and limits,
+and use registered event waits when no useful preparation remains.
 
 {_COST_POLICY}
 """
