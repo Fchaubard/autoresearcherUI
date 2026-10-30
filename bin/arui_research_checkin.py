@@ -108,7 +108,10 @@ def collect(db: Path, workspace: Path, now: dt.datetime) -> dict:
         gpu_state = {"csv": gpu.stdout[:3000], "available": gpu.returncode == 0}
     except (OSError, subprocess.TimeoutExpired):
         gpu_state = {"available": False}
-    reports = sorted((p for root in (workspace / "research", workspace / "garbage")
+    # The garbage root also holds datasets/caches with millions of entries.
+    # Only traverse current research and the historical experiment namespaces.
+    report_roots = [workspace / "research", *workspace.glob("garbage/resume_*")]
+    reports = sorted((p for root in report_roots
                       for p in root.glob("**/final_report.md")),
                      key=lambda p: p.stat().st_mtime, reverse=True)[:3]
     return {"at": now.isoformat(), "last_hour": interval_summary(rows, start, now),
